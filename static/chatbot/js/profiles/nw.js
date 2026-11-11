@@ -190,67 +190,104 @@
         if (await browseInto(`ss-drv-${index}`)) await checkPlanLog(index);
     }
 
-    // The plan as a card: one row per time point, with the suggested driver
-    // log in an editable box. A point with no suggestion is flagged and its
-    // box is the first thing focused, so the user picks one or leaves it
-    // empty (that point is then reported without calling the LLM).
+    // The HTML conclusion card. What the report alone says, before any driver
+    // log is read:
+    //   - how many bad sessions there are, and how many are not wireless at
+    //     all ("system": no driver log of ours can explain them)
+    //   - per wireless time point, the scenario the report points to, and
+    //     whether to check it against a driver log (ticked by default unless
+    //     the report already pins the drain on an app's own traffic)
+    //   - the suggested driver log per point, editable; a point with none is
+    //     flagged and focused
+    // Analyse checks the ticked points one by one, then writes the report;
+    // with nothing ticked it writes the report from the Sleep Study alone.
     //
-    // `saved` redraws a run reopened from History: {driverLogs, done}, where
-    // done maps a point index to the status its saved turn recorded. The card
-    // is then locked, shows each point's status, and offers Resume when some
-    // points never finished.
+    // `saved` redraws a run reopened from History: {driverLogs, done,
+    // selected}, where done maps a point index to the status its saved turn
+    // recorded. The card is then locked, shows each point's status, and
+    // offers Resume when some ticked points never finished.
     function renderPlanCard(path, plan, saved) {
         const locked = !!saved;
         const c = plan.criteria || {};
         const points = plan.points || [];
+        const sessions = plan.sessions || null;
         planPoints = {};
-        const lines = [
-            `**${plan.qualifying_count}** of ${plan.total_sessions} sessions are battery drains with ` +
-            `${c.drip_metric === 'sw' ? 'SW DRIPS' : 'SW or HW DRIPS'} < ` +
-            `${Math.round(c.drip_threshold_pct || 0)}% and a RED top blocker; ` +
-            `the worst **${points.length}** are listed (max ${c.max_points}, ${c.per_device_limit} per device).`,
-        ];
-        (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
-        if (!points.length) {
-            lines.push('', 'No session matches the criteria. Nothing needs a driver-log look.');
-            appendAssistantText(lines.join('\n'));
-            return;
+        const bar = `${c.drip_metric === 'sw' ? 'SW DRIPS' : 'SW or HW DRIPS'} < ${Math.round(c.drip_threshold_pct || 0)}%`;
+        const lines = [];
+        if (sessions && sessions.bad_total) {
+            lines.push(`**${sessions.bad_total}** bad session(s) on battery (${bar}): ` +
+                       `**${sessions.wireless}** with a wireless RED top blocker, ` +
+                       `**${sessions.system}** without one (system).`);
+        } else {
+            lines.push(`**${plan.qualifying_count}** of ${plan.total_sessions} sessions are battery drains ` +
+                       `with ${bar} and a wireless RED top blocker.`);
         }
+        if (points.length) {
+            lines.push(`The worst **${points.length}** wireless session(s) are listed ` +
+                       `(max ${c.max_points}, ${c.per_device_limit} per device). ` +
+                       `Tick the ones to check against their driver log.`);
+        } else {
+            lines.push('No wireless session to check against a driver log.');
+        }
+        (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
+
+        const isSelected = (p) => locked
+            ? (saved.selected ? saved.selected.includes(p.index) : true)
+            : p.analyse_default !== false;
 
         const rows = points.map(p => {
             const id = `ss-drv-${p.index}`;
             const when = `${escapeHtml(p.window_start)} → ${escapeHtml(p.window_end.split(' ')[1] || p.window_end)}`;
             const sw = p.sw_drip_pct == null ? 'N/A' : p.sw_drip_pct.toFixed(1) + '%';
-            let logCell;
-            // Filled from History, and as each point finishes (markPointStatus).
-            const status = `<br><span class="ss-status" data-index="${p.index}" style="font-size:0.75rem;` +
-                (locked ? `color:${saved.done[p.index] ? '#15803d' : '#b45309'};">` +
-                    (saved.done[p.index] ? `✔ ${escapeHtml(saved.done[p.index])}` : '⏸ not analysed yet')
-                  : '">') + '</span>';
-            const logPath = locked ? (saved.driverLogs[p.index] || '') : (p.driver_log_path || '');
-            if (!ANALYZABLE.includes(p.device)) {
-                logCell = `<span style="color:#888;">${escapeHtml(p.device_label)}: classified only</span>`;
-            } else {
-                planPoints[p.index] = p;
-                logCell = `
-                    <div class="log-input-group" style="margin:0;">
-                        <input id="${id}" type="text" data-index="${p.index}" class="ss-drv-input"
-                               value="${escapeHtml(logPath)}" ${locked ? 'disabled' : ''}
-                               placeholder="Driver log for this time point…"
-                               onchange="checkPlanLog(${p.index})" style="min-width:0;">
-                        <button class="btn-browse" onclick="browsePlanLog(${p.index})"
-                                ${locked ? 'disabled' : ''} title="Browse for a WiFiLog file">📁</button>
-                    </div>
-                    <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
+            const picked = isSelected(p);
+            let statusText = '', statusColor = '';
+            if (locked) {
+                if (!picked) { statusText = 'report only'; statusColor = '#888'; }
+                else if (saved.done[p.index]) { statusText = '✔ ' + saved.done[p.index]; statusColor = '#15803d'; }
+                else { statusText = '⏸ not analysed yet'; statusColor = '#b45309'; }
             }
-            return `<tr>
+            // Filled from History, and as each point finishes (markPointStatus).
+            const status = `<br><span class="ss-status" data-index="${p.index}" ` +
+                           `style="font-size:0.75rem;color:${statusColor};">${escapeHtml(statusText)}</span>`;
+            const verdict = p.html_verdict
+                ? `<div style="font-size:0.75rem;margin-top:2px;"><b>Report says:</b> ${escapeHtml(p.html_verdict)}</div>`
+                : '';
+            const logPath = locked ? (saved.driverLogs[p.index] || '') : (p.driver_log_path || '');
+            planPoints[p.index] = p;
+            const logCell = `
+                <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;margin-bottom:4px;cursor:pointer;">
+                    <input type="checkbox" class="ss-check" data-index="${p.index}"
+                           ${picked ? 'checked' : ''} ${locked ? 'disabled' : ''}>
+                    Check against the driver log
+                </label>
+                <div class="log-input-group" style="margin:0;">
+                    <input id="${id}" type="text" data-index="${p.index}" class="ss-drv-input"
+                           value="${escapeHtml(logPath)}" ${locked ? 'disabled' : ''}
+                           placeholder="Driver log for this time point…"
+                           onchange="checkPlanLog(${p.index})" style="min-width:0;">
+                    <button class="btn-browse" onclick="browsePlanLog(${p.index})"
+                            ${locked ? 'disabled' : ''} title="Browse for a WiFiLog file">📁</button>
+                </div>
+                <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
+            return `<tr data-index="${p.index}" style="${picked ? '' : 'opacity:0.6;'}">
                 <td style="padding:4px 6px;vertical-align:top;">${p.index}</td>
                 <td style="padding:4px 6px;vertical-align:top;">
                     ${escapeHtml(String(p.session_id))} · ${escapeHtml(p.device_label)}<br>
-                    <span style="color:#666;font-size:0.75rem;">${when} · SW ${sw}</span>${status}</td>
+                    <span style="color:#666;font-size:0.75rem;">${when} · SW ${sw}</span>${verdict}${status}</td>
                 <td style="padding:4px 6px;vertical-align:top;">${logCell}</td>
             </tr>`;
         }).join('');
+
+        const groups = (sessions && sessions.groups) || [];
+        const systemBlock = groups.length ? `
+            <div style="margin-top:10px;font-size:0.8rem;">
+                <b>System sessions</b> — no wireless RED blocker, so not a wireless driver issue;
+                they go into the report for the platform team, without a driver log:
+                <ul style="margin:4px 0 0 18px;padding:0;">
+                    ${groups.map(g => `<li>${escapeHtml(g.blocker)}: ${g.sessions.length} session(s)` +
+                        (g.worst_sw != null ? `, worst SW DRIPS ${g.worst_sw}%` : '') + '</li>').join('')}
+                </ul>
+            </div>` : '';
 
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
@@ -259,52 +296,73 @@
             <div class="msg-body">
                 <div class="msg-bubble ss-plan">
                     ${marked.parse(lines.join('\n'))}
+                    ${points.length ? `
                     <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:0.8rem;">
-                        <colgroup><col style="width:28px;"><col style="width:38%;"><col></colgroup>
-                        <thead><tr><th>#</th><th>Session</th><th>Driver log</th></tr></thead>
+                        <colgroup><col style="width:28px;"><col style="width:40%;"><col></colgroup>
+                        <thead><tr><th>#</th><th>Session · report</th><th>Driver log</th></tr></thead>
                         <tbody>${rows}</tbody>
-                    </table>
-                    <button class="btn-set-log ss-run" style="width:100%;margin-top:8px;${locked ? 'display:none;' : ''}">
-                        Analyse ${points.length} time point(s), one by one
-                    </button>
+                    </table>` : ''}
+                    ${systemBlock}
+                    <button class="btn-set-log ss-run" style="width:100%;margin-top:8px;${locked ? 'display:none;' : ''}"></button>
                     <div class="ss-progress" style="margin-top:8px;font-size:0.82rem;"></div>
                 </div>
             </div>`;
         document.getElementById('chat-window').appendChild(row);
+
+        const checkedIndexes = () => [...row.querySelectorAll('.ss-check')]
+            .filter(cb => cb.checked).map(cb => Number(cb.dataset.index));
+        const runBtn = row.querySelector('.ss-run');
+        const labelRun = () => {
+            const k = checkedIndexes().length;
+            runBtn.textContent = k
+                ? `Analyse ${k} ticked time point(s), then write the report`
+                : 'Write the report from the Sleep Study only';
+        };
+
         if (locked) {
-            const items = points.map(p => ({index: p.index, driverLog: saved.driverLogs[p.index] || ''}));
+            const selected = points.filter(isSelected).map(p => p.index);
             ssRun = {
-                path: path, items: items, busy: false,
+                path: path, busy: false, bar: row.querySelector('.ss-progress'), next: 0,
+                items: selected.map(i => ({index: i, driverLog: saved.driverLogs[i] || ''})),
                 done: new Set(Object.keys(saved.done).map(Number)),
-                next: 0, bar: row.querySelector('.ss-progress'),
             };
             skipFinished(ssRun);
-            renderRunBar(ssRun.next < items.length ? 'paused' : 'done');
+            renderRunBar(ssRun.next < ssRun.items.length ? 'paused' : 'done');
             return;
         }
+
+        labelRun();
+        row.querySelectorAll('.ss-check').forEach(cb => cb.addEventListener('change', () => {
+            cb.closest('tr').style.opacity = cb.checked ? '' : '0.6';
+            labelRun();
+        }));
         points.forEach(p => {
-            if (planPoints[p.index] === p) {
-                renderPlanLogInfo(p.index, p.driver_log_path
-                    ? {coverage: p.coverage, files: p.driver_log_files || []} : null);
-            }
+            renderPlanLogInfo(p.index, p.driver_log_path
+                ? {coverage: p.coverage, files: p.driver_log_files || []} : null);
         });
         scrollBottom();
 
-        const missing = row.querySelector('.ss-drv-input[value=""]');
+        const missing = [...row.querySelectorAll('.ss-drv-input')]
+            .find(inp => !inp.value && row.querySelector(`.ss-check[data-index="${inp.dataset.index}"]`).checked);
         if (missing) missing.focus();
 
-        row.querySelector('.ss-run').addEventListener('click', async (ev) => {
+        runBtn.addEventListener('click', async (ev) => {
             const driverLogs = {};
             row.querySelectorAll('.ss-drv-input').forEach(inp => {
                 driverLogs[inp.dataset.index] = inp.value.trim();
             });
+            const selected = checkedIndexes();
             // The plan is settled once it runs; a new plan comes from loading
             // a report again.
             row.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
             ev.currentTarget.style.display = 'none';
+            points.forEach(p => {
+                if (!selected.includes(p.index)) markPointStatus({bar: row.querySelector('.ss-progress')},
+                                                                p.index, 'report only', '#888');
+            });
             ssRun = {
                 path: path,
-                items: points.map(p => ({index: p.index, driverLog: driverLogs[p.index] || ''})),
+                items: selected.map(i => ({index: i, driverLog: driverLogs[i] || ''})),
                 next: 0,
                 busy: false,
                 done: new Set(),
@@ -316,7 +374,8 @@
                 const res = await fetch(`${CHATBOT_API}/sleepstudy_run_start`, {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({log_path: path, plan: plan, driver_logs: driverLogs})
+                    body: JSON.stringify({log_path: path, plan: plan, driver_logs: driverLogs,
+                                          selected: selected})
                 });
                 noteNwConversation(await res.json());
             } catch (e) {
@@ -337,7 +396,11 @@
             const pt = (t.result || {}).point;
             if (pt && pt.index != null) done[pt.index] = pt.status || 'done';
         });
-        renderPlanCard(plan.log_path || '', plan, {driverLogs: plan.driver_logs || {}, done: done});
+        renderPlanCard(plan.log_path || '', plan, {
+            driverLogs: plan.driver_logs || {}, done: done,
+            // Runs saved before points could be left unticked checked them all.
+            selected: Array.isArray(plan.selected) ? plan.selected : null,
+        });
         return true;
     }
 
@@ -376,8 +439,9 @@
             run.bar.innerHTML = `⏸ Paused at time point <b>${at}/${total}</b>.` +
                                 btn('▶ Resume', 'continueSleepstudyRun');
         } else {
-            run.bar.innerHTML = `✔ All ${total} time point(s) done.` +
-                                btn('📊 Summarize', 'summarizeSleepstudyRun');
+            run.bar.innerHTML = (total ? `✔ All ${total} ticked time point(s) done.`
+                                       : '✔ Nothing to check against a driver log.') +
+                                btn('📊 Write the report again', 'summarizeSleepstudyRun');
         }
     }
 

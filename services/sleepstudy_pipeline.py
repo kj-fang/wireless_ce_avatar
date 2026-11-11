@@ -424,6 +424,11 @@ class TimePoint:
             d[key] = _fmt(d[key])
         d["issue_time"] = _fmt(self.issue_time)
         d["device_label"] = DEVICE_LABELS.get(self.device, self.device)
+        d["html_verdict"] = html_verdict(self.wake_evidence or {})
+        d["short_device_wakes"] = short_device_wakes(self.wake_evidence or {})
+        # Whether the page ticks "analyse with the driver log" by default: not
+        # when the report already pins the drain on an app's own traffic.
+        d["analyse_default"] = not d["html_verdict"].startswith("A: activity by app")
         return d
 
 
@@ -509,11 +514,13 @@ def _wake_evidence(raw: Optional[dict], device: str) -> dict:
     its FX Devices entries, the children that carry metadata. For Wi-Fi these
     are the OS WiFiCx jobs that woke the device and the D0 window they held
     it in ("[Detailed][12:22:54][WIFICX]OS Wi-Fi Jobs Waked Up Device":
-    WiFiJobRoam = 2, ...), and the net wake reasons (NetWakeReasonTypeDevice
-    = 2). Plus the platform's DRIPS wake sources and why it entered and left
-    standby.
+    WiFiJobRoam = 2, ...), the net wake reasons (NetWakeReasonTypeDevice = 2)
+    and how long each wake lasted ("0-29 seconds": 3). Plus network activity
+    per app (SRUM network power, NDIS bytes and outgoing wakes), the
+    platform's DRIPS wake sources and why it entered and left standby.
     """
-    ev = {"enter_reason": "", "exit_reason": "", "drips_wake_sources": [], "device_entries": []}
+    ev = {"enter_reason": "", "exit_reason": "", "drips_wake_sources": [],
+          "device_entries": [], "apps": []}
     if not raw:
         return ev
     ev["enter_reason"] = str(raw.get("EnterReason") or "")
@@ -539,19 +546,133 @@ def _wake_evidence(raw: Optional[dict], device: str) -> dict:
             }
             for child in blocker.get("Children") or []:
                 values = (child.get("Metadata") or {}).get("Values", [])
-                if not values:
+                buckets = {str(b.get("BucketName")): int(b.get("Value") or 0)
+                           for b in child.get("BlockingTimeBuckets") or []}
+                if not values and not any(buckets.values()):
                     continue
                 entry["wakes"].append({
                     "name": child.get("Name", ""),
                     "active_pct": child.get("ActiveTimePercent", 0),
                     "values": {str(v.get("Key")): str(v.get("Value")) for v in values},
+                    "buckets": {k: v for k, v in buckets.items() if v},
                 })
             ev["device_entries"].append(entry)
+    if device == ssa.DEVICE_WIFI:
+        wifi = ssa.extract_wifi_content(raw)
+        apps: dict = {}
+        for a in wifi["srum_network_apps"]:
+            slot = apps.setdefault(a["app_id"], {"app": a["app_id"]})
+            slot["network_mw"] = a["network_power_mw"] + a["mbb_power_mw"]
+        for a in wifi["ndis_app_traffic"]:
+            slot = apps.setdefault(a["app_id"], {"app": a["app_id"]})
+            slot["bytes"] = slot.get("bytes", 0) + a["bytes_sent"] + a["bytes_received"]
+            slot["outgoing_wakes"] = slot.get("outgoing_wakes", 0) + a["outgoing_wake_count"]
+        ev["apps"] = sorted(apps.values(), key=lambda a: (-(a.get("network_mw") or 0),
+                                                         -(a.get("bytes") or 0)))[:8]
     return ev
 
 
+# Appended to every time point's question, after the editable sleepstudy_point
+# prompt. The scenario rules and the first answer line live here, not in the
+# prompt, because the report's verdict (html_verdict) is computed by the same
+# rules and the run summary reads the agent's verdict back by that line.
+POINT_ANSWER_CONTRACT = """Classify the session into exactly ONE scenario:
+- Scenario A: activity by OS / app. One or a few App IDs, or OS jobs, clearly dominate the network power or traffic (SRUM mW, NDIS bytes or outgoing wakes, WiFiCx jobs) and drive the drain; an app counts as dominating at {app_share} or more of it. Name them and by how much.
+- Scenario B: activity by remote. A continuous stream of short wakes raised by the device (NetWakeReasonTypeDevice) from unsolicited inbound traffic. Name the packets if the driver log shows them. Exception: with MORE THAN {short_wake_limit} short (0-29 s) NetWakeReasonTypeDevice wakes in the session, do not answer Scenario B; answer "Please contact Intel Wi-Fi team".
+- Neither is clearly supported by the evidence: answer "Please contact Intel Wi-Fi team".
+
+Start root_cause_summary with exactly this line:
+Scenario: <A | B | Please contact Intel Wi-Fi team> | Dominant wake cause: <OS job | wake on packet | key or user | timer | app traffic | other> -- <detail>
+then list each wake you found with its time and trigger."""
+
+
+def _fill(text: str, values: dict) -> str:
+    """Replace the known {fields}; leave any other braces as written."""
+    return re.sub(r"\{(\w+)\}", lambda m: str(values.get(m.group(1), m.group(0))), text)
+
+
+def _rule_values() -> dict:
+    return {"short_wake_limit": str(SHORT_DEVICE_WAKE_LIMIT),
+            "app_share": f"{APP_DOMINANCE_SHARE:.0%}"}
+
+
+SHORT_WAKE_BUCKET = "0-29 seconds"
+# The old Sleep Study prompt's line: more short wakes raised by the device
+# than this in one session is not a remote-traffic pattern a user can fix,
+# so it goes to the Intel Wi-Fi team.
+SHORT_DEVICE_WAKE_LIMIT = 900
+# An app counts as dominating when it has at least this share of the
+# session's network power (or, without SRUM power, of its NDIS bytes).
+APP_DOMINANCE_SHARE = 0.5
+
+
+def short_device_wakes(ev: dict) -> int:
+    """Short (0-29 s) wakes on the entries that record a device-raised wake."""
+    total = 0
+    for entry in ev.get("device_entries") or []:
+        for wake in entry["wakes"]:
+            if any(k.startswith("NetWakeReasonTypeDevice") for k in wake["values"]):
+                total += int((wake.get("buckets") or {}).get(SHORT_WAKE_BUCKET, 0))
+    return total
+
+
+def html_verdict(ev: dict) -> str:
+    """
+    The scenario the report alone points to, by the old Sleep Study rules:
+      more than 900 short device wakes  -> Please contact Intel Wi-Fi team
+      one app has >= half the network   -> A (app)
+      short device wakes                -> B (activity by remote)
+      OS jobs woke the device           -> A (OS jobs)
+      none of these                     -> Please contact Intel Wi-Fi team
+    Deterministic, so it can be counted and set against the driver logs.
+    """
+    short = short_device_wakes(ev)
+    if short > SHORT_DEVICE_WAKE_LIMIT:
+        return f"Please contact Intel Wi-Fi team ({short} short device wakes > {SHORT_DEVICE_WAKE_LIMIT})"
+    apps = ev.get("apps") or []
+    for metric in ("network_mw", "bytes"):
+        total = sum(a.get(metric) or 0 for a in apps)
+        if total:
+            top = max(apps, key=lambda a: a.get(metric) or 0)
+            share = (top.get(metric) or 0) / total
+            if share >= APP_DOMINANCE_SHARE:
+                return f"A: activity by app ({_app_name(top['app'])}, {share:.0%} of {metric.replace('_', ' ')})"
+            break
+    if short:
+        return f"B: activity by remote ({short} short device wakes)"
+    jobs = {}
+    for entry in ev.get("device_entries") or []:
+        for wake in entry["wakes"]:
+            for k, v in wake["values"].items():
+                if k.startswith("WiFiJob"):
+                    try:
+                        jobs[k] = jobs.get(k, 0) + int(v)
+                    except ValueError:
+                        pass
+    if jobs:
+        top = max(jobs, key=jobs.get)
+        return f"A: activity by OS jobs (most: {top.replace('WiFiJob', '')} ×{jobs[top]})"
+    return "Please contact Intel Wi-Fi team (no clear cause in the report)"
+
+
+def verdict_scenario(text: str) -> str:
+    """'A' / 'B' / 'contact Intel' / '?' from a verdict or a finding."""
+    t = str(text or "")
+    m = re.search(r"Scenario\s*:?\s*(A|B)\b", t)
+    if m:
+        return m.group(1)
+    if re.search(r"contact Intel", t, re.I):
+        return "contact Intel"
+    m = re.match(r"\s*(A|B)\s*:", t)
+    return m.group(1) if m else "?"
+
+
+def _app_name(app_id: str) -> str:
+    return re.split(r"[\\/]", str(app_id))[-1] or str(app_id)
+
+
 def wake_evidence_lines(ev: dict) -> list[str]:
-    """The wake evidence as short lines, for the agent and for the summary."""
+    """The device's wake evidence as short lines, for the agent and the summary."""
     lines = []
     for entry in ev.get("device_entries") or []:
         meta = ", ".join(f"{k} = {v}" for k, v in entry["metadata"].items())
@@ -560,7 +681,10 @@ def wake_evidence_lines(ev: dict) -> list[str]:
         for wake in entry["wakes"]:
             values = ", ".join(f"{k} = {v}" for k, v in wake["values"].items()
                                if k != "[Name]")
-            lines.append(f"  - {wake['name']} (active {wake['active_pct']}%): {values}")
+            buckets = ", ".join(f"{k}: {v}" for k, v in (wake.get("buckets") or {}).items())
+            lines.append(f"  - {wake['name']} (active {wake['active_pct']}%)"
+                         + (f": {values}" if values else "")
+                         + (f" [wake durations {buckets}]" if buckets else ""))
     sources = ", ".join(f"{w['reason']} ×{w['count']}" for w in ev.get("drips_wake_sources") or [])
     if sources:
         lines.append(f"Platform DRIPS wake sources: {sources}")
@@ -570,33 +694,53 @@ def wake_evidence_lines(ev: dict) -> list[str]:
     return lines
 
 
-def _issue_description(point: TimePoint, threshold: float) -> str:
+def app_activity_lines(ev: dict) -> list[str]:
+    lines = []
+    for a in ev.get("apps") or []:
+        parts = []
+        if a.get("network_mw"):
+            parts.append(f"{a['network_mw']} mW network power")
+        if a.get("bytes"):
+            parts.append(f"{a['bytes']} bytes")
+        if a.get("outgoing_wakes"):
+            parts.append(f"{a['outgoing_wakes']} outgoing wakes")
+        if parts:
+            lines.append(f"  - {_app_name(a['app'])}: " + ", ".join(parts))
+    return lines
+
+
+def _issue_description(point: TimePoint, threshold: float,
+                       template: Optional[str] = None) -> str:
     """
-    The case put to the agent: not "write a report", but, from the driver's
-    side, why the OS kept waking the device instead of letting it rest.
+    The question put to the agent for one time point: the sleepstudy_point
+    speclet with this session's facts filled in. Only the known {fields} are
+    replaced, so braces an editor writes for any other reason stay as they are.
     """
+    from services.chatbot.engine.speclet_defaults import default_speclet
+
     top = point.blockers[0] if point.blockers else {}
-    label = DEVICE_LABELS.get(point.device, point.device)
-    evidence = wake_evidence_lines(point.wake_evidence) or ["(no wake detail in the report)"]
-    return "\n".join([
-        f"Modern Standby battery drain. Sleep Study session {point.session_id} "
-        f"({point.type_label}) ran {_fmt(point.start)} to {_fmt(point.end)} ({point.duration}) "
-        f"on battery with software DRIPS {_pct(point.sw_drip_pct)} and hardware DRIPS "
-        f"{_pct(point.hw_drip_pct)}, below the {threshold:.0f}% bar. The RED top blocker "
-        f"was {top.get('name', 'unknown')} ({top.get('active_time_pct', '?')}% active).",
-        "",
-        f"What Sleep Study recorded about the {label} device in this session:",
-        *[f"  {line}" for line in evidence],
-        "",
-        f"Question, from the {label} driver's side: during this window, why was the "
-        f"driver brought back to D0 again and again instead of staying in Dx and "
-        f"letting the platform rest? For each wake, find what triggered it: an OS "
-        f"request (which OID / WiFiCx job, e.g. DeviceServiceCommand, Roam, "
-        f"QueryStatistics, scan), a wake raised by the device itself (wake on packet "
-        f"-- which packet or pattern -- or wake on disconnect / roam), a key or user "
-        f"action, or a timer. Then say why the driver did not return to low power "
-        f"promptly after each wake.",
-    ])
+    ev = point.wake_evidence or {}
+    values = {
+        "session_id": str(point.session_id),
+        "session_type": point.type_label,
+        "start": _fmt(point.start),
+        "end": _fmt(point.end),
+        "duration": point.duration,
+        "sw_drips": _pct(point.sw_drip_pct),
+        "hw_drips": _pct(point.hw_drip_pct),
+        "threshold": f"{threshold:.0f}%",
+        "top_blocker": str(top.get("name", "unknown")),
+        "top_blocker_active": f"{top.get('active_time_pct', '?')}%",
+        "device": DEVICE_LABELS.get(point.device, point.device),
+        "wake_evidence": "\n".join(f"  {l}" for l in wake_evidence_lines(ev))
+                         or "  (no wake detail in the report)",
+        "app_activity": "\n".join(app_activity_lines(ev)) or "  (none recorded)",
+        "short_device_wakes": str(short_device_wakes(ev)),
+        "html_verdict": html_verdict(ev),
+        **_rule_values(),
+    }
+    text = template or default_speclet("nw", "sleepstudy_point")
+    return _fill(text, values) + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
 
 
 def render_point_finding(p: dict) -> str:
@@ -614,6 +758,7 @@ def render_point_finding(p: dict) -> str:
             ", ".join(f"{k.replace('WiFiJob', '')} {v}" for k, v in w["values"].items()
                       if k not in ("[Name]", "[Wake Session Time Range]"))
             for w in wakes))
+    out.append(f"Report says: {html_verdict(p.get('wake_evidence') or {})}")
     summary = ""
     if isinstance(p.get("agent_result"), dict) and isinstance(p["agent_result"].get("data"), dict):
         summary = str(p["agent_result"]["data"].get("root_cause_summary") or "")
@@ -691,11 +836,7 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[dict]
     message = (
         f"{point.issue_description}\n\nSleep Study evidence:\n```\n"
         f"{point.sleep_summary[:4000]}\n```\n"
-        f"Issue time: around {_fmt(point.issue_time)}\n\n"
-        f"Keep the answer short: this session is one of several whose findings are "
-        f"compared afterwards. Start root_cause_summary with "
-        f"'Dominant wake cause: <OS job / wake on packet / key or user / timer / "
-        f"other> -- <detail>' and list each wake you found with its time and trigger."
+        f"Issue time: around {_fmt(point.issue_time)}"
     )
     result = agent.chat(message, max_steps=max_steps, step_callback=_step)
     point.agent_result_type, point.agent_report = _report_text(result)
@@ -738,8 +879,10 @@ def _select(html_path: str, drip_threshold: float, max_points: int, per_device: 
 
 def _select_uncached(html_path: str, drip_threshold: float, max_points: int, per_device: int):
     payload = ssa.load_sleepstudy(html_path)
+    # Time points are the sessions a driver log can explain: a wireless RED
+    # top blocker. Every other bad session is the "system" group below.
     collected = ssa.collect_sessions_from_payload(
-        payload, source=html_path, devices=ssa.DEVICE_ORDER,
+        payload, source=html_path, devices=ANALYZABLE_DEVICES,
         drip_threshold=drip_threshold, drip_metric=DRIP_METRIC,
     )
     raw_by_id = {s.get("SessionId"): s for s in payload.get("ScenarioInstances") or []}
@@ -747,14 +890,52 @@ def _select_uncached(html_path: str, drip_threshold: float, max_points: int, per
     for p in points:
         p.sleep_summary = _sleep_summary(p, raw_by_id.get(p.session_id))
         p.wake_evidence = _wake_evidence(raw_by_id.get(p.session_id), p.device)
-        p.issue_description = _issue_description(p, drip_threshold)
-    return collected, points
+    return collected, points, _system_sessions(payload, drip_threshold)
+
+
+def _system_sessions(payload: dict, drip_threshold: float) -> dict:
+    """
+    Bad sessions (on battery, Modern Standby, DRIPS below the bar by the same
+    rule as the time points) with no wireless RED top blocker. No driver log
+    of ours explains them, but they belong in the report: a platform where
+    most of the drain is not wireless is itself the conclusion.
+    """
+    bad, wireless, groups = 0, 0, {}
+    for s in payload.get("ScenarioInstances") or []:
+        if s.get("OnAc", True) or s.get("Type") not in ssa.MS_SESSION_TYPES:
+            continue
+        sw, hw = ssa.compute_drip_percentages(s)
+        below = [v for v in ((sw, hw) if DRIP_METRIC == ssa.DRIP_METRIC_EITHER else (sw,))
+                 if v is not None and v < drip_threshold]
+        if not below:
+            continue
+        bad += 1
+        reds = [t for t in s.get("TopBlockers") or [] if (t.get("ActivityLevel") or 0) == ssa.RED_ACTIVITY_LEVEL]
+        if any(ssa.classify_device(t.get("Name", "")) in ANALYZABLE_DEVICES for t in reds):
+            wireless += 1
+            continue
+        top = max(reds, key=lambda t: t.get("ActiveTimePercent") or 0) if reds else None
+        name = top.get("Name", "") if top else "(no RED top blocker)"
+        g = groups.setdefault(name, {"blocker": name, "sessions": [], "worst_sw": None,
+                                     "device": ssa.classify_device(name) if top else ""})
+        g["sessions"].append(s.get("SessionId"))
+        if sw is not None and (g["worst_sw"] is None or sw < g["worst_sw"]):
+            g["worst_sw"] = round(sw, 1)
+    ordered = sorted(groups.values(), key=lambda g: -len(g["sessions"]))
+    return {"bad_total": bad, "wireless": wireless, "system": bad - wireless, "groups": ordered}
 
 
 def time_points(html_path: str, *, drip_threshold: float = DRIP_THRESHOLD,
                 max_points: int = MAX_TIME_POINTS, per_device: int = PER_DEVICE_LIMIT) -> list[dict]:
     """The time points as plan() numbers them, with their Sleep Study evidence."""
     return [p.to_dict() for p in _select(html_path, drip_threshold, max_points, per_device)[1]]
+
+
+def system_sessions(html_path: str, *, drip_threshold: float = DRIP_THRESHOLD,
+                    max_points: int = MAX_TIME_POINTS, per_device: int = PER_DEVICE_LIMIT) -> dict:
+    """The report's bad sessions split into wireless and system, with the
+    system ones grouped by their top blocker."""
+    return _select(html_path, drip_threshold, max_points, per_device)[2]
 
 
 def _criteria(collected: dict, max_points: int, per_device: int) -> dict:
@@ -783,7 +964,7 @@ def plan(
     suggestion is the log file covering its window, or "" when none does --
     the caller then asks the user for one. Raises on an unreadable report.
     """
-    collected, points = _select(html_path, drip_threshold, max_points, per_device)
+    collected, points, system = _select(html_path, drip_threshold, max_points, per_device)
     search_root = search_root or os.path.dirname(os.path.abspath(html_path))
     log_index, warnings = discover_driver_logs(search_root)
     for p in points:
@@ -813,6 +994,7 @@ def plan(
         "devices": collected["devices"],
         "warnings": collected["warnings"] + warnings,
         "points": [p.to_dict() for p in points],
+        "sessions": system,
     }
 
 
@@ -917,6 +1099,7 @@ def run_point(
     per_device: int = PER_DEVICE_LIMIT,
     max_steps: int = 6,
     on_agent: Optional[Callable[[object], None]] = None,
+    point_template: Optional[str] = None,
 ) -> Iterator[dict]:
     """
     Analyse the time point `index` (as plan() numbered it) in `driver_log`
@@ -932,12 +1115,13 @@ def run_point(
     caller can stop it (agent.cancel_event).
     """
     try:
-        _collected, points = _select(html_path, drip_threshold, max_points, per_device)
+        _collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
         p = next((x for x in points if x.index == int(index)), None)
         if p is None:
             yield {"type": "error", "content": f"The report has no time point #{index}."}
             return
         p.driver_log_path = str(driver_log or "").strip()
+        p.issue_description = _issue_description(p, drip_threshold, point_template)
         yield {"type": "start", "data": p.to_dict()}
         out_dir = out_dir or tempfile.mkdtemp(prefix="sleepstudy_")
         os.makedirs(out_dir, exist_ok=True)
@@ -960,6 +1144,7 @@ def run_pipeline(
     max_points: int = MAX_TIME_POINTS,
     per_device: int = PER_DEVICE_LIMIT,
     max_steps: int = 6,
+    point_template: Optional[str] = None,
 ) -> Iterator[dict]:
     """
     Analyse every time point and yield events: "step" and "agent_step" as in
@@ -973,7 +1158,7 @@ def run_pipeline(
     """
     try:
         yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
-        collected, points = _select(html_path, drip_threshold, max_points, per_device)
+        collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
         yield {"type": "step", "content": (
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "
@@ -992,6 +1177,7 @@ def run_pipeline(
         os.makedirs(out_dir, exist_ok=True)
         for p in points:
             p.driver_log_path = chosen.get(p.index, "")
+            p.issue_description = _issue_description(p, drip_threshold, point_template)
             yield from _analyze_point(p, indexed, log_warnings, out_dir, agent_factory, max_steps)
             yield {"type": "point", "data": p.to_dict()}
 
@@ -1071,17 +1257,6 @@ def render_markdown(result: dict) -> str:
 #  RUN SUMMARY
 # ══════════════════════════════════════════════════════════════════════════════
 
-SUMMARY_SYSTEM_PROMPT = (
-    "You are a Modern Standby power analyst for Intel wireless drivers. You get "
-    "several Sleep Study sessions where the platform failed to rest on battery. "
-    "For each one you have what Sleep Study recorded about the device (the OS "
-    "jobs that woke it, net wake reasons, DRIPS wake sources) and what a driver "
-    "log agent found. Your job is to say, across the sessions, what keeps waking "
-    "the driver and stops the platform from resting. Use only the evidence "
-    "given; when a session's cause is unclear say so. Write markdown in English."
-)
-
-
 def wake_statistics(points: list[dict]) -> dict:
     """Counts across the time points, straight from the report (no LLM)."""
     jobs: dict = {}
@@ -1109,6 +1284,40 @@ def wake_statistics(points: list[dict]) -> dict:
     return {"os_jobs": jobs, "net_wake_reasons": reasons, "drips_wake_sources": sources}
 
 
+def _verdict_tables(analysed: list[dict], findings: dict) -> tuple[list[str], list[dict]]:
+    """Per session: the report's scenario against the driver log's, counted."""
+    rows = []
+    for p in analysed:
+        report = html_verdict(p.get("wake_evidence") or {})
+        driver = verdict_scenario(findings[p["index"]])
+        rows.append({"p": p, "report": report, "report_s": verdict_scenario(report),
+                     "driver_s": driver})
+    if not rows:
+        return [], rows
+    out = ["", "**Report vs driver log, per session**", "",
+           "| Session | Short device wakes | Report says | Driver log says | Agree |",
+           "|---|---|---|---|---|"]
+    for r in rows:
+        agree = "?" if r["driver_s"] == "?" else ("✔" if r["driver_s"] == r["report_s"] else "✘")
+        out.append(f"| {r['p']['session_id']} | {short_device_wakes(r['p'].get('wake_evidence') or {})} | "
+                   f"{r['report']} | {r['driver_s']} | {agree} |")
+    scenarios = ("A", "B", "contact Intel", "?")
+    n = len(rows)
+    out += ["", "**Scenario counts**", "", "| Scenario | Report | Driver log |", "|---|---|---|"]
+    for sc in scenarios:
+        rep = sum(1 for r in rows if r["report_s"] == sc)
+        drv = sum(1 for r in rows if r["driver_s"] == sc)
+        if rep or drv:
+            out.append(f"| {sc} | {rep}/{n} ({100 * rep // n}%) | {drv}/{n} ({100 * drv // n}%) |")
+    judged = [r for r in rows if r["driver_s"] != "?"]
+    if judged:
+        same = sum(1 for r in judged if r["driver_s"] == r["report_s"])
+        out.append(f"\nReport and driver log agree on **{same}/{len(judged)}** session(s) "
+                   f"({100 * same // len(judged)}%)"
+                   + (f"; {n - len(judged)} driver verdict(s) could not be read." if len(judged) < n else "."))
+    return out, rows
+
+
 def _stats_tables(stats: dict, total: int) -> list[str]:
     out = []
     for title, key in (("OS jobs that woke the device", "os_jobs"),
@@ -1125,44 +1334,94 @@ def _stats_tables(stats: dict, total: int) -> list[str]:
 
 
 def summarize_run(source: str, points: list[dict], findings: dict,
-                  llm_call: Optional[Callable[[str, str], str]] = None) -> str:
+                  llm_call: Optional[Callable[[str, str], str]] = None,
+                  system_prompt: Optional[str] = None,
+                  sessions: Optional[dict] = None) -> str:
     """
-    The run's closing analysis. `points` are the time points (TimePoint
-    dicts); `findings` maps a point index to what its analysis turn said.
-    The statistics come from the report; the reading of them from one LLM
-    call, when there is one.
+    The run's report. `points` are all the wireless time points (TimePoint
+    dicts), `findings` maps the index of each one checked against a driver
+    log to what its turn said (may be empty), and `sessions` is
+    system_sessions(). The counts and tables come from code; the reading of
+    them from one LLM call, with `system_prompt` (the sleepstudy_summary
+    speclet) when given.
     """
-    analysed = [p for p in points if p["index"] in findings]
-    stats = wake_statistics(analysed)
-    out = ["# Sleep Study: what keeps waking the driver",
-           f"_{len(analysed)} of {len(points)} time point(s) included · `{source}`_"]
-    out += _stats_tables(stats, len(analysed))
+    from services.chatbot.engine.speclet_defaults import default_speclet
 
-    if llm_call is not None and analysed:
+    sessions = sessions or {"bad_total": 0, "wireless": 0, "system": 0, "groups": []}
+    checked = [p for p in points if p["index"] in findings]
+    out = ["# Sleep Study report",
+           f"_`{source}` · {len(points)} wireless time point(s), "
+           f"{len(checked)} checked against a driver log_"]
+
+    # 1. What the report alone says, about every bad session.
+    html_lines = ["", "## From the Sleep Study report", ""]
+    if sessions["bad_total"]:
+        html_lines.append(
+            f"**{sessions['bad_total']}** bad session(s) on battery: **{sessions['wireless']}** with a "
+            f"wireless RED top blocker, **{sessions['system']}** without one (system).")
+    if points:
+        html_lines += ["", "| # | Session | SW DRIPS | Short device wakes | Report says | Driver log |",
+                       "|---|---|---|---|---|---|"]
+        for p in points:
+            html_lines.append(
+                f"| {p['index']} | {p['session_id']} · {p['device_label']} | {_pct(p['sw_drip_pct'])} | "
+                f"{p.get('short_device_wakes', 0)} | {p.get('html_verdict', '')} | "
+                f"{'checked' if p['index'] in findings else 'not checked'} |")
+        counts = {}
+        for p in points:
+            sc = verdict_scenario(p.get("html_verdict", ""))
+            counts[sc] = counts.get(sc, 0) + 1
+        html_lines += ["", "Report-only scenarios: " + ", ".join(
+            f"{sc} {n}/{len(points)} ({100 * n // len(points)}%)" for sc, n in counts.items())]
+    if sessions["groups"]:
+        html_lines += ["", "**System sessions** (no wireless RED blocker; not a wireless driver issue)", "",
+                       "| Top blocker | Sessions | Worst SW DRIPS |", "|---|---|---|"]
+        html_lines += [f"| {g['blocker']} | {len(g['sessions'])} | {_pct(g['worst_sw'])} |"
+                       for g in sessions["groups"]]
+    out += html_lines
+
+    # 2. Report against driver log, for the checked sessions.
+    verdict_lines, rows = _verdict_tables(checked, findings)
+    if verdict_lines:
+        out += ["", "## Checked against the driver log"] + verdict_lines
+
+    # 3. Wake counts from the report, over every wireless time point.
+    stats_lines = _stats_tables(wake_statistics(points), len(points))
+    if stats_lines:
+        out += ["", "## What woke the device (from the report)"] + stats_lines
+
+    if llm_call is not None and (points or sessions["groups"]):
         blocks = []
-        for p in analysed:
-            blocks.append("\n".join([
+        for p in points:
+            ev = p.get("wake_evidence") or {}
+            block = [
                 f"## Session {p['session_id']} ({p['device_label']}), "
                 f"{p['window_start']} -> {p['window_end']}, SW DRIPS {_pct(p['sw_drip_pct'])}",
-                *wake_evidence_lines(p.get("wake_evidence") or {}),
-                "Driver log finding:",
-                str(findings[p["index"]])[:3000],
-            ]))
-        user = (
-            "Sessions:\n\n" + "\n\n".join(blocks) + "\n\n"
-            "Write:\n"
-            "1. A table: session | dominant wake cause (category) | detail. Categories: "
-            "OS-initiated job (name the job), wake on packet (name the packet or "
-            "pattern), key or user, timer, not the wireless device (system), unknown.\n"
-            "2. The share of sessions per category, as a table with percentages.\n"
-            "3. For wake on packet, what the packets were, if the evidence says.\n"
-            "4. Which causes are worth fixing first, and what to look at in the driver."
-        )
+                *wake_evidence_lines(ev),
+                "Network activity by app:",
+                *(app_activity_lines(ev) or ["  (none recorded)"]),
+                f"Short device wakes (0-29 s): {short_device_wakes(ev)}",
+                f"Report says: {p.get('html_verdict', '')}",
+            ]
+            if p["index"] in findings:
+                block += [f"Driver log says (scenario {verdict_scenario(findings[p['index']])}):",
+                          str(findings[p["index"]])[:3000]]
+            else:
+                block.append("Not checked against a driver log.")
+            blocks.append("\n".join(block))
+        system_block = "\n".join(
+            f"- {g['blocker']}: {len(g['sessions'])} session(s), worst SW DRIPS {_pct(g['worst_sw'])}"
+            for g in sessions["groups"]) or "(none)"
+        user = ("Counts already computed:\n" + "\n".join(html_lines + verdict_lines)
+                + "\n\nWireless sessions:\n\n" + ("\n\n".join(blocks) or "(none)")
+                + "\n\nSystem sessions by top blocker:\n" + system_block)
+        prompt = _fill(system_prompt or default_speclet("nw", "sleepstudy_summary"), _rule_values())
         try:
-            out += ["", llm_call(SUMMARY_SYSTEM_PROMPT, user) or "_The summary model returned nothing._"]
+            out += ["", "## Analysis", "", llm_call(prompt, user) or "_The summary model returned nothing._"]
         except Exception as exc:
             out += ["", f"> ⚠️ Summary model failed: {type(exc).__name__}: {exc}"]
-    elif analysed:
-        out += ["", "> No LLM is configured, so only the counts above are given.", ""]
-        out += [f"- Session {p['session_id']}: {str(findings[p['index']])[:300]}" for p in analysed]
+    elif points or sessions["groups"]:
+        out += ["", "> No LLM is configured, so only the counts above are given."]
     return "\n".join(out)
+
+

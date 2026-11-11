@@ -238,6 +238,7 @@ NW_UI = {
         "sidebar_toggle": True,
         "history": True,
         "skill_append": True,
+        "prompt_editor": True,
         "sleepstudy": True,
         "prepare": False,
     },

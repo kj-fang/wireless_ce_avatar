@@ -147,6 +147,56 @@ NW_REPORT = """Your `markdown_summary` format (REQUIRED):
 
 #: Keyed as "<profile>_<kind>" to match utils.speclets_utils' cache keys.
 
+# --- Network Experience: Sleep Study --------------------------------------
+# Two documents the NW page edits besides its agent bundle (PROFILE_EXTRA_KINDS
+# in utils/speclets_utils.py). Words in {braces} are filled in per session by
+# services/sleepstudy_pipeline.py; an unknown {word} is left as written, so an
+# editor cannot break the prompt by adding braces of their own.
+#
+# What is NOT here, on purpose: the scenario rules (A / B / contact Intel),
+# their thresholds and the first line of the answer. The pipeline appends
+# those itself (POINT_ANSWER_CONTRACT), because it compares the agent's
+# verdict with the report's by the same rules -- an edit that changed one
+# side only would make every session look like a disagreement.
+#
+# sleepstudy_point fields:
+#   {session_id} {session_type} {start} {end} {duration} {sw_drips} {hw_drips}
+#   {threshold} {top_blocker} {top_blocker_active} {device}
+#   {wake_evidence}       what the report recorded about the device: D0 window,
+#                         OS jobs that woke it, net wake reasons, wake
+#                         durations, platform DRIPS wake sources
+#   {app_activity}        network power and traffic per app (SRUM, NDIS)
+#   {short_device_wakes}  short (0-29 s) wakes raised by the device
+#   {short_wake_limit}    above this many, the session goes to the Intel team
+#   {html_verdict}        the scenario the report alone points to
+NW_SLEEPSTUDY_POINT = """Modern Standby battery drain. Sleep Study session {session_id} ({session_type}) ran {start} to {end} ({duration}) on battery with software DRIPS {sw_drips} and hardware DRIPS {hw_drips}, below the {threshold} bar. The RED top blocker was {top_blocker} ({top_blocker_active} active).
+
+What Sleep Study recorded about the {device} device in this session:
+{wake_evidence}
+
+Network activity by app in this session (SRUM network power, NDIS bytes and outgoing wakes):
+{app_activity}
+
+Short (0-29 s) wakes raised by the device (NetWakeReasonTypeDevice): {short_device_wakes}. From the report alone this session reads as: {html_verdict}.
+
+Question, from the {device} driver's side: during this window, why was the driver brought back to D0 again and again instead of staying in Dx and letting the platform rest? For each wake, find what triggered it: an OS request (which OID / WiFiCx job, e.g. DeviceServiceCommand, Roam, QueryStatistics, scan), a wake raised by the device itself (wake on packet -- which packet or pattern -- or wake on disconnect / roam), a key or user action, or a timer. Then say why the driver did not return to low power promptly after each wake, and whether the driver log agrees with what the report alone suggests.
+
+Keep the answer short: this session is one of several whose findings are compared afterwards. Use only the evidence given; do not invent numbers."""
+
+# sleepstudy_summary fields: {short_wake_limit}
+NW_SLEEPSTUDY_SUMMARY = """You are a Modern Standby power analyst for Intel wireless drivers. You get the bad sessions of one Sleep Study report: sessions on battery where the platform failed to rest. Some have a wireless device as the RED top blocker; for each of those you have what Sleep Study recorded (OS jobs that woke the device, net wake reasons, short wakes, network activity by app) and the scenario the report alone points to, and for the ones a person chose to check, what a driver log agent concluded after reading that session's driver log. The others ("system") have no wireless RED blocker and were not checked against a driver log.
+
+Scenarios: A = activity by OS / app (an App ID or OS job dominates network power or traffic); B = activity by remote (a stream of short wakes raised by the device, NetWakeReasonTypeDevice, from unsolicited inbound traffic); "Please contact Intel Wi-Fi team" = neither is supported, or more than {short_wake_limit} short device wakes in a session.
+
+Write markdown in English, with these sections and nothing else:
+1. **Conclusion**: two or three sentences a reader can act on: is this a wireless driver problem, an app / OS / remote traffic problem, or a platform (system) problem, and how sure is that.
+2. **Driver log check**: for the sessions checked against a driver log, whether the driver log confirmed the report; for each disagreement, why the driver log changed the picture or why it is inconclusive. Say so plainly if no session was checked.
+3. **What keeps waking the driver**: the causes ranked by how many sessions they explain (category: OS job (name it), wake on packet (name the packet or pattern), key or user, timer, app traffic (name the app), unknown), with what to look at in the driver first.
+4. **System sessions**: what the non-wireless blockers suggest and who should look at them. Omit this section when there are none.
+
+The counts are given; quote them, do not recount. Use only the evidence given. When a cause is unclear say so; do not invent numbers."""
+
+
 # --- Linux (linux_chatbot) ------------------------------------------------
 
 # Without these the Linux agent sent an empty system prompt, which the LLM API
@@ -312,6 +362,8 @@ DEFAULTS: dict[str, str] = {
     "bt_report": BT_REPORT,
     "nw_prompt": NW_PROMPT,
     "nw_report": NW_REPORT,
+    "nw_sleepstudy_point": NW_SLEEPSTUDY_POINT,
+    "nw_sleepstudy_summary": NW_SLEEPSTUDY_SUMMARY,
     "linux_prompt": LINUX_PROMPT,
     "linux_report": LINUX_REPORT,
     "shared_review": SHARED_REVIEW,

@@ -30,6 +30,12 @@
             onclick="appendSkillsFromYaml()" id="skill-append-btn"
             title="Pick a YAML file; its skills are appended to your customised configuration (duplicates overwrite)."
             >📥 Append Skills from YAML…</button>
+    <!-- The same editor as the other chatbots, opened on the Sleep Study
+         prompts: the question put to each time point, and the summary. -->
+    <button class="btn-set-log" style="width:100%;margin-top:6px;"
+            onclick="openPromptEditor('nw_sleepstudy_point')" id="prompt-editor-btn"
+            title="Edit the Sleep Study prompts: the question for each time point and the closing summary"
+            >🧠 Edit Sleep Study Prompts…</button>
     <div id="skill-editor-status" class="log-status"></div>
 </div>
 

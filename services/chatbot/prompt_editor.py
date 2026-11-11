@@ -79,6 +79,18 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
             parts[sp.PREAMBLE] = note
         return parts
 
+    def _conversation_text(kind: str) -> str:
+        """The live text of a document outside the bundle (NW's Sleep Study
+        prompts), in the same order as conversation_speclet()."""
+        overrides = getattr(context.get_agent(), "prompt_overrides", {})
+        return (overrides.get(kind) or sp.kept_text(context.profile, kind)
+                or context.default_text(context.profile, kind) or "")
+
+    def _kept_flag(doc_profile: str, kind: str) -> bool:
+        """Kept on its own, or as a part of a kept bundle."""
+        return sp.is_kept(doc_profile, kind) or (
+            kind in sp.BUNDLED_KINDS and sp.is_kept(doc_profile, sp.BUNDLE))
+
     def _part_source(kind: str, overrides: dict) -> str:
         """Where the live text of one document comes from, for the badge."""
         if kind == sp.BUNDLE:
@@ -114,9 +126,7 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                                     if d["profile"] == context.profile]
             for doc in payload["documents"]:
                 doc["source"] = _part_source(doc["kind"], overrides)
-                doc["kept"] = sp.is_kept(context.profile, doc["kind"]) or (
-                    doc["kind"] != sp.BUNDLE
-                    and sp.is_kept(context.profile, sp.BUNDLE))
+                doc["kept"] = _kept_flag(context.profile, doc["kind"])
                 doc["via_bundle"] = False
             payload["conversation_only"] = True
         return jsonify(payload)
@@ -131,14 +141,16 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                 return jsonify({"success": False, "error": "Shared prompts are not editable in a conversation."}), 400
             parts = _conversation_parts()
             overrides = getattr(context.get_agent(), "prompt_overrides", {})
-            live = sp.join_bundle(parts) if kind == sp.BUNDLE else parts[kind]
+            if kind == sp.BUNDLE:
+                live = sp.join_bundle(parts)
+            else:
+                live = parts.get(kind) or _conversation_text(kind)
             return jsonify({
                 "success": True,
                 "doc": f"{doc_profile}_{kind}",
                 "filename": sp.speclet_filename(doc_profile, kind),
                 "source": _part_source(kind, overrides),
-                "kept": sp.is_kept(doc_profile, kind) or (
-                    kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE)),
+                "kept": _kept_flag(doc_profile, kind),
                 "reads": "conversation",
                 "live": live,
                 "local": sp.read_user_speclet(doc_profile, kind) or "",
@@ -278,8 +290,7 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
                                "start from it"
                                + (" and from the skills saved with it" if kept_names else "")
                                + " until you press Restore original.")
-            kept = sp.is_kept(doc_profile, kind) or (
-                kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE))
+            kept = _kept_flag(doc_profile, kind)
             return jsonify({
                 "success": True,
                 "message": (prompt_note or
@@ -441,13 +452,19 @@ def build_prompt_editor_handlers(context: PromptEditorContext) -> dict[str, Call
             # prompt back on the next question and look broken. Withdrawing it
             # does not delete the file: Choose .md file... and the library
             # still have it.
-            was_kept = sp.is_kept(doc_profile, kind) or bool(sp.kept_skills(doc_profile))
+            # A document outside the agent bundle (NW's Sleep Study prompts)
+            # names no skills and is no part of the bundle, so restoring it
+            # leaves the kept agent prompt and its skills alone.
+            agent_doc = kind == sp.BUNDLE or kind in sp.BUNDLED_KINDS
+            was_kept = sp.is_kept(doc_profile, kind) or (
+                agent_doc and bool(sp.kept_skills(doc_profile)))
             if sp.is_kept(doc_profile, kind):
                 sp.set_kept(doc_profile, kind, False)
             # Both halves of the keep, together: the prompt named the skills,
             # so leaving the skills kept would be half a restore.
-            sp.set_kept_skills(doc_profile, None)
-            if kind != sp.BUNDLE and sp.is_kept(doc_profile, sp.BUNDLE):
+            if agent_doc:
+                sp.set_kept_skills(doc_profile, None)
+            if kind in sp.BUNDLED_KINDS and sp.is_kept(doc_profile, sp.BUNDLE):
                 # One part of a kept bundle cannot be singled out, so this is
                 # the whole document going back to built-in.
                 sp.set_kept(doc_profile, sp.BUNDLE, False)

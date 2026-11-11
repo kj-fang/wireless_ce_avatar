@@ -330,6 +330,8 @@
   }
 
   var NOTICE_MS = 5000;
+  // After the pointer or focus leaves a notice someone was reading.
+  var NOTICE_RESUME_MS = 2500;
 
   /**
    * Say what was recorded when nothing asked.
@@ -415,6 +417,16 @@
     // timer running and take the focused link away mid-read.
     bar.addEventListener("mouseenter", hold);
     bar.addEventListener("focusin", hold);
+    // ...but only while it is being read. Holding for good left the notice up
+    // for the rest of the session once a pointer had merely crossed it, as no
+    // other toast on these pages does; leaving it starts a short countdown.
+    function resume() {
+      if (!timer && document.body.contains(bar) && !bar.contains(document.activeElement)) {
+        timer = setTimeout(dismiss, NOTICE_RESUME_MS);
+      }
+    }
+    bar.addEventListener("mouseleave", resume);
+    bar.addEventListener("focusout", function () { setTimeout(resume, 0); });
 
     document.body.appendChild(bar);
     requestAnimationFrame(function () { bar.style.opacity = "1"; });

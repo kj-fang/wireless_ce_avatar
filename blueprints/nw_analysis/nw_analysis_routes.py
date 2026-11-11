@@ -37,6 +37,8 @@ from configs.global_configs import app_config
 from models.models import CaseContext
 from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
 from services.chatbot.engine.system import load_skills_from_yaml
+from services.chatbot.engine.speclet_defaults import conversation_speclet, default_speclet
+from services.chatbot.prompt_editor import PromptEditorContext, build_prompt_editor_handlers
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import sleepstudy_pipeline
 from services import gather_service
@@ -292,6 +294,7 @@ def set_log():
         agent = _get_or_create_agent()
         agent.current_log_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
+        agent.prompt_overrides.clear()      # and its prompt edits start over
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
         if any(ctx.values()):
             agent.prime_with_context(**ctx)
@@ -552,7 +555,8 @@ def sleepstudy_driver_check():
 # ------------------------------------------------------------------
 def sleepstudy_run_start():
     """Request JSON: { "log_path", "plan": <the /sleepstudy_plan response>,
-    "driver_logs": {"<point index>": "<path or ''>"} }"""
+    "driver_logs": {"<point index>": "<path or ''>"},
+    "selected": [<point indexes to check against a driver log>] }"""
     data = request.get_json(silent=True) or {}
     sleep_path = (data.get("log_path") or "").strip()
     plan = data.get("plan") if isinstance(data.get("plan"), dict) else {}
@@ -562,8 +566,9 @@ def sleepstudy_run_start():
         return jsonify({"success": False, "error": "log_path is required"}), 400
 
     keep = ("index", "session_id", "device", "device_label", "window_start",
-            "window_end", "sw_drip_pct")
+            "window_end", "sw_drip_pct", "html_verdict", "short_device_wakes")
     points = [{k: p.get(k) for k in keep} for p in plan.get("points") or [] if isinstance(p, dict)]
+    selected = [int(i) for i in data.get("selected") or [] if str(i).lstrip("-").isdigit()]
     conversation_id = _ensure_nw_conversation_id()
     _record_nw_turn(
         conversation_id,
@@ -572,7 +577,13 @@ def sleepstudy_run_start():
             "log_path": sleep_path,
             "points": points,
             "driver_logs": driver_logs,
-            **{k: plan.get(k) for k in ("total_sessions", "qualifying_count", "criteria", "warnings")},
+            "selected": selected,
+            # The question every point of this run is asked, fixed now: a
+            # Resume after an edit (or from History) must not mix two prompts
+            # in one run.
+            "point_template": conversation_speclet(_get_or_create_agent(), "sleepstudy_point"),
+            **{k: plan.get(k) for k in ("total_sessions", "qualifying_count", "criteria",
+                                        "warnings", "sessions")},
         }},
         [], sleep_path, driver_logs,
     )
@@ -595,21 +606,26 @@ def sleepstudy_summary():
         return jsonify({"success": False, "error": f"File not found: {sleep_path}"}), 400
     conversation_id = _ensure_nw_conversation_id()
     conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+    # A point counts as checked when its agent ran; its finding is what the
+    # agent concluded, not the turn's text (which also quotes the report).
     findings = {}
     for turn in conv.get("turns") or []:
         result = turn.get("result") or {}
         point = result.get("point") if isinstance(result, dict) else None
-        if isinstance(point, dict) and point.get("index") is not None:
-            findings[int(point["index"])] = history_service.assistant_text_from_result(result)
-    if not findings:
-        return jsonify({"success": False, "error": "No time point has been analysed yet."}), 400
+        if isinstance(point, dict) and point.get("index") is not None \
+                and point.get("status") == "analyzed":
+            findings[int(point["index"])] = (point.get("agent_summary")
+                                             or history_service.assistant_text_from_result(result))
 
     spend = _new_spend()
     llm_model, llm_call = _one_shot_llm(spend, max_tokens=2500)
     started = datetime.now()
     try:
         points = sleepstudy_pipeline.time_points(sleep_path)
-        markdown = sleepstudy_pipeline.summarize_run(sleep_path, points, findings, llm_call)
+        markdown = sleepstudy_pipeline.summarize_run(
+            sleep_path, points, findings, llm_call,
+            system_prompt=conversation_speclet(_get_or_create_agent(), "sleepstudy_summary"),
+            sessions=sleepstudy_pipeline.system_sessions(sleep_path))
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
@@ -626,7 +642,8 @@ def sleepstudy_summary():
             pass
 
     result = {"type": "text", "data": markdown}
-    request_text = f"Summary: what keeps waking the driver ({len(findings)} time point(s))"
+    request_text = (f"Report: {len(findings)} of {len(points)} time point(s) checked "
+                    f"against a driver log")
     _remember_analysis(request_text, markdown)
     _record_nw_turn(conversation_id, request_text, result, [], sleep_path)
     return jsonify({"success": True, "conversation_id": conversation_id,
@@ -642,6 +659,16 @@ def sleepstudy_summary():
 # page can resume from that point. Everything that is not HTTP lives in
 # services/sleepstudy_pipeline.py, so an MCP server can drive the same steps.
 # ------------------------------------------------------------------
+def _pinned_point_template(conversation_id: str) -> str:
+    """The question this conversation's run started with (sleepstudy_run_start)."""
+    conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+    for turn in reversed(conv.get("turns") or []):
+        result = turn.get("result") or {}
+        if isinstance(result, dict) and result.get("type") == "sleepstudy_plan":
+            return str((result.get("data") or {}).get("point_template") or "")
+    return ""
+
+
 def analyze_sleepstudy_point():
     """
     Request JSON: {
@@ -677,6 +704,11 @@ def analyze_sleepstudy_point():
 
     conversation_id = _ensure_nw_conversation_id()
     sid = session.get("chatbot_session_id", "") or ""
+    # The question for each point, as this conversation's prompt editor left
+    # it: an edit here, else a kept copy, else the built-in text. Read before
+    # the stream opens; the speclet cache was primed at boot.
+    point_template = _pinned_point_template(conversation_id) \
+        or conversation_speclet(_get_or_create_agent(), "sleepstudy_point")
     out_dir = os.path.join(
         app_config.avatarfiles_dir or os.path.expanduser("~"),
         "sleepstudy", datetime.now().strftime("%Y%m%d_%H%M%S") + f"_p{index:02d}",
@@ -693,7 +725,8 @@ def analyze_sleepstudy_point():
         steps, request_text = [], ""
         try:
             for event in sleepstudy_pipeline.run_point(
-                    sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent):
+                    sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent,
+                    point_template=point_template):
                 kind = event["type"]
                 if kind == "start":
                     request_text = _point_request_text(event["data"], position, total)
@@ -712,6 +745,10 @@ def analyze_sleepstudy_point():
                     # Which point this turn is, so the plan card reopened from
                     # History can tell the finished points from the rest.
                     result["point"] = {k: point[k] for k in ("index", "status", "message", "session_id")}
+                    agent_data = (point.get("agent_result") or {}).get("data")
+                    result["point"]["agent_summary"] = (
+                        str(agent_data.get("root_cause_summary") or "") if isinstance(agent_data, dict)
+                        else "") or str(point.get("agent_report") or "")[:3000]
                     _record_nw_turn(conversation_id, request_text, result, steps, sleep_path,
                                     {str(index): driver_log})
                     sse = {"type": "done", "result": {**result, "conversation_id": conversation_id}}
@@ -1030,6 +1067,7 @@ def history_load():
 
         agent = _get_or_create_agent()
         agent.reset_conversation()
+        agent.prompt_overrides.clear()
         skills = []
         if log_exists:
             agent.current_log_path = sleep_path
@@ -1112,8 +1150,18 @@ _SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
     gather_domain=GATHER_DOMAIN,
 ))
 
+# The prompt editor the other chatbots have. NW's documents are its agent
+# bundle (follow-up chat) and its two Sleep Study prompts; edits apply to
+# this conversation unless kept (utils/speclets_utils.py).
+_PROMPT_EDITOR_HANDLERS = build_prompt_editor_handlers(PromptEditorContext(
+    profile="nw",
+    default_text=default_speclet,
+    get_agent=_get_or_create_agent,
+    load_skills_from_yaml=load_skills_from_yaml,
+))
+
 _NW_ANALYSIS_HANDLERS = handler_map(
-    {**_SHARED_HANDLERS, **globals(), **_SKILL_APPEND_HANDLERS},
+    {**_SHARED_HANDLERS, **globals(), **_SKILL_APPEND_HANDLERS, **_PROMPT_EDITOR_HANDLERS},
     _NW_ANALYSIS_CAPABILITIES)
 nw_analysis_bp = create_chatbot_blueprint(ChatbotBlueprintConfig(
     name="nw_analysis",

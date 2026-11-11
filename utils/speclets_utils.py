@@ -99,6 +99,17 @@ BUNDLED_KINDS = tuple(k for k in KINDS if k != BUNDLE)
 #: the editor need to know it exists.
 PREAMBLE = "_preamble"
 
+#: Documents only one profile has, beyond its agent bundle. They are not part
+#: of the bundle (a one-file agent stays three sections) but otherwise live
+#: the same way: preloaded into the cache at boot, shared / local / built-in
+#: copies, editable per conversation in that profile's prompt editor.
+#:   nw  sleepstudy_point    the question put to the agent for each Sleep
+#:                           Study time point
+#:       sleepstudy_summary  the closing analysis across the time points
+PROFILE_EXTRA_KINDS: dict[str, tuple[str, ...]] = {
+    "nw": ("sleepstudy_point", "sleepstudy_summary"),
+}
+
 #: Documents that are the same for every profile. "shared" is not a real
 #: profile -- it is a fourth namespace, so ``speclet_filename`` and the cache
 #: key need no special case: shared + review -> shared_review.md. These are
@@ -180,7 +191,7 @@ def all_speclets():
     means adding a name to SHARED_KINDS, nothing else.
     """
     for profile in PROFILES:
-        for kind in KINDS:
+        for kind in KINDS + PROFILE_EXTRA_KINDS.get(profile, ()):
             yield profile, kind
     for kind in SHARED_KINDS:
         yield SHARED, kind
@@ -687,7 +698,8 @@ def documents_for(profile: str) -> list[tuple[str, str]]:
     anything here — and listed last, so the editor can mark them as affecting
     every agent rather than just this one.
     """
-    own = [(profile, kind) for kind in KINDS] if profile in PROFILES else []
+    own = [(profile, kind) for kind in KINDS + PROFILE_EXTRA_KINDS.get(profile, ())] \
+        if profile in PROFILES else []
     return own + [(SHARED, kind) for kind in SHARED_KINDS]
 
 

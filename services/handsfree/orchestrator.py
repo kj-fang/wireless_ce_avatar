@@ -1345,10 +1345,14 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     # above); a customer-visible post goes over REST only.
     if backend in ("rest", "auto"):
         try:
+            # expected_user: should the session expire between the identity
+            # check above and this insert, the renewed session must still be
+            # the reviewer before anything is posted (IpsClient.post_comment).
             result = ips.post_comment(rec["case_id"], rec["draft_html"],
                                       plain_body=rec.get("draft_plain") or "",
                                       field_map=cfg.get("rest_field_map"),
-                                      private=not is_public_reply)
+                                      private=not is_public_reply,
+                                      expected_user=reviewer)
         except PostUnsupported as e:
             print(f"[handsfree] REST posting unsupported: {e}")
             if backend == "rest" or is_public_reply:
@@ -1356,6 +1360,12 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                              post_result={"ok": False, "backend": "rest", "error": str(e)})
                 return {"ok": False, "error": str(e), "draft": store.get(draft_id)}
             result = None   # fall through to UI
+        if result is not None and not result.ok and (result.detail or {}).get("identity_mismatch"):
+            # The session is no longer the reviewer's. That is not a REST
+            # problem the UI poster could work around: stop, the reviewer
+            # signs in again and approves again.
+            store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
     if result is None or (not result.ok and backend == "auto"):
         if is_public_reply:

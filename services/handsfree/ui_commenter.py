@@ -27,7 +27,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from .ips_client import PostResult
+from .ips_client import PostResult, identity_problem      # noqa: F401  (re-exported)
 
 DEFAULT_LOCATORS = {
     "case_url": "https://intel.lightning.force.com/lightning/r/Case/{case_id}/view",
@@ -61,30 +61,6 @@ def _control_is_checked(el) -> bool:
 
 SSO_LOCK_WAIT_S = 120
 _SALESFORCE_API_HOST = "intel.my.salesforce.com"
-
-
-def identity_problem(expected: Optional[dict], actual: Optional[dict]) -> str:
-    """"" when the browser about to post is signed in as the reviewer the
-    approval was confirmed for; otherwise the reason, for the reviewer.
-    Salesforce ids come as 15 or 18 characters: the first 15 identify the
-    user. No expected reviewer (a caller that verified nothing) -> "". Pure."""
-    if not expected:
-        return ""
-    exp_id = str(expected.get("user_id") or "").strip()
-    exp_name = str(expected.get("name") or "").strip()
-    act_id = str((actual or {}).get("user_id") or "").strip()
-    act_name = str((actual or {}).get("name") or "").strip()
-    if not actual or not (act_id or act_name):
-        return ("could not confirm which IPS user the posting browser is signed in as "
-                f"(expected {exp_name or exp_id or 'the reviewer'})")
-    if exp_id and act_id:
-        same = exp_id[:15] == act_id[:15]
-    else:
-        same = bool(exp_name) and exp_name.casefold() == act_name.casefold()
-    if same:
-        return ""
-    return (f"the posting browser is signed in to IPS as {act_name or act_id!r}, not as "
-            f"the reviewer {exp_name or exp_id!r}")
 
 
 def _http_get(url: str, **kwargs):

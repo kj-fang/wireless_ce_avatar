@@ -5796,6 +5796,136 @@ def smoke_review_fixes_4(tmp: Path) -> None:
           f"rc={rc}/{rc2} events={events} no_chrome={no_chrome} failed={failed} raised={raised}")
 
 
+# ---------------------------------------------------------------- S31
+def smoke_session_renewal_identity(tmp: Path) -> None:
+    print("[S31] A session that expires while posting: the renewed session must still be the reviewer")
+    from . import orchestrator as orch
+    from . import ui_commenter as uic
+    from .composer import AI_MARKER, compose_html
+    from .ips_client import IpsClient, PostResult, identity_problem
+    from .queue import HandsfreeStore
+
+    ann = {"user_id": "005A000000ABCDEFGH", "name": "Ann Reviewer", "email": "ann@intel.com"}
+    svc = {"user_id": "005B000000ZZZZZAAA", "name": "Svc Account", "email": "svc@intel.com"}
+
+    class _Resp:
+        def __init__(self, code, data=None):
+            self.status_code, self._d, self.text = code, data or {}, ""
+        def json(self): return self._d
+
+    class _Client(IpsClient):
+        """IpsClient with the network cut out: scripted answers to the insert,
+        a scripted identity after a renewal."""
+        def __init__(self, answers, renewed):
+            super().__init__()
+            self.answers, self.renewed = list(answers), renewed
+            self.inserts, self.resets, self.auto_retry = 0, 0, []
+        def build_comment_payload(self, *a, **kw): return {"x": 1}
+        def _request(self, method, path, *, params=None, payload=None, timeout=20, retry_auth=True):
+            self.inserts += 1
+            self.auto_retry.append(retry_auth)
+            return self.answers.pop(0)
+        def _reset_auth(self): self.resets += 1
+        def whoami(self):
+            if isinstance(self.renewed, Exception):
+                raise self.renewed
+            return dict(self.renewed)
+
+    post = lambda c, **kw: c.post_comment("500A", "<p>b</p>", plain_body="b", **kw)
+    # the session is fine: one insert, no renewal
+    c_ok = _Client([_Resp(201, {"id": "a0X1"})], ann)
+    r_ok = post(c_ok, expected_user=ann)
+    # expired, renewed as the SAME reviewer (18- vs 15-character id): retried once
+    c_same = _Client([_Resp(401), _Resp(201, {"id": "a0X2"})], dict(ann, user_id="005A000000ABCDE"))
+    r_same = post(c_same, expected_user=ann)
+    # expired, renewed as ANOTHER user: nothing is posted
+    c_other = _Client([_Resp(401), _Resp(201, {"id": "SHOULD-NOT-HAPPEN"})], svc)
+    r_other = post(c_other, expected_user=ann)
+    # expired and the sign-in cannot be renewed at all
+    c_dead = _Client([_Resp(401), _Resp(201, {"id": "SHOULD-NOT-HAPPEN"})], RuntimeError("SSO did not complete"))
+    r_dead = post(c_dead, expected_user=ann)
+    # still 401 after a renewal as the reviewer: reported, not looped
+    c_loop = _Client([_Resp(401), _Resp(401)], ann)
+    r_loop = post(c_loop, expected_user=ann)
+    # no expected user (CLI auto-post, older callers): the usual automatic retry stays
+    c_plain = _Client([_Resp(201, {"id": "a0X3"})], ann)
+    r_plain = post(c_plain)
+    check("S31.a IpsClient.post_comment with the approved reviewer: a 401 on the insert renews the "
+          "session and reads who it is BEFORE retrying - the same reviewer is retried once, another "
+          "user or a failed renewal posts nothing and is flagged identity_mismatch, a second 401 is "
+          "reported; without an expected user the automatic retry is unchanged",
+          r_ok.ok and r_ok.comment_id == "a0X1" and c_ok.inserts == 1 and c_ok.resets == 0
+          and c_ok.auto_retry == [False]
+          and r_same.ok and r_same.comment_id == "a0X2" and c_same.inserts == 2 and c_same.resets == 1
+          and c_same.auto_retry == [False, False]
+          and r_other.ok is False and c_other.inserts == 1 and c_other.resets == 1
+          and r_other.detail.get("identity_mismatch") is True
+          and r_other.detail.get("renewed_as") == {"user_id": svc["user_id"], "name": "Svc Account"}
+          and "the renewed IPS session is signed in to IPS as 'Svc Account'" in r_other.error
+          and "not as the reviewer 'Ann Reviewer'" in r_other.error and "nothing was posted" in r_other.error
+          and r_dead.ok is False and c_dead.inserts == 1 and r_dead.detail.get("identity_mismatch") is True
+          and "could not be renewed" in r_dead.error and "SSO did not complete" in r_dead.error
+          and r_loop.ok is False and c_loop.inserts == 2 and "HTTP 401" in r_loop.error
+          and not r_loop.detail.get("identity_mismatch")
+          and r_plain.ok and c_plain.auto_retry == [True]
+          and uic.identity_problem is identity_problem
+          and identity_problem(ann, svc) == ("the posting browser is signed in to IPS as 'Svc Account', "
+                                             "not as the reviewer 'Ann Reviewer'"),
+          f"ok={r_ok} same={r_same.ok}/{c_same.inserts}/{c_same.resets} other={r_other} "
+          f"inserts_other={c_other.inserts} dead={r_dead.error!r} loop={r_loop.error!r}/{c_loop.inserts} "
+          f"plain={c_plain.auto_retry}")
+
+    # --- b) the approval: no UI fallback around a lost identity -------------------
+    store = HandsfreeStore(tmp / "handsfree_s31")
+    store.save_config({"dry_run": False, "post_backend": "auto",
+                       "rest_field_map": {"body_field": "Body__c"}})
+    body = AI_MARKER + "\n\nanalysis"
+    rec = store.enqueue(case_nbr="01090001", case_id="500A", subject="s", draft_plain=body,
+                        draft_html=compose_html(body), confidence=70, mode="full", analysis={})
+    seen: dict = {"expected": None, "ui_calls": 0}
+
+    class _FakeIps:
+        FIELD_RICH_BODY = IpsClient.FIELD_RICH_BODY
+        def post_comment(self, case_id, rich_body, **kw):
+            seen["expected"] = kw.get("expected_user")
+            return PostResult(ok=False, backend="rest",
+                              error="the IPS session expired while posting and the renewed IPS session "
+                                    "is signed in to IPS as 'Svc Account', not as the reviewer "
+                                    "'Ann Reviewer' - nothing was posted.",
+                              detail={"identity_mismatch": True, "status": 401})
+        def get_case_comments(self, case_id): return []
+        def comment_author(self, comment_id): return {}
+
+    class _FakeUi:
+        def __init__(self, locators=None): pass
+        def post_comment(self, case_id, body_text, expected_user=None):
+            seen["ui_calls"] += 1
+            return PostResult(ok=True, backend="ui")
+    orig = (orch._store, orch.IpsClient, orch._signed_in_identity, uic.UiCommenter)
+    orch._store = lambda: store
+    orch.IpsClient = _FakeIps
+    orch._signed_in_identity = lambda: dict(ann)
+    uic.UiCommenter = _FakeUi
+    try:
+        res = orch.approve_and_post(rec["draft_id"], visibility="internal")
+    finally:
+        orch._store, orch.IpsClient, orch._signed_in_identity, uic.UiCommenter = orig
+    after = store.get(rec["draft_id"])
+    check("S31.b approve passes the confirmed reviewer to the REST post; when the session was renewed "
+          "as someone else the approval stops there - 'auto' does NOT fall back to the UI poster - and "
+          "the draft is left post_failed with the reason, the case claim released, nothing recorded "
+          "as posted",
+          res["ok"] is False and "not as the reviewer 'Ann Reviewer'" in res["error"]
+          and (seen["expected"] or {}).get("user_id") == ann["user_id"] and seen["ui_calls"] == 0
+          and after["status"] == "post_failed"
+          and after["post_result"]["detail"].get("identity_mismatch") is True
+          and store.claim_case("01090001", "next reviewer") is None
+          and not store.ledger_entry("01090001").get("posted_at"),
+          f"res={res.get('error')!r} expected={seen['expected']} ui={seen['ui_calls']} "
+          f"status={after['status']} post_result={after.get('post_result')}")
+    store.release_case("01090001")
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
     try:
@@ -5828,6 +5958,7 @@ def run_smoke() -> int:
         smoke_review_fixes_2(tmp)
         smoke_review_fixes_3(tmp)
         smoke_review_fixes_4(tmp)
+        smoke_session_renewal_identity(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")

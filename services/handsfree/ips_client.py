@@ -61,6 +61,32 @@ class PostResult:
         return asdict(self)
 
 
+def identity_problem(expected: Optional[dict], actual: Optional[dict],
+                     subject: str = "the posting browser") -> str:
+    """"" when `subject` (a browser, a renewed session) is signed in to IPS
+    as the reviewer the approval was confirmed for; otherwise the reason,
+    worded for the reviewer. Salesforce ids come as 15 or 18 characters:
+    the first 15 identify the user. No expected reviewer (a caller that
+    verified nothing) -> "". Pure."""
+    if not expected:
+        return ""
+    exp_id = str(expected.get("user_id") or "").strip()
+    exp_name = str(expected.get("name") or "").strip()
+    act_id = str((actual or {}).get("user_id") or "").strip()
+    act_name = str((actual or {}).get("name") or "").strip()
+    if not actual or not (act_id or act_name):
+        return (f"could not confirm which IPS user {subject} is signed in as "
+                f"(expected {exp_name or exp_id or 'the reviewer'})")
+    if exp_id and act_id:
+        same = exp_id[:15] == act_id[:15]
+    else:
+        same = bool(exp_name) and exp_name.casefold() == act_name.casefold()
+    if same:
+        return ""
+    return (f"{subject} is signed in to IPS as {act_name or act_id!r}, not as "
+            f"the reviewer {exp_name or exp_id!r}")
+
+
 def _soql_quote(value: str) -> str:
     """Escape a string for inclusion in a single-quoted SOQL literal."""
     return (value or "").replace("\\", "\\\\").replace("'", "\\'")
@@ -631,20 +657,58 @@ class IpsClient:
     def post_comment(self, case_id: str, rich_body: str, *,
                      plain_body: str = "",
                      field_map: Optional[dict] = None,
-                     private: bool = True) -> PostResult:
+                     private: bool = True,
+                     expected_user: Optional[dict] = None) -> PostResult:
         """Insert a comment via REST. See build_comment_payload for the
         field_map contract. Raises PostUnsupported when the org denies the
         insert or no verified field_map exists — callers then fall back to
-        the Selenium UI poster."""
+        the Selenium UI poster.
+
+        expected_user: the reviewer this post was approved as ({"user_id",
+        "name", ...}, confirmed against IPS just before). The comment's
+        author is whoever the session belongs to at the moment of the
+        insert. If the session has expired by then, the usual answer to a
+        401 — sign in again and retry — may come back as ANOTHER IPS user
+        (the Windows account instead of the reviewer's saved sign-in, say).
+        With expected_user the retry is therefore not automatic: the renewed
+        session's user is read first, and unless it is the reviewer nothing
+        is posted (PostResult.detail["identity_mismatch"]). Without it the
+        old behaviour applies."""
         if not case_id or not rich_body.strip():
             return PostResult(ok=False, backend="rest", error="empty case_id/body")
         payload = self.build_comment_payload(
             case_id, rich_body, plain_body=plain_body,
             field_map=field_map, private=private)
 
-        resp = self._request(
-            "POST", "/services/data/v{ver}/sobjects/" + self.COMMENT_OBJECT + "/",
-            payload=payload, timeout=30)
+        insert = "/services/data/v{ver}/sobjects/" + self.COMMENT_OBJECT + "/"
+        if not expected_user:
+            resp = self._request("POST", insert, payload=payload, timeout=30)
+        else:
+            resp = self._request("POST", insert, payload=payload, timeout=30, retry_auth=False)
+            if resp.status_code == 401:
+                print("[handsfree.ips] 401 on the comment insert — renewing the session and "
+                      "checking it is still the reviewer before posting")
+                self._reset_auth()
+                try:
+                    renewed = self.whoami()
+                except Exception as e:
+                    return PostResult(
+                        ok=False, backend="rest",
+                        error="the IPS session expired and could not be renewed "
+                              f"({type(e).__name__}: {e}) - nothing was posted. Use 'Sign in "
+                              "to IPS' on the page and approve again",
+                        detail={"identity_mismatch": True, "status": 401})
+                problem = identity_problem(expected_user, renewed,
+                                           subject="the renewed IPS session")
+                if problem:
+                    return PostResult(
+                        ok=False, backend="rest",
+                        error=f"the IPS session expired while posting and {problem} - nothing "
+                              "was posted. Use 'Sign in to IPS' on the page to sign in as the "
+                              "reviewer and approve again",
+                        detail={"identity_mismatch": True, "status": 401,
+                                "renewed_as": {k: renewed.get(k, "") for k in ("user_id", "name")}})
+                resp = self._request("POST", insert, payload=payload, timeout=30, retry_auth=False)
         if resp.status_code == 201:
             data = resp.json()
             return PostResult(ok=True, backend="rest",

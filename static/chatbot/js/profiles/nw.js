@@ -6,7 +6,8 @@
     //   1. Load the Sleep Study HTML → /sleepstudy_plan lists the time points
     //      and suggests, for each one, the driver log that covers it (no LLM).
     //   2. The user confirms or changes those paths in the plan card, then
-    //      /analyze_sleepstudy_driver analyses each point in its own log.
+    //      /analyze_sleepstudy_point analyses the points one after another,
+    //      each in its own log, with a k/N progress line and Pause / Resume.
     let firstRoundSent = false;  // read by history.js: true once this conversation has a turn
     // The report the page last loaded (or is loading). Enter and leaving the
     // box can both fire for one edit; the second must not load it again.
@@ -250,8 +251,9 @@
                         <tbody>${rows}</tbody>
                     </table>
                     <button class="btn-set-log ss-run" style="width:100%;margin-top:8px;">
-                        Analyse ${points.length} time point(s)
+                        Analyse ${points.length} time point(s), one by one
                     </button>
+                    <div class="ss-progress" style="margin-top:8px;font-size:0.82rem;"></div>
                 </div>
             </div>`;
         document.getElementById('chat-window').appendChild(row);
@@ -266,49 +268,93 @@
         const missing = row.querySelector('.ss-drv-input[value=""]');
         if (missing) missing.focus();
 
-        row.querySelector('.ss-run').addEventListener('click', async (ev) => {
+        row.querySelector('.ss-run').addEventListener('click', (ev) => {
             const driverLogs = {};
             row.querySelectorAll('.ss-drv-input').forEach(inp => {
                 driverLogs[inp.dataset.index] = inp.value.trim();
             });
-            // The plan is settled once it runs; a new plan comes from Load.
+            // The plan is settled once it runs; a new plan comes from loading
+            // a report again.
             row.querySelectorAll('input, button').forEach(el => { el.disabled = true; });
-            ev.currentTarget.textContent = 'Analysing…';
-            await runSleepstudyAnalysis(path, driverLogs);
+            ev.currentTarget.style.display = 'none';
+            ssRun = {
+                path: path,
+                items: points.map(p => ({index: p.index, driverLog: driverLogs[p.index] || ''})),
+                next: 0,
+                busy: false,
+                bar: row.querySelector('.ss-progress'),
+            };
+            continueSleepstudyRun();
         });
     }
 
-    // The user turn an analysis is saved as; the server's
-    // _sleepstudy_request_text writes the same text to History.
-    function sleepstudyRequestText(path, driverLogs) {
-        const base = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
-        const entries = Object.entries(driverLogs || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
-        const lines = ['Sleep Study: ' + base(path) +
-                           (entries.length ? ` — ${entries.length} time point(s)` : ''),
-                       'Report: `' + path + '`'];
-        entries.forEach(([index, log]) => {
-            lines.push(log ? `#${index} → \`${log}\`` : `#${index} → (no driver log)`);
-        });
-        return lines.join('\n');
+    // ── Step 2: analyse the time points one after another ────────────
+    // Each point is its own request, its own agent run (with its own skill
+    // choices and log cut) and its own History turn. Running them in turn
+    // keeps the backend to one agent at a time; Pause (or the Stop button)
+    // cancels the running one, and Resume starts that point again.
+    let ssRun = null;
+
+    function renderRunBar(state) {
+        const run = ssRun;
+        if (!run || !run.bar) return;
+        const total = run.items.length;
+        const at = Math.min(run.next + 1, total);
+        const btn = (label, handler) =>
+            `<button class="btn-set-log" style="padding:3px 12px;margin-left:8px;width:auto;"
+                     onclick="${handler}()">${label}</button>`;
+        if (state === 'running') {
+            run.bar.innerHTML = `⏳ Analysing time point <b>${at}/${total}</b>…` +
+                                btn('⏸ Pause', 'pauseSleepstudyRun');
+        } else if (state === 'paused') {
+            run.bar.innerHTML = `⏸ Paused at time point <b>${at}/${total}</b>.` +
+                                btn('▶ Resume', 'continueSleepstudyRun');
+        } else {
+            run.bar.innerHTML = `✔ All ${total} time point(s) done.`;
+        }
     }
 
-    // ── Step 2: analyse each time point in its driver log (SSE) ──────
-    async function runSleepstudyAnalysis(path, driverLogs) {
-        appendUserMsg(sleepstudyRequestText(path, driverLogs));
-        appendTyping();
+    // core.js stopChat(): aborts the stream on screen and asks the server to
+    // cancel the running agent (chat_stop knows the time point's agent).
+    function pauseSleepstudyRun() {
+        if (typeof stopChat === 'function') stopChat();
+    }
 
-        const card = createAgentStepRenderer({
-            title: 'Sleepstudy × Driver Log Steps',
-            avatar: '🛌',
-        });
+    async function continueSleepstudyRun() {
+        const run = ssRun;
+        if (!run || run.busy) return;
+        run.busy = true;
+        setSendBtnStopMode();
+        while (run.next < run.items.length) {
+            renderRunBar('running');
+            const outcome = await analyseOnePoint(run, run.items[run.next],
+                                                  run.next + 1, run.items.length);
+            if (outcome === 'paused') {
+                run.busy = false;
+                renderRunBar('paused');
+                setSendBtnSendMode();
+                return;
+            }
+            run.next += 1;
+        }
+        run.busy = false;
+        renderRunBar('done');
+        setSendBtnSendMode();
+    }
 
+    // One time point over SSE. Returns 'paused' when the user stopped it.
+    async function analyseOnePoint(run, item, position, total) {
+        let card = null;
+        const ctl = new AbortController();
+        window.__streamCtl = ctl;
         try {
-            const res = await fetch(`${CHATBOT_API}/analyze_sleepstudy_driver`, {
+            const res = await fetch(`${CHATBOT_API}/analyze_sleepstudy_point`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({log_path: path, driver_logs: driverLogs})
+                signal: ctl.signal,
+                body: JSON.stringify({log_path: run.path, index: item.index,
+                                      driver_log: item.driverLog, position: position, total: total})
             });
-
             if (!res.ok) throw new Error(`Server error ${res.status}`);
 
             const reader = res.body.getReader();
@@ -322,17 +368,27 @@
                 let evt;
                 try { evt = JSON.parse(jsonStr); } catch { return; }
 
-                if (evt.type === 'step') {
-                    card.append(evt.step);
+                if (evt.type === 'turn') {
+                    appendUserMsg(evt.user_message);
+                    appendTyping();
+                    card = createAgentStepRenderer({
+                        title: `Sleep Study ${position}/${total} · Steps`,
+                        avatar: '🛌',
+                    });
+                } else if (evt.type === 'step') {
+                    if (card) card.append(evt.step);
                 } else if (evt.type === 'done') {
                     removeTyping();
-                    card.collapse();
-                    const result = evt.result;
-                    noteNwConversation(result);
-                    if (result && result.type === 'text') {
-                        appendAssistantText(result.data || '_No response._');
+                    if (card) card.collapse();
+                    const r = evt.result || {};
+                    noteNwConversation(r);
+                    const title = `📊 ${position}/${total} · Session ${(r.point || {}).session_id || ''}`;
+                    if (r.type === 'report') {
+                        appendReport(r.data || {}, title, r.issue_time || null);
+                    } else if (r.type === 'partial_report' && r.data) {
+                        appendReport(r.data, title + ' (step limit)', r.issue_time || null);
                     } else {
-                        appendAssistantText('⚠️ ' + (result && result.data ? result.data : 'Unknown response.'));
+                        appendAssistantText(r.data || '_No response._');
                     }
                 } else if (evt.type === 'error') {
                     removeTyping();
@@ -349,9 +405,11 @@
                 lines.forEach(processLine);
             }
             if (buffer) processLine(buffer);
-
+            return 'done';
         } catch (e) {
+            if (e.name === 'AbortError') return 'paused';
             removeTyping();
             appendAssistantText('❌ Network error: ' + e.message);
+            return 'done';
         }
     }

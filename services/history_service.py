@@ -387,8 +387,9 @@ def record_turn(
     is not.
 
     ``extra`` holds profile-specific inputs kept on the snapshot next to
-    ``log_path`` (NW: the driver log its Sleep Study was read against).
-    Keys the snapshot already defines are never overwritten by it.
+    ``log_path`` (NW: the driver log of each Sleep Study time point). Keys
+    the snapshot already defines are never overwritten by it, and a dict
+    value is merged into the one earlier turns saved.
     """
     path = _conversation_path(conversation_id, domain)
     if path is None or not turn_id:
@@ -421,7 +422,13 @@ def record_turn(
             if issue_time:
                 snapshot["issue_time"] = issue_time
             for key, value in (extra or {}).items():
-                if key not in _SNAPSHOT_KEYS:
+                if key in _SNAPSHOT_KEYS:
+                    continue
+                # A dict accumulates across turns (NW: one driver log per
+                # time point, each saved by its own turn).
+                if isinstance(value, dict) and isinstance(snapshot.get(key), dict):
+                    snapshot[key] = {**snapshot[key], **value}
+                else:
                     snapshot[key] = value
             snapshot["updated_at"] = _now_iso()
 

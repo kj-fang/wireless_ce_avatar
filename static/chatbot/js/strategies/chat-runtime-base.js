@@ -228,7 +228,10 @@
         const wrapper = document.createElement('div');
         wrapper.className = 'msg-row assistant';
         wrapper.style.maxWidth = '95%';
-        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}${turnId ? renderFeedbackWidget(turnId) : ''}</div>`;
+        // A profile without the feedback feature (NW) has no widget to render,
+        // as appendAssistantText in core.js already allows.
+        const showFeedback = turnId && typeof renderFeedbackWidget === 'function';
+        wrapper.innerHTML = `<div class="avatar-icon">🤖</div><div class="msg-body">${html}${showFeedback ? renderFeedbackWidget(turnId) : ''}</div>`;
         document.getElementById('chat-window').appendChild(wrapper);
         scrollBottom();
 

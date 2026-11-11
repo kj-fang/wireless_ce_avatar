@@ -1,4 +1,5 @@
-from flask import render_template, request, session, jsonify, Response, copy_current_request_context
+from flask import (render_template, request, session, jsonify, Response,
+                   copy_current_request_context, stream_with_context)
 from services.chatbot.issue_context import extract_disconnect_time as _extract_disconnect_time
 from services.chatbot.shared_routes import SharedRouteContext, build_shared_handlers
 from services.chatbot.session import register_session_agent_store
@@ -46,6 +47,9 @@ from utils.etl_utils import extract_time_from_description
 
 # Server-side store: session_id -> NwAnalysisAgentSystem instance
 _chatbot_instances: dict = {}
+# session_id -> the agent analysing a Sleep Study time point right now, so the
+# page's Stop button (chat_stop) can cancel it.
+_point_agents: dict = {}
 register_session_agent_store("nw_analysis", _chatbot_instances)
 
 # Gather analytics domain for this blueprint. Kept as a constant so the NW
@@ -310,21 +314,24 @@ def set_log():
 # the next ones, all under nw_conversation_id. The report path and the driver
 # log chosen for each time point are kept on the snapshot.
 # ------------------------------------------------------------------
-def _sleepstudy_request_text(sleep_path: str, driver_logs: dict | None = None) -> str:
-    """The user turn a Sleep Study analysis is saved as. nw.js shows the same."""
-    title = "Sleep Study: " + os.path.basename(sleep_path)
-    if driver_logs:
-        title += f" — {len(driver_logs)} time point(s)"
-    lines = [title, f"Report: `{sleep_path}`"]
-    for index, path in sorted((driver_logs or {}).items(), key=lambda kv: int(kv[0])):
-        lines.append(f"#{index} → `{path}`" if path else f"#{index} → (no driver log)")
+def _point_request_text(point: dict, position: int, total: int) -> str:
+    """The user turn one time point's analysis is shown and saved as."""
+    lines = [
+        f"Sleep Study {position}/{total} · Session {point['session_id']} · "
+        f"{point['device_label']} · {point['window_start']} → {point['window_end']}",
+        f"Driver log: `{point['driver_log_path']}`" if point["driver_log_path"]
+        else "Driver log: (none)",
+    ]
     return "\n".join(lines)
 
 
-def _record_nw_turn(user_message: str, result: dict, steps: list,
-                    sleep_path: str = "", driver_logs: dict | None = None) -> str:
-    """Save one turn to NW's History and return its conversation id. Never raises."""
-    conversation_id = _ensure_nw_conversation_id()
+def _record_nw_turn(conversation_id: str, user_message: str, result: dict, steps: list,
+                    sleep_path: str = "", driver_logs: dict | None = None) -> None:
+    """Save one turn to NW's History. Never raises.
+
+    Called while a stream is being written, so the view settles the
+    conversation id beforehand: the session can no longer be saved by then.
+    """
     try:
         history_service.record_turn(
             conversation_id=conversation_id,
@@ -340,7 +347,6 @@ def _record_nw_turn(user_message: str, result: dict, steps: list,
         )
     except Exception as exc:
         print(f"[nw history] record failed: {exc}")
-    return conversation_id
 
 
 def _remember_analysis(user_message: str, report: str) -> None:
@@ -386,8 +392,8 @@ def analyze_sleepstudy():
         def _missing():
             yield f"data: {json.dumps({'type': 'error', 'content': f'File not found: {sleep_path}'})}\n\n"
         return Response(_missing(), mimetype="text/event-stream")
+    conversation_id = _ensure_nw_conversation_id()
 
-    @copy_current_request_context
     def event_stream():
         # Build an llm_call adapter from the configured OpenAI-style client.
         llm_helper = app_config.llm_helper
@@ -442,11 +448,11 @@ def analyze_sleepstudy():
                     sse = {"type": "step", "step": {"content": event["content"]}}
                     steps.append(sse["step"])
                 elif kind == "done":
-                    request_text = _sleepstudy_request_text(sleep_path)
+                    request_text = "Sleep Study: " + os.path.basename(sleep_path)
                     result = {"type": "text", "data": event["data"]}
                     _remember_analysis(request_text, event["data"])
-                    result["conversation_id"] = _record_nw_turn(
-                        request_text, dict(result), steps, sleep_path)
+                    _record_nw_turn(conversation_id, request_text, dict(result), steps, sleep_path)
+                    result["conversation_id"] = conversation_id
                     sse = {"type": "done", "result": result}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
@@ -480,7 +486,7 @@ def analyze_sleepstudy():
                 pass
 
     return Response(
-        event_stream(),
+        stream_with_context(event_stream()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -490,7 +496,7 @@ def analyze_sleepstudy():
 # API: Sleep Study time points + suggested driver logs (no LLM)
 #
 # Step one of two: the page shows these so the user can confirm or change
-# the driver log of each time point before /analyze_sleepstudy_driver runs.
+# the driver log of each time point before /analyze_sleepstudy_point runs it.
 # ------------------------------------------------------------------
 def sleepstudy_plan():
     """Request JSON: { "log_path": "<sleepstudy-report.html>" }"""
@@ -527,78 +533,96 @@ def sleepstudy_driver_check():
 
 
 # ------------------------------------------------------------------
-# API: sleepstudy + driver logs (SSE stream)
+# API: analyse one Sleep Study time point (SSE stream)
 #
-# The HTTP adapter for services/sleepstudy_pipeline.py, which picks the worst
-# sessions, cuts each one's driver log around it and runs the Wi-Fi or BT
-# agent on it. Everything that is not HTTP lives there, so another entry
-# point (an MCP server) can drive the same pipeline.
+# The page calls this once per time point, one after another, so each point
+# is its own analysis: its own driver log cut, its own agent run with its own
+# skills, and its own turn in History. Stop cancels the running agent and the
+# page can resume from that point. Everything that is not HTTP lives in
+# services/sleepstudy_pipeline.py, so an MCP server can drive the same steps.
 # ------------------------------------------------------------------
-def analyze_sleepstudy_driver():
+def analyze_sleepstudy_point():
     """
     Request JSON: {
-      "log_path":    "<sleepstudy-report.html>",
-      "driver_logs": {"<point index>": "<WRT folder, a WiFiLog file, a decoded
-                      Wi-Fi log, or '' for none>", ...}
+      "log_path":   "<sleepstudy-report.html>",
+      "index":      <time point number from /sleepstudy_plan>,
+      "driver_log": "<WRT folder, a WiFiLog file, a decoded Wi-Fi log, or ''>",
+      "position":   <1-based place in this run>, "total": <points in this run>
     }
     """
     data = request.get_json(silent=True) or {}
     sleep_path = (data.get("log_path") or "").strip()
-    raw_logs = data.get("driver_logs") if isinstance(data.get("driver_logs"), dict) else {}
-    driver_logs = {str(k): str(v or "").strip() for k, v in raw_logs.items()}
+    driver_log = (data.get("driver_log") or "").strip()
+    try:
+        index = int(data.get("index"))
+        position = int(data.get("position") or index)
+        total = int(data.get("total") or position)
+    except (TypeError, ValueError):
+        return jsonify({"success": False, "error": "index must be a number"}), 400
 
     def _err(message):
         yield f"data: {json.dumps({'type': 'error', 'content': message}, ensure_ascii=False)}\n\n"
 
     if not sleep_path:
         return Response(_err("log_path is required"), mimetype="text/event-stream")
-
-    # Same gate as analyze_sleepstudy, for the same reason: checked before
-    # the stream opens, where a 428 is still a status the client can act on.
+    # Checked before the stream opens, where a 428 is still a status the
+    # client can act on.
     blocked = check_ips_service.blocking_state(sleep_path)
     if blocked:
         return jsonify(blocked), 428
-
-    for path in [sleep_path, *driver_logs.values()]:
+    for path in (sleep_path, driver_log):
         if path and not os.path.exists(path):
             return Response(_err(f"File not found: {path}"), mimetype="text/event-stream")
 
+    conversation_id = _ensure_nw_conversation_id()
+    sid = session.get("chatbot_session_id", "") or ""
     out_dir = os.path.join(
         app_config.avatarfiles_dir or os.path.expanduser("~"),
-        "sleepstudy", datetime.now().strftime("%Y%m%d_%H%M%S"),
+        "sleepstudy", datetime.now().strftime("%Y%m%d_%H%M%S") + f"_p{index:02d}",
     )
 
-    @copy_current_request_context
+    def remember_agent(agent):
+        if sid:
+            _point_agents[sid] = agent
+
     def event_stream():
-        spend = {"llm_calls": 0, "input_tokens": 0, "cache_read_tokens": 0,
-                 "cache_write_tokens": 0, "output_tokens": 0, "total_tokens": 0}
         llm_model = getattr(app_config.llm_helper, "model", "") if app_config.llm_helper else ""
         started = datetime.now()
-        status, error_code = "success", ""
-        steps = []
+        status, error_code, usage = "success", "", {}
+        steps, request_text = [], ""
         try:
-            for event in sleepstudy_pipeline.run_pipeline(sleep_path, driver_logs, out_dir=out_dir):
+            for event in sleepstudy_pipeline.run_point(
+                    sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent):
                 kind = event["type"]
-                if kind == "step":
-                    sse = {"type": "step", "step": {"content": event["content"]}}
-                    steps.append(sse["step"])
-                elif kind == "point":
-                    for key, value in (event["data"].get("agent_usage") or {}).items():
-                        if key in spend:
-                            spend[key] += value
-                    continue
+                if kind == "start":
+                    request_text = _point_request_text(event["data"], position, total)
+                    sse = {"type": "turn", "user_message": request_text}
+                elif kind in ("step", "agent_step"):
+                    step = event.get("step") or {"content": event["content"]}
+                    steps.append(step)
+                    sse = {"type": "step", "step": step}
                 elif kind == "done":
-                    request_text = _sleepstudy_request_text(sleep_path, driver_logs)
-                    report = event["data"]["markdown"]
-                    _remember_analysis(request_text, report)
-                    conversation_id = _record_nw_turn(
-                        request_text, {"type": "text", "data": report},
-                        steps, sleep_path, driver_logs)
+                    point = event["data"]
+                    usage = point.get("agent_usage") or {}
+                    # An analysed point keeps the agent's own report, rendered
+                    # as the Wi-Fi chatbot renders it; any other outcome is the
+                    # point's summary.
+                    agent_result = point.get("agent_result") or {}
+                    if point["status"] == "analyzed" and agent_result.get("type") in ("report", "partial_report"):
+                        result = dict(agent_result)
+                    else:
+                        result = {"type": "text", "data": point["markdown"]}
+                    _remember_analysis(request_text, point["markdown"])
+                    _record_nw_turn(conversation_id, request_text, result, steps, sleep_path,
+                                    {str(index): driver_log})
+                    if position == 1:
+                        # Named after the report, not after its first point.
+                        history_service.rename_conversation(
+                            conversation_id, "Sleep Study: " + os.path.basename(sleep_path),
+                            domain=HISTORY_DOMAIN)
                     sse = {"type": "done", "result": {
-                        "type": "text",
-                        "data": report,
-                        "pipeline": event["data"],
-                        "conversation_id": conversation_id,
+                        **result, "conversation_id": conversation_id,
+                        "point": {k: point[k] for k in ("index", "status", "message", "session_id")},
                     }}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
@@ -607,17 +631,22 @@ def analyze_sleepstudy_driver():
                     continue
                 yield f"data: {json.dumps(sse, ensure_ascii=False, default=str)}\n\n"
         except Exception as exc:
-            print(f"analyze_sleepstudy_driver error:\n{traceback.format_exc()}")
+            print(f"analyze_sleepstudy_point error:\n{traceback.format_exc()}")
             status, error_code = "failed", type(exc).__name__
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
         finally:
+            # A page that stopped reading (Pause, closed tab) leaves the agent
+            # on its worker thread; cancel it rather than let it spend on.
+            agent = _point_agents.pop(sid, None)
+            if agent is not None and hasattr(agent, "cancel_event"):
+                agent.cancel_event.set()
             # Book the spend regardless of outcome — the tokens were billed.
             try:
                 gather_service.record_feature_usage(
                     workflow_id=session.get("gather_workflow_id", ""),
                     feature_code="sleepstudy_driver_analysis",
                     model=llm_model,
-                    usage=spend,
+                    usage=usage,
                     issue=_extract_issue_context(),
                     domain=GATHER_DOMAIN,
                     trigger="click_ai",
@@ -628,8 +657,10 @@ def analyze_sleepstudy_driver():
             except Exception:
                 pass
 
+    # stream_with_context keeps the request context while the body streams:
+    # History, the follow-up agent and Gather all read the session.
     return Response(
-        event_stream(),
+        stream_with_context(event_stream()),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -847,11 +878,11 @@ def chat():
 def chat_stop():
     try:
         sid = session.get("chatbot_session_id", "")
-        agent = _chatbot_instances.get(sid) if sid else None
         stopped = False
-        if agent is not None and hasattr(agent, "cancel_event"):
-            agent.cancel_event.set()
-            stopped = True
+        for agent in (_chatbot_instances.get(sid), _point_agents.get(sid)) if sid else ():
+            if agent is not None and hasattr(agent, "cancel_event"):
+                agent.cancel_event.set()
+                stopped = True
         if stopped:
             try:
                 gather_service.record_turn_status(

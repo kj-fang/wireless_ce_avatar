@@ -26,10 +26,13 @@ server can drive the same generator later without touching the logic.
 
 from __future__ import annotations
 
+import copy
 import math
 import os
+import queue
 import re
 import tempfile
+import threading
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -396,6 +399,7 @@ class TimePoint:
     driver_log_sources: list = field(default_factory=list)
     agent_result_type: str = ""
     agent_report: str = ""
+    agent_result: dict = field(default_factory=dict)   # agent.chat()'s return value
     agent_usage: dict = field(default_factory=dict)
 
     @property
@@ -550,7 +554,7 @@ def _report_text(result) -> tuple[str, str]:
     return kind, "" if data is None else str(data)
 
 
-def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[str], None]) -> None:
+def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[dict], None]) -> None:
     agent.current_log_path = point.excerpt_path
     agent.prime_with_context(
         subject=f"Sleep Study session {point.session_id}: low DRIPS on battery",
@@ -567,7 +571,7 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[str],
 
     def _step(step):
         if isinstance(step, dict) and step.get("content"):
-            on_step(str(step["content"]))
+            on_step(step)
 
     message = (
         f"{point.issue_description}\n\nSleep Study evidence:\n```\n"
@@ -576,6 +580,7 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[str],
     )
     result = agent.chat(message, max_steps=max_steps, step_callback=_step)
     point.agent_result_type, point.agent_report = _report_text(result)
+    point.agent_result = result if isinstance(result, dict) else {}
     usage = getattr(agent, "last_turn_usage", None)
     if isinstance(usage, dict):
         point.agent_usage = {k: v for k, v in usage.items() if isinstance(v, (int, float))}
@@ -591,10 +596,28 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[str],
 #   plan()          reads the report, picks the time points and suggests, for
 #                   each one, the driver log under the report's folder that
 #                   covers it. No LLM.
-#   run_pipeline()  takes a driver log per time point (as suggested, edited,
-#                   or one path for all of them) and analyses each one.
+#   run_point()     analyses one time point in the driver log chosen for it,
+#                   streaming the agent's own steps. The page calls it once
+#                   per point, so the points run one after another and can be
+#                   paused between them.
+#   run_pipeline()  all points in one go, for callers without a page (an MCP
+#                   server, a dry run).
+
+_SELECT_CACHE: dict = {}
+
 
 def _select(html_path: str, sw_threshold: float, max_points: int, per_device: int):
+    key = (os.path.abspath(html_path), os.path.getmtime(html_path),
+           sw_threshold, max_points, per_device)
+    if key not in _SELECT_CACHE:
+        if len(_SELECT_CACHE) >= 4:
+            _SELECT_CACHE.clear()
+        _SELECT_CACHE[key] = _select_uncached(html_path, sw_threshold, max_points, per_device)
+    # Callers fill in the points, so each gets its own copy.
+    return copy.deepcopy(_SELECT_CACHE[key])
+
+
+def _select_uncached(html_path: str, sw_threshold: float, max_points: int, per_device: int):
     payload = ssa.load_sleepstudy(html_path)
     collected = ssa.collect_sessions_from_payload(
         payload, source=html_path, devices=ssa.DEVICE_ORDER,
@@ -667,6 +690,139 @@ def plan(
     }
 
 
+def _head(p: TimePoint) -> str:
+    return (f"#{p.index} Session {p.session_id} · {DEVICE_LABELS.get(p.device, p.device)} · "
+            f"{_fmt(p.window_start)} → {_fmt(p.window_end)}")
+
+
+def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str,
+                   agent_factory, max_steps: int, on_agent=None) -> Iterator[dict]:
+    """
+    Analyse one time point in p.driver_log_path. Yields "step" events for
+    the pipeline's own progress and "agent_step" events carrying each step
+    of the agent (its skill choices and tool calls), and leaves the outcome
+    on `p`. `indexed` caches discover_driver_logs() per path across points.
+    """
+    head = _head(p)
+    if p.device not in ANALYZABLE_DEVICES:
+        p.status = STATUS_UNSUPPORTED
+        p.message = (f"{DEVICE_LABELS.get(p.device, p.device)} blocker: this tool has "
+                     "no agent for that driver log. Hand the Sleep Study evidence "
+                     "to the owning team.")
+    elif p.window_start is None:
+        p.status = STATUS_NOT_COVERED
+        p.message = "The report gives no readable start time for this session."
+    elif not p.driver_log_path:
+        p.status = STATUS_NO_LOG
+        p.message = f"No {DEVICE_LABELS[p.device]} driver log was chosen for this time point."
+    else:
+        if p.driver_log_path not in indexed:
+            found, warns = discover_driver_logs(p.driver_log_path)
+            indexed[p.driver_log_path] = found
+            log_warnings.extend(warns)
+            for w in warns:
+                yield {"type": "step", "content": f"⚠️ {w}"}
+        segments = indexed[p.driver_log_path].get(p.device, [])
+        p.coverage, hits = coverage_of(segments, p.window_start, p.window_end)
+        if p.coverage == "none":
+            p.status = STATUS_NOT_COVERED
+            p.message = "Driver log 沒有涵蓋這段時間 (the driver log does not cover this window)."
+        else:
+            p.driver_log_files = [h.describe() for h in hits]
+            p.excerpt_path = os.path.join(
+                out_dir, f"point{p.index:02d}_session{p.session_id}_{p.device}.log")
+            yield {"type": "step", "content": (
+                f"{head}: cutting the driver log — "
+                + ", ".join(f"`{h.describe()['file']}`" for h in hits) + "…")}
+            ex = write_excerpt(hits, p.window_start, p.window_end, p.excerpt_path)
+            p.excerpt_lines = ex["lines"]
+            p.driver_log_sources = ex["sources"]
+            if p.coverage == "partial":
+                p.message = "The driver log covers only part of this window."
+            if not ex["lines"]:
+                p.status = STATUS_NO_LINES
+                p.message = "The driver log covers this window but logged nothing in it."
+            elif agent_factory is None:
+                p.status = STATUS_DRY_RUN
+            else:
+                yield {"type": "step", "content": (
+                    f"{head}: {ex['lines']} lines → {DEVICE_LABELS[p.device]} agent…")}
+                yield from _agent_steps(p, agent_factory, max_steps, on_agent)
+    yield {"type": "step", "content": f"{head}: **{p.status}** {p.message}".rstrip()}
+
+
+def _agent_steps(p: TimePoint, agent_factory, max_steps: int, on_agent) -> Iterator[dict]:
+    """Run the agent on a worker thread and yield its steps as they happen."""
+    steps: queue.Queue = queue.Queue()
+
+    def work():
+        try:
+            agent = agent_factory(p.device)
+            if on_agent is not None:
+                on_agent(agent)          # lets the caller cancel it
+            _run_agent(p, agent, max_steps, on_step=lambda st: steps.put(("step", st)))
+            steps.put(("ok", None))
+        except Exception as exc:
+            steps.put(("failed", exc))
+
+    threading.Thread(target=work, daemon=True).start()
+    while True:
+        kind, value = steps.get()
+        if kind == "step":
+            yield {"type": "agent_step", "step": value}
+        elif kind == "ok":
+            p.status = STATUS_ANALYZED
+            return
+        else:
+            p.status = STATUS_AGENT_FAILED
+            p.message = f"Agent failed: {type(value).__name__}: {value}"
+            return
+
+
+def run_point(
+    html_path: str,
+    index: int,
+    driver_log: str,
+    *,
+    agent_factory: Optional[Callable[[str], object]] = default_agent_factory,
+    out_dir: Optional[str] = None,
+    sw_threshold: float = SW_DRIP_THRESHOLD,
+    max_points: int = MAX_TIME_POINTS,
+    per_device: int = PER_DEVICE_LIMIT,
+    max_steps: int = 6,
+    on_agent: Optional[Callable[[object], None]] = None,
+) -> Iterator[dict]:
+    """
+    Analyse the time point `index` (as plan() numbered it) in `driver_log`
+    ("" for none), and yield events:
+
+      {"type": "start",      "data": <TimePoint dict>} the point, before any work
+      {"type": "step",       "content": <markdown>}   pipeline progress
+      {"type": "agent_step", "step": <agent step>}    the agent's own steps
+      {"type": "done",       "data": <TimePoint dict, plus "markdown">}
+      {"type": "error",      "content": <message>}
+
+    `on_agent(agent)` is called with the agent before it starts, so the
+    caller can stop it (agent.cancel_event).
+    """
+    try:
+        _collected, points = _select(html_path, sw_threshold, max_points, per_device)
+        p = next((x for x in points if x.index == int(index)), None)
+        if p is None:
+            yield {"type": "error", "content": f"The report has no time point #{index}."}
+            return
+        p.driver_log_path = str(driver_log or "").strip()
+        yield {"type": "start", "data": p.to_dict()}
+        out_dir = out_dir or tempfile.mkdtemp(prefix="sleepstudy_")
+        os.makedirs(out_dir, exist_ok=True)
+        yield from _analyze_point(p, {}, [], out_dir, agent_factory, max_steps, on_agent)
+        data = p.to_dict()
+        data["markdown"] = render_point_markdown(data)
+        yield {"type": "done", "data": data}
+    except Exception as exc:
+        yield {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
+
+
 def run_pipeline(
     html_path: str,
     driver_logs,
@@ -679,18 +835,14 @@ def run_pipeline(
     max_steps: int = 6,
 ) -> Iterator[dict]:
     """
-    Analyse each time point in its own driver log and yield events:
+    Analyse every time point and yield events: "step" and "agent_step" as in
+    run_point(), {"type": "point", "data": <TimePoint dict>} per finished
+    point, then {"type": "done", "data": <result dict with "markdown">} or
+    {"type": "error", "content": <message>}.
 
-      {"type": "step",  "content": <markdown>}     progress
-      {"type": "point", "data": <TimePoint dict>}  one finished time point
-      {"type": "done",  "data": <result dict>}     terminal success; carries
-                                                   "markdown" and every point
-      {"type": "error", "content": <message>}      terminal failure
-
-    `driver_logs` is one path used for every point, or {point index: path}
-    as plan() suggested and the user confirmed. A point with no path is
-    reported as such and never reaches the LLM. `agent_factory=None` is a dry
-    run: every step up to the agent runs, without spending tokens.
+    `driver_logs` is one path used for every point, or {point index: path}.
+    A point with no path is reported as such and never reaches the LLM.
+    `agent_factory=None` is a dry run: every step up to the agent runs.
     """
     try:
         yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
@@ -702,78 +854,18 @@ def run_pipeline(
             f"Analysing the worst **{len(points)}** (max {max_points}, "
             f"{per_device} per device)."
         )}
-
         if isinstance(driver_logs, dict):
             chosen = {int(k): str(v or "").strip() for k, v in driver_logs.items()}
         else:
             chosen = {p.index: str(driver_logs or "").strip() for p in points}
 
-        # Several points usually share one capture, so each path is indexed once.
-        indexed: dict[str, dict[str, list[LogSegment]]] = {}
+        indexed: dict = {}
         log_warnings: list[str] = []
-
         out_dir = out_dir or tempfile.mkdtemp(prefix="sleepstudy_")
         os.makedirs(out_dir, exist_ok=True)
-
         for p in points:
             p.driver_log_path = chosen.get(p.index, "")
-            head = (f"#{p.index} Session {p.session_id} · "
-                    f"{DEVICE_LABELS.get(p.device, p.device)} · "
-                    f"{_fmt(p.window_start)} → {_fmt(p.window_end)}")
-
-            if p.device not in ANALYZABLE_DEVICES:
-                p.status = STATUS_UNSUPPORTED
-                p.message = (f"{DEVICE_LABELS.get(p.device, p.device)} blocker: this tool has "
-                             "no agent for that driver log. Hand the Sleep Study evidence "
-                             "to the owning team.")
-            elif p.window_start is None:
-                p.status = STATUS_NOT_COVERED
-                p.message = "The report gives no readable start time for this session."
-            elif not p.driver_log_path:
-                p.status = STATUS_NO_LOG
-                p.message = f"No {DEVICE_LABELS[p.device]} driver log was chosen for this time point."
-            else:
-                if p.driver_log_path not in indexed:
-                    found, warns = discover_driver_logs(p.driver_log_path)
-                    indexed[p.driver_log_path] = found
-                    log_warnings.extend(warns)
-                    for w in warns:
-                        yield {"type": "step", "content": f"⚠️ {w}"}
-                    for dev, segs in found.items():
-                        yield {"type": "step", "content": (
-                            f"{DEVICE_LABELS.get(dev, dev)} driver log `{p.driver_log_path}`: "
-                            f"{len(segs)} file(s), {_fmt(segs[0].start)} → {_fmt(segs[-1].end)}")}
-                segments = indexed[p.driver_log_path].get(p.device, [])
-                p.coverage, hits = coverage_of(segments, p.window_start, p.window_end)
-                if p.coverage == "none":
-                    p.status = STATUS_NOT_COVERED
-                    p.message = "Driver log 沒有涵蓋這段時間 (the driver log does not cover this window)."
-                else:
-                    p.excerpt_path = os.path.join(
-                        out_dir, f"point{p.index:02d}_session{p.session_id}_{p.device}.log")
-                    yield {"type": "step", "content": f"{head}: cutting driver log excerpt…"}
-                    ex = write_excerpt(hits, p.window_start, p.window_end, p.excerpt_path)
-                    p.excerpt_lines = ex["lines"]
-                    p.driver_log_sources = ex["sources"]
-                    if p.coverage == "partial":
-                        p.message = "The driver log covers only part of this window."
-                    if not ex["lines"]:
-                        p.status = STATUS_NO_LINES
-                        p.message = "The driver log covers this window but logged nothing in it."
-                    elif agent_factory is None:
-                        p.status = STATUS_DRY_RUN
-                    else:
-                        yield {"type": "step", "content": (
-                            f"{head}: {ex['lines']} lines → "
-                            f"{DEVICE_LABELS[p.device]} agent…")}
-                        try:
-                            _run_agent(p, agent_factory(p.device), max_steps,
-                                       on_step=lambda _content: None)
-                            p.status = STATUS_ANALYZED
-                        except Exception as exc:
-                            p.status = STATUS_AGENT_FAILED
-                            p.message = f"Agent failed: {type(exc).__name__}: {exc}"
-            yield {"type": "step", "content": f"{head}: **{p.status}** {p.message}".rstrip()}
+            yield from _analyze_point(p, indexed, log_warnings, out_dir, agent_factory, max_steps)
             yield {"type": "point", "data": p.to_dict()}
 
         result = {
@@ -792,6 +884,25 @@ def run_pipeline(
 
     except Exception as exc:
         yield {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
+
+
+def render_point_markdown(p: dict) -> str:
+    """One time point: its window, outcome, Sleep Study evidence and analysis."""
+    out = [f"## #{p['index']} Session {p['session_id']} — {p['device_label']}",
+           f"_Issue time {p['issue_time']} · window {p['window_start']} → {p['window_end']}"
+           + (" (capped)" if p["window_truncated"] else "") + f" · **{p['status']}**_"]
+    if p["driver_log_files"]:
+        out.append("")
+        out += [f"- Driver log `{f['file']}`: {f['start']} → {f['end']} "
+                f"(start from {f['start_from']}, end from {f['end_from']})"
+                for f in p["driver_log_files"]]
+    if p["message"]:
+        out.append(f"\n> {p['message']}")
+    out += ["", "<details><summary>Sleep Study evidence</summary>", "",
+            "```", p["sleep_summary"], "```", "</details>"]
+    if p["agent_report"]:
+        out += ["", "### Driver log analysis", "", p["agent_report"]]
+    return "\n".join(out)
 
 
 def render_markdown(result: dict) -> str:
@@ -825,14 +936,5 @@ def render_markdown(result: dict) -> str:
             f"{p['device_label']}: {top} | {lines} | {p['status']} |")
 
     for p in result["points"]:
-        out += ["", "---", "",
-                f"## #{p['index']} Session {p['session_id']} — {p['device_label']}",
-                f"_Issue time {p['issue_time']} · window {p['window_start']} → {p['window_end']}"
-                + (" (capped)" if p["window_truncated"] else "") + "_"]
-        if p["message"]:
-            out.append(f"\n> {p['message']}")
-        out += ["", "<details><summary>Sleep Study evidence</summary>", "",
-                "```", p["sleep_summary"], "```", "</details>"]
-        if p["agent_report"]:
-            out += ["", "### Driver log analysis", "", p["agent_report"]]
+        out += ["", "---", "", render_point_markdown(p)]
     return "\n".join(out)

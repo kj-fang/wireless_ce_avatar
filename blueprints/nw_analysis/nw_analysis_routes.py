@@ -318,12 +318,16 @@ def set_log():
 # log chosen for each time point are kept on the snapshot.
 # ------------------------------------------------------------------
 def _point_request_text(point: dict, position: int, total: int) -> str:
-    """The user turn one time point's analysis is shown and saved as."""
+    """A readable user-facing summary of the question for this time point."""
+    drip = point.get("sw_drip_pct")
+    drip_text = f"{drip:.1f}%" if isinstance(drip, (int, float)) else "N/A"
+    log_path = str(point.get("driver_log_path") or "").replace("\\", "/")
+    log_name = os.path.basename(log_path) if log_path else "(none selected)"
     lines = [
-        f"Sleep Study {position}/{total} · Session {point['session_id']} · "
-        f"{point['device_label']} · {point['window_start']} → {point['window_end']}",
-        f"Driver log: `{point['driver_log_path']}`" if point["driver_log_path"]
-        else "Driver log: (none)",
+        f"Sleep Study {position}/{total} · Session {point['session_id']} · {point['device_label']} · SW DRIPS {drip_text}",
+        f"Report clue: {point.get('html_verdict') or 'no clear cause in the report'}.",
+        f"Driver log: {log_name}",
+        f"Question: What kept the {point['device_label']} device active? Use log timestamps to identify the trigger, explain the delayed return to low power, and choose the matching skill.",
     ]
     return "\n".join(lines)
 

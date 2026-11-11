@@ -118,7 +118,8 @@
         const btn = document.getElementById('hist-restore-btn');
         if (!btn) return;
         const s = window.__liveSessionSnapshot;
-        const useful = !!(s && (s.logPath || s.issueTime || s.draft));
+        const customDraft = s && s.profileDraft && Object.keys(s.profileDraft).length > 0;
+        const useful = !!(s && (s.logPath || s.issueTime || s.draft || customDraft));
         btn.style.display = useful ? 'block' : 'none';
     }
 
@@ -130,11 +131,21 @@
         if (firstRoundSent) { window.__liveSessionSnapshot = null; _updateRestoreBtn(); return; }
         const logInp = document.getElementById('log-path-input');
         const draftInp = document.getElementById('user-input');
-        window.__liveSessionSnapshot = {
+        const snapshot = {
             logPath: logInp ? (logInp.value || '') : '',
             issueTime: (typeof getIssueTimeString === 'function') ? (getIssueTimeString() || '') : '',
             draft: draftInp ? (draftInp.value || '') : '',
+            profileDraft: (typeof captureHistoryDraft === 'function')
+                ? (captureHistoryDraft() || {}) : {},
         };
+        const profileHasDraft = snapshot.profileDraft
+            && Object.keys(snapshot.profileDraft).length > 0;
+        // Don't replace a deliberately preserved Draft with the blank page
+        // state of a freshly started session when the user opens History.
+        if (snapshot.logPath || snapshot.issueTime || snapshot.draft || profileHasDraft
+            || !window.__liveSessionSnapshot) {
+            window.__liveSessionSnapshot = snapshot;
+        }
         _updateRestoreBtn();
     }
 
@@ -150,6 +161,12 @@
         if (typeof closeTimeCaptureModal === 'function') closeTimeCaptureModal();
         // Keep the current conversation's chat-box draft before leaving it.
         saveCurrentDraft();
+        // NW can have a loaded Sleep Study and generated plan before any
+        // analysis turn exists in History. Preserve that unsent report setup so
+        // New session behaves like the other chatbots' Draft / Resume flow.
+        const keepProfileDraft = typeof captureHistoryDraft === 'function'
+            && !firstRoundSent && !window.__viewingSavedConv;
+        if (keepProfileDraft) captureLiveSessionSnapshot();
         // Reset the server-side agent in the BACKGROUND — do NOT await it.
         // Another conversation may still be analysing (the server thread is
         // busy), and awaiting here would stall the whole reset, leaving the
@@ -167,7 +184,7 @@
         // jumps into history their new unsent work (log / issue time / draft)
         // can be snapshotted for "↩ Resume draft".
         firstRoundSent = false;
-        window.__liveSessionSnapshot = null;
+        if (!keepProfileDraft) window.__liveSessionSnapshot = null;
         // Back in a fresh live session (not viewing a saved conversation).
         window.__viewingSavedConv = false;
 
@@ -352,6 +369,12 @@
                 try { await fetch(`${CHATBOT_API}/reset`, {method: 'POST'}); } catch (e) { /* ignore */ }
                 logLoaded = false;
                 if (typeof validateUserInput === 'function') validateUserInput();
+            }
+            // A profile may own additional draft state (NW's Sleep Study
+            // report path). Restore it after the generic reset so its own
+            // loader can safely re-prime the server and redraw the plan.
+            if (snap.profileDraft && typeof onHistoryDraftRestored === 'function') {
+                try { await onHistoryDraftRestored(snap.profileDraft); } catch (e) { /* ignore */ }
             }
             // setLog() reassigns window.__feedbackConversationId to a brand-new
             // id, which changes _draftKey(). Re-file the restored draft under

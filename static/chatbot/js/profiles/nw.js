@@ -54,7 +54,29 @@
         statusEl.style.display = 'none';
     }
 
+    // NW's unsent work is the Sleep Study report path (and its generated plan),
+    // rather than the generic log-path field. The plan itself can be rebuilt
+    // from the report when the user resumes this draft.
+    function captureHistoryDraft() {
+        const input = document.getElementById('sleepstudy-path-input');
+        const path = input ? input.value.trim() : '';
+        return path ? { sleepstudyPath: path } : {};
+    }
+
+    async function onHistoryDraftRestored(draft) {
+        const path = draft && draft.sleepstudyPath ? String(draft.sleepstudyPath).trim() : '';
+        if (!path) return;
+        const input = document.getElementById('sleepstudy-path-input');
+        if (!input) return;
+        input.value = path;
+        // The draft may point at the same file as the conversation just left;
+        // force a fresh plan because Resume draft has cleared the chat window.
+        nwLoadedPath = '';
+        await setSleepstudy();
+    }
+
     function onHistoryConversationLoaded(data) {
+        firstRoundSent = true;
         nwLoadedPath = data.log_path || '';
         document.getElementById('sleepstudy-path-input').value = data.log_path || '';
         const statusEl = document.getElementById('sleepstudy-status');
@@ -162,11 +184,12 @@
             return;
         }
         el.style.color = check.coverage === 'full' ? '#15803d' : '#b45309';
-        el.innerHTML = files.map(f =>
-            `⏱ ${escapeHtml(f.start)} → ${escapeHtml(f.end)} <span style="color:#666;">` +
-            `(${escapeHtml(f.file)}: start from ${escapeHtml(f.start_from)}, ` +
-            `end from ${escapeHtml(f.end_from)})</span>`).join('<br>') +
-            (check.coverage === 'full' ? '' : '<br>⚠ Covers only part of the window.');
+        el.innerHTML = files.map(f => {
+            const fileName = String(f.file || '').split(/[\\/]/).pop();
+            return `<div class="ss-coverage-entry"><span>⏱ ${escapeHtml(f.start)} → ${escapeHtml(f.end)}</span>` +
+                   `<small>${escapeHtml(fileName)}</small></div>`;
+        }).join('') + (check.coverage === 'full'
+            ? '' : '<div class="ss-coverage-warning">⚠ Driver log covers only part of this window.</div>');
     }
 
     async function checkPlanLog(index) {
@@ -250,12 +273,12 @@
             const status = `<br><span class="ss-status" data-index="${p.index}" ` +
                            `style="font-size:0.75rem;color:${statusColor};">${escapeHtml(statusText)}</span>`;
             const verdict = p.html_verdict
-                ? `<div style="font-size:0.75rem;margin-top:2px;"><b>Report says:</b> ${escapeHtml(p.html_verdict)}</div>`
+                ? `<div class="ss-plan-verdict"><span>Sleep Study</span><b>${escapeHtml(p.html_verdict)}</b></div>`
                 : '';
             const logPath = locked ? (saved.driverLogs[p.index] || '') : (p.driver_log_path || '');
             planPoints[p.index] = p;
             const logCell = `
-                <label style="display:flex;align-items:center;gap:6px;font-size:0.75rem;margin-bottom:4px;cursor:pointer;">
+                <label class="ss-driver-check">
                     <input type="checkbox" class="ss-check" data-index="${p.index}"
                            ${picked ? 'checked' : ''} ${locked ? 'disabled' : ''}>
                     Check against the driver log
@@ -269,11 +292,11 @@
                             ${locked ? 'disabled' : ''} title="Browse for a WiFiLog file">📁</button>
                 </div>
                 <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
-            return `<tr data-index="${p.index}" style="${picked ? '' : 'opacity:0.6;'}">
+            return `<tr class="ss-plan-row" data-index="${p.index}" style="${picked ? '' : 'opacity:0.58;'}">
                 <td style="padding:4px 6px;vertical-align:top;">${p.index}</td>
                 <td style="padding:4px 6px;vertical-align:top;">
-                    ${escapeHtml(String(p.session_id))} · ${escapeHtml(p.device_label)}<br>
-                    <span style="color:#666;font-size:0.75rem;">${when} · SW ${sw}</span>${verdict}${status}</td>
+                    <div class="ss-plan-session-title"><b>Session ${escapeHtml(String(p.session_id))}</b><span>${escapeHtml(p.device_label)}</span></div>
+                    <div class="ss-plan-session-meta"><span>${when}</span><b>SW ${sw}</b></div>${verdict}${status}</td>
                 <td style="padding:4px 6px;vertical-align:top;">${logCell}</td>
             </tr>`;
         }).join('');
@@ -297,7 +320,7 @@
                 <div class="msg-bubble ss-plan">
                     ${marked.parse(lines.join('\n'))}
                     ${points.length ? `
-                    <table style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:0.8rem;">
+                    <table class="ss-plan-table" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:0.8rem;">
                         <colgroup><col style="width:28px;"><col style="width:40%;"><col></colgroup>
                         <thead><tr><th>#</th><th>Session · report</th><th>Driver log</th></tr></thead>
                         <tbody>${rows}</tbody>

@@ -296,6 +296,7 @@
         background: var(--accent);
         color: white;
         border-bottom-right-radius: 3px;
+        white-space: pre-line;
     }
 
     .msg-row.assistant .msg-bubble {
@@ -347,6 +348,624 @@
 
     .report-body {
         padding: 14px 16px;
+    }
+
+    /* Sleep Study's closing report: a compact dashboard with expandable
+       evidence instead of a long markdown paragraph and repeated bullets. */
+    .has-sleepstudy .ss-report {
+        display: block;
+        color: #243247;
+        font-size: 0.86rem;
+        line-height: 1.55;
+    }
+
+    .has-sleepstudy .ss-report-hero {
+        padding: 7px 2px 12px;
+        border-bottom: 1px solid #e4eaf0;
+        color: #26384d;
+        background: #fff;
+    }
+
+    .has-sleepstudy .ss-report-kicker,
+    .has-sleepstudy .ss-section-kicker {
+        display: block;
+        font-size: 0.65rem;
+        font-weight: 800;
+        letter-spacing: 0.11em;
+    }
+
+    .has-sleepstudy .ss-report-kicker { color: #718096; }
+    .has-sleepstudy .ss-report-hero h2 {
+        margin: 2px 0 1px;
+        color: #24364b;
+        font-size: 1.28rem;
+        font-weight: 750;
+    }
+    .has-sleepstudy .ss-report-subtitle {
+        margin: 0;
+        color: #6b788a;
+        font-size: 0.78rem;
+    }
+
+    .has-sleepstudy .ss-report-stats {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0;
+        margin-top: 11px;
+        border-top: 1px solid #edf1f5;
+    }
+
+    .has-sleepstudy .ss-stat {
+        min-width: 0;
+        flex: 1 1 110px;
+        padding: 8px 12px 2px 0;
+        margin: 7px 12px 0 0;
+        border: 0;
+        border-right: 1px solid #e7ecf1;
+        border-radius: 0;
+        background: transparent;
+    }
+    .has-sleepstudy .ss-stat strong {
+        display: block;
+        overflow: hidden;
+        color: #2c4d68;
+        font-size: 0.96rem;
+        line-height: 1.2;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .has-sleepstudy .ss-stat strong small {
+        color: #8290a1;
+        font-size: 0.72rem;
+    }
+    .has-sleepstudy .ss-stat span {
+        display: block;
+        margin-top: 3px;
+        color: #778497;
+        font-size: 0.68rem;
+    }
+
+    .has-sleepstudy .ss-report-conclusion {
+        margin-top: 10px;
+        padding: 10px 13px;
+        border: 1px solid #e1ebf2;
+        border-left: 3px solid #6da8cc;
+        border-radius: 0 7px 7px 0;
+        background: #f8fbfd;
+    }
+    .has-sleepstudy .ss-section-kicker { color: #0879bd; }
+    .has-sleepstudy .ss-report-conclusion p {
+        margin: 5px 0 0;
+        color: #23364b;
+        font-size: 0.9rem;
+        font-weight: 550;
+    }
+
+    .has-sleepstudy .ss-report-section {
+        margin-top: 18px;
+    }
+    .has-sleepstudy .ss-section-heading {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 9px;
+    }
+    .has-sleepstudy .ss-section-heading h3 {
+        margin: 1px 0 0;
+        color: #26374b;
+        font-size: 1.05rem;
+        font-weight: 750;
+    }
+    .has-sleepstudy .ss-muted {
+        color: #758398;
+        font-size: 0.7rem;
+    }
+
+    .has-sleepstudy .ss-target-legend {
+        color: #64748b;
+        font-size: 0.69rem;
+        white-space: nowrap;
+    }
+    .has-sleepstudy .ss-target-legend i {
+        display: inline-block;
+        width: 2px;
+        height: 11px;
+        margin-right: 4px;
+        background: #139a6b;
+        vertical-align: -2px;
+    }
+    .has-sleepstudy .ss-drips-chart {
+        padding: 12px 14px 7px;
+        border: 1px solid #e4eaf1;
+        border-radius: 10px;
+        background: #fff;
+    }
+    .has-sleepstudy .ss-drips-row {
+        display: grid;
+        grid-template-columns: 112px minmax(60px, 1fr) 52px;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 9px;
+    }
+    .has-sleepstudy .ss-drips-name,
+    .has-sleepstudy .ss-drips-value {
+        color: #526176;
+        font-size: 0.72rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .has-sleepstudy .ss-drips-value { text-align: right; font-weight: 700; }
+    .has-sleepstudy .ss-drips-track {
+        position: relative;
+        display: block;
+        height: 9px;
+        overflow: visible;
+        border-radius: 8px;
+        background: linear-gradient(90deg, #f2f4f7 0%, #f2f4f7 80%, #eaf5ef 80%, #eaf5ef 100%);
+    }
+    .has-sleepstudy .ss-drips-fill {
+        position: absolute;
+        inset: 0 auto 0 0;
+        display: block;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #e58a35, #d85949);
+    }
+    .has-sleepstudy .ss-drips-target {
+        position: absolute;
+        z-index: 1;
+        top: -3px;
+        left: 80%;
+        height: 15px;
+        border-left: 2px solid #139a6b;
+    }
+    .has-sleepstudy .ss-drips-axis {
+        display: flex;
+        justify-content: space-between;
+        margin: 0 66px 0 126px;
+        color: #8a96a7;
+        font-size: 0.61rem;
+    }
+
+    .has-sleepstudy .ss-session-list {
+        display: grid;
+        gap: 8px;
+    }
+    .has-sleepstudy .ss-session-details {
+        overflow: hidden;
+        border: 1px solid #e5eaf0;
+        border-radius: 8px;
+        background: #fff;
+    }
+    .has-sleepstudy .ss-session-details > summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 11px 13px;
+        cursor: pointer;
+        list-style: none;
+    }
+    .has-sleepstudy .ss-session-details > summary::-webkit-details-marker { display: none; }
+    .has-sleepstudy .ss-session-details > summary::after {
+        content: "+";
+        margin-left: 4px;
+        color: #728096;
+        font-size: 1.05rem;
+        font-weight: 500;
+    }
+    .has-sleepstudy .ss-session-details[open] > summary::after { content: "−"; }
+    .has-sleepstudy .ss-session-title {
+        display: flex;
+        min-width: 0;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .has-sleepstudy .ss-session-title b { color: #26374b; }
+    .has-sleepstudy .ss-session-title > span:not(.ss-drip-chip) {
+        color: #64748b;
+        font-size: 0.75rem;
+    }
+    .has-sleepstudy .ss-drip-chip,
+    .has-sleepstudy .ss-state-pill,
+    .has-sleepstudy .ss-cause-pill {
+        display: inline-block;
+        border-radius: 20px;
+        padding: 3px 8px;
+        font-size: 0.66rem;
+        font-weight: 750;
+        line-height: 1.35;
+    }
+    .has-sleepstudy .ss-drip-chip { color: #9a4a22; background: #fff1e7; }
+    .has-sleepstudy .ss-state-pill.aligned { color: #087449; background: #e5f6ed; }
+    .has-sleepstudy .ss-state-pill.review { color: #97520d; background: #fff3d9; }
+    .has-sleepstudy .ss-state-pill.pending { color: #5f6b7b; background: #eef1f5; }
+    .has-sleepstudy .ss-session-body {
+        padding: 0 13px 13px;
+        border-top: 1px solid #edf1f5;
+    }
+    .has-sleepstudy .ss-session-window {
+        padding: 8px 0;
+        color: #718096;
+        font-size: 0.7rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .has-sleepstudy .ss-evidence-grid,
+    .has-sleepstudy .ss-evidence-columns {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 9px;
+    }
+    .has-sleepstudy .ss-evidence-card {
+        min-width: 0;
+        padding: 10px 11px;
+        border: 1px solid #e8edf2;
+        border-radius: 8px;
+        background: #fbfcfe;
+    }
+    .has-sleepstudy .ss-evidence-label {
+        color: #77859a;
+        font-size: 0.62rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+    }
+    .has-sleepstudy .ss-evidence-card p { margin: 5px 0 0; color: #34445a; font-size: 0.77rem; }
+    .has-sleepstudy .ss-cause-pill { margin-top: 5px; color: #075d91; background: #e7f4fb; }
+    .has-sleepstudy .ss-evidence-card .ss-cause-detail { color: #34445a; }
+    .has-sleepstudy .ss-evidence-more {
+        margin-top: 10px;
+        border-top: 1px solid #edf1f5;
+        padding-top: 8px;
+    }
+    .has-sleepstudy .ss-evidence-more > summary {
+        color: #0879bd;
+        cursor: pointer;
+        font-size: 0.73rem;
+        font-weight: 700;
+    }
+    .has-sleepstudy .ss-evidence-columns { margin-top: 9px; }
+    .has-sleepstudy .ss-evidence-columns > div { min-width: 0; color: #526176; font-size: 0.72rem; }
+    .has-sleepstudy .ss-evidence-columns ul { margin: 5px 0 0; padding-left: 17px; }
+    .has-sleepstudy .ss-evidence-columns li { margin-bottom: 4px; overflow-wrap: anywhere; }
+    .has-sleepstudy .ss-evidence-columns pre {
+        max-height: 260px;
+        margin: 5px 0 0;
+        padding: 9px;
+        overflow: auto;
+        border: 1px solid #e8edf2;
+        border-radius: 7px;
+        background: #f7f9fb;
+        color: #3d4b5f;
+        font: 0.69rem/1.5 ui-monospace, Consolas, monospace;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+    .has-sleepstudy .ss-system-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 14px;
+        padding: 9px 11px;
+        border: 1px solid #e8edf2;
+        border-radius: 8px;
+        color: #526176;
+        font-size: 0.74rem;
+    }
+    .has-sleepstudy .ss-system-row + .ss-system-row { margin-top: 6px; }
+    .has-sleepstudy .ss-system-row b { color: #34445a; }
+
+    /* The initial HTML selection is a compact, clearly separated session table. */
+    .has-sleepstudy .ss-plan-table {
+        margin: 10px 0 0;
+        border: 1px solid #e1e7ee;
+        border-radius: 9px;
+        background: #fff;
+    }
+    .has-sleepstudy .ss-plan-table thead th {
+        padding: 8px 9px;
+        border-bottom: 1px solid #dfe6ed;
+        background: #f6f8fa;
+        color: #64748b;
+        font-size: 0.67rem;
+        font-weight: 750;
+        text-align: left;
+    }
+    .has-sleepstudy .ss-plan-table tbody td {
+        padding: 10px 9px !important;
+        border-bottom: 1px solid #e8edf2;
+        vertical-align: top;
+    }
+    .has-sleepstudy .ss-plan-table tbody tr:last-child td { border-bottom: 0; }
+    .has-sleepstudy .ss-plan-table tbody tr:hover { background: #fbfdff; }
+    .has-sleepstudy .ss-plan-session-title {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+        color: #293c52;
+    }
+    .has-sleepstudy .ss-plan-session-title b { font-size: 0.82rem; }
+    .has-sleepstudy .ss-plan-session-title span {
+        padding: 2px 7px;
+        border-radius: 12px;
+        background: #edf4f9;
+        color: #587087;
+        font-size: 0.63rem;
+    }
+    .has-sleepstudy .ss-plan-session-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px 9px;
+        margin-top: 4px;
+        color: #78879a;
+        font-size: 0.68rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .has-sleepstudy .ss-plan-session-meta b { color: #9a5a2b; }
+    .has-sleepstudy .ss-plan-verdict {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 3px 6px;
+        margin-top: 7px;
+        padding-top: 6px;
+        border-top: 1px solid #f0f2f5;
+        line-height: 1.4;
+    }
+    .has-sleepstudy .ss-plan-verdict span {
+        color: #8793a2;
+        font-size: 0.61rem;
+        font-weight: 750;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+    }
+    .has-sleepstudy .ss-plan-verdict b { color: #43566d; font-size: 0.71rem; font-weight: 600; }
+    .has-sleepstudy .ss-driver-check {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 5px;
+        color: #45566b;
+        font-size: 0.68rem;
+        cursor: pointer;
+    }
+    .has-sleepstudy .ss-driver-check input { accent-color: #0879bd; }
+    .has-sleepstudy .ss-coverage-entry {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px 8px;
+        margin-top: 5px;
+        padding: 5px 7px;
+        border-left: 2px solid #47a878;
+        background: #f5faf7;
+        line-height: 1.35;
+    }
+    .has-sleepstudy .ss-coverage-entry span { font-size: 0.68rem; font-variant-numeric: tabular-nums; }
+    .has-sleepstudy .ss-coverage-entry small {
+        overflow-wrap: anywhere;
+        color: #718096;
+        font-size: 0.61rem;
+    }
+    .has-sleepstudy .ss-coverage-warning { margin-top: 4px; color: #9a5a2b; font-size: 0.65rem; }
+
+    .has-sleepstudy .ss-point-card {
+        padding: 16px;
+        border: 1px solid #dfe8f0;
+        border-radius: 13px;
+        background: linear-gradient(180deg, #fff 0%, #fbfdff 100%);
+        box-shadow: 0 3px 12px rgba(22,52,78,0.07);
+        color: #25364a;
+    }
+    .has-sleepstudy .ss-point-head {
+        display: flex;
+        align-items: center;
+        gap: 11px;
+    }
+    .has-sleepstudy .ss-point-number {
+        display: grid;
+        width: 38px;
+        height: 38px;
+        flex: 0 0 38px;
+        place-items: center;
+        border-radius: 11px;
+        background: #e9f4fb;
+        color: #0879bd;
+        font-size: 0.85rem;
+        font-weight: 800;
+    }
+    .has-sleepstudy .ss-point-title { min-width: 0; flex: 1; }
+    .has-sleepstudy .ss-point-kicker {
+        color: #708198;
+        font-size: 0.61rem;
+        font-weight: 800;
+        letter-spacing: 0.09em;
+    }
+    .has-sleepstudy .ss-point-title h3 {
+        margin: 0;
+        color: #203349;
+        font-size: 1.05rem;
+        font-weight: 750;
+    }
+    .has-sleepstudy .ss-point-window {
+        display: block;
+        overflow: hidden;
+        color: #7a8798;
+        font-size: 0.68rem;
+        font-variant-numeric: tabular-nums;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .has-sleepstudy .ss-point-status {
+        flex: 0 0 auto;
+        border-radius: 20px;
+        padding: 4px 9px;
+        font-size: 0.66rem;
+        font-weight: 750;
+    }
+    .has-sleepstudy .ss-point-status.done { color: #087449; background: #e5f6ed; }
+    .has-sleepstudy .ss-point-status.pending { color: #7a5b16; background: #fff5dc; }
+
+    .has-sleepstudy .ss-point-drips {
+        display: grid;
+        grid-template-columns: 85px minmax(70px, 1fr) 70px;
+        align-items: center;
+        gap: 10px;
+        margin: 15px 0;
+    }
+    .has-sleepstudy .ss-point-drips-label b,
+    .has-sleepstudy .ss-point-target {
+        color: #78869a;
+        font-size: 0.63rem;
+    }
+    .has-sleepstudy .ss-point-drips-label strong {
+        display: block;
+        color: #9a4a22;
+        font-size: 0.86rem;
+        font-variant-numeric: tabular-nums;
+    }
+    .has-sleepstudy .ss-point-drips-track {
+        position: relative;
+        height: 10px;
+        border-radius: 9px;
+        background: linear-gradient(90deg, #f1f3f6 0%, #f1f3f6 80%, #eaf5ef 80%, #eaf5ef 100%);
+    }
+    .has-sleepstudy .ss-point-drips-track i {
+        position: absolute;
+        inset: 0 auto 0 0;
+        display: block;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #e9a04a, #d95f50);
+    }
+    .has-sleepstudy .ss-point-drips-track b {
+        position: absolute;
+        top: -3px;
+        left: 80%;
+        height: 16px;
+        border-left: 2px solid #139a6b;
+    }
+    .has-sleepstudy .ss-point-target { text-align: right; white-space: nowrap; }
+
+    .has-sleepstudy .ss-point-flow {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) 18px minmax(0, 1fr) 18px minmax(0, 1fr);
+        align-items: center;
+        gap: 5px;
+    }
+    .has-sleepstudy .ss-flow-node {
+        display: flex;
+        min-width: 0;
+        min-height: 78px;
+        flex-direction: column;
+        justify-content: center;
+        gap: 3px;
+        padding: 9px 10px;
+        border: 1px solid #e5ebf1;
+        border-radius: 9px;
+        background: #fff;
+    }
+    .has-sleepstudy .ss-flow-node > span {
+        color: #7b899b;
+        font-size: 0.57rem;
+        font-weight: 800;
+        letter-spacing: 0.08em;
+    }
+    .has-sleepstudy .ss-flow-node > b {
+        display: -webkit-box;
+        overflow: hidden;
+        color: #304258;
+        font-size: 0.71rem;
+        line-height: 1.35;
+        overflow-wrap: anywhere;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 2;
+    }
+    .has-sleepstudy .ss-flow-node > small {
+        overflow: hidden;
+        color: #8190a2;
+        font-size: 0.62rem;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .has-sleepstudy .ss-flow-node.report { background: #f5f9fd; }
+    .has-sleepstudy .ss-flow-node.driver { background: #f7f8ff; }
+    .has-sleepstudy .ss-flow-node.impact { background: #fff8f1; }
+    .has-sleepstudy .ss-flow-arrow { color: #96a5b5; text-align: center; }
+
+    .has-sleepstudy .ss-point-core {
+        margin-top: 12px;
+        padding: 11px 13px;
+        border-left: 3px solid #0879bd;
+        border-radius: 0 8px 8px 0;
+        background: #f1f8fc;
+    }
+    .has-sleepstudy .ss-point-core > span {
+        display: block;
+        margin-bottom: 3px;
+        color: #0879bd;
+        font-size: 0.59rem;
+        font-weight: 800;
+        letter-spacing: 0.1em;
+    }
+    .has-sleepstudy .ss-point-core > div { color: #34465b; font-size: 0.77rem; }
+    .has-sleepstudy .ss-point-core > div b { color: #1c3852; }
+    .has-sleepstudy .ss-point-details {
+        margin-top: 9px;
+        overflow: hidden;
+        border: 1px solid #e3eaf1;
+        border-radius: 10px;
+        background: #fff;
+        color: #43536a;
+        font-size: 0.75rem;
+    }
+    .has-sleepstudy .ss-point-details > summary {
+        padding: 9px 12px;
+        color: #0879bd;
+        cursor: pointer;
+        font-weight: 700;
+        list-style-position: inside;
+    }
+    .has-sleepstudy .ss-point-details[open] > summary { border-bottom: 1px solid #edf1f5; }
+    .has-sleepstudy .ss-point-details > p { margin: 7px 12px; overflow-wrap: anywhere; }
+    .has-sleepstudy .ss-point-evidence-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: 0;
+        padding: 10px 12px;
+    }
+    .has-sleepstudy .ss-point-evidence-grid > section {
+        min-width: 0;
+        padding: 10px;
+        border: 1px solid #e8edf2;
+        border-radius: 8px;
+        background: #fbfcfe;
+    }
+    .has-sleepstudy .ss-point-evidence-grid > section > b {
+        color: #526176;
+        font-size: 0.7rem;
+    }
+    .has-sleepstudy .ss-point-evidence-grid ul { margin: 6px 0 0; padding-left: 17px; }
+    .has-sleepstudy .ss-point-evidence-grid li { margin-bottom: 4px; overflow-wrap: anywhere; }
+    .has-sleepstudy .ss-point-details h1,
+    .has-sleepstudy .ss-point-details h2,
+    .has-sleepstudy .ss-point-details h3 { margin: 8px 12px 4px; font-size: 0.82rem; }
+    .has-sleepstudy .ss-point-details table { display: block; max-width: 100%; overflow-x: auto; }
+    .has-sleepstudy .ss-point-details pre {
+        max-height: 280px;
+        overflow: auto;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+    }
+
+    @media (max-width: 640px) {
+        .has-sleepstudy .ss-stat { flex-basis: 42%; }
+        .has-sleepstudy .ss-drips-row { grid-template-columns: 86px minmax(45px, 1fr) 45px; gap: 7px; }
+        .has-sleepstudy .ss-drips-axis { margin-left: 98px; margin-right: 52px; }
+        .has-sleepstudy .ss-evidence-grid,
+        .has-sleepstudy .ss-evidence-columns,
+        .has-sleepstudy .ss-point-evidence-grid { grid-template-columns: 1fr; }
+        .has-sleepstudy .ss-point-flow { grid-template-columns: 1fr; }
+        .has-sleepstudy .ss-flow-node { min-height: 62px; }
+        .has-sleepstudy .ss-flow-arrow { transform: rotate(90deg); }
+        .has-sleepstudy .ss-point-status { align-self: flex-start; }
+        .has-sleepstudy .ss-session-details > summary { align-items: flex-start; }
     }
 
     .report-row {

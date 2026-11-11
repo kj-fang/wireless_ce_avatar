@@ -27,6 +27,7 @@ server can drive the same generator later without touching the logic.
 from __future__ import annotations
 
 import copy
+from html import escape as html_escape
 import math
 import os
 import queue
@@ -625,6 +626,16 @@ def _short_detail(text: str, limit: int = 170) -> str:
     return clipped + "…"
 
 
+def _remove_empty_additional_logs_section(text: str) -> str:
+    """Hide the stock empty-log note while retaining real customer requests."""
+    return re.sub(
+        r"(?im)^[ \t]*(?:#{1,6}[ \t]*)?Additional Logs Needed(?: from Customer)?[ \t]*\r?\n"
+        r"[ \t]*\(none\b[^\r\n]*\)[ \t]*(?:\r?\n|$)",
+        "",
+        str(text or ""),
+    ).strip()
+
+
 def _fill(text: str, values: dict) -> str:
     """Replace the known {fields}; leave any other braces as written."""
     return re.sub(r"\{(\w+)\}", lambda m: str(values.get(m.group(1), m.group(0))), text)
@@ -790,29 +801,80 @@ def _issue_description(point: TimePoint, threshold: float,
 
 
 def render_point_finding(p: dict) -> str:
-    """
-    One time point as a one-line conclusion -- session, SW DRIPS, and the
-    wake cause the driver log points to -- with everything behind it folded
-    away until opened.
-    """
+    """Render one time point as a compact visual card with expandable evidence."""
     ev = p.get("wake_evidence") or {}
     summary = ""
     if isinstance(p.get("agent_result"), dict) and isinstance(p["agent_result"].get("data"), dict):
         summary = str(p["agent_result"]["data"].get("root_cause_summary") or "")
-    head = f"**#{p['index']} · Session {p['session_id']} · {p['device_label']} · SW {_pct(p['sw_drip_pct'])}**"
+    esc = lambda value: html_escape(str(value or ""), quote=True)
+    drip = p.get("sw_drip_pct")
+    width = max(0.0, min(float(drip), 100.0)) if drip is not None else 0.0
+    drip_label = _pct(drip)
     if p["status"] == STATUS_ANALYZED:
         cause, detail = dominant_cause(summary)
-        line = f"{head} → **{cause}**" + (f" — {_short_detail(detail)}" if detail else "")
+        state, state_class = "Analysis complete", "done"
+        core_detail = _short_detail(detail, 260) if detail else "Driver log was reviewed; no concise wake cause was returned."
     else:
-        line = f"{head} → not checked (`{p['status']}`)" + (f" — {p['message']}" if p["message"] else "")
+        cause, detail = "Not analyzed", ""
+        core_detail = p.get("message") or "No driver-log conclusion is available for this session."
+        state, state_class = p.get("status") or "Not analyzed", "pending"
 
-    folded = [f"- Window: {p['window_start']} → {p['window_end']}",
-              f"- Sleep Study: {html_verdict(ev)}"]
-    if p["driver_log_files"]:
-        folded.append("- Driver log: " + ", ".join(f"`{f['file']}`" for f in p["driver_log_files"]))
-    if p.get("agent_report"):
-        folded += ["", "**Detailed driver analysis**", "", p["agent_report"]]
-    return "\n".join([line, "", "<details><summary>Details</summary>", "", *folded, "", "</details>"])
+    report = html_verdict(ev)
+    short_wakes = short_device_wakes(ev)
+    driver_files = ", ".join(_basename(f.get("file", "")) for f in p.get("driver_log_files") or [])
+    driver_files = driver_files or _basename(p.get("driver_log_path", "")) or "No driver log selected"
+    report_evidence = wake_evidence_lines(ev) + app_activity_lines(ev)
+    evidence_list = ("<ul>" + "".join(f"<li>{esc(line.strip())}</li>" for line in report_evidence[:8])
+                     + "</ul>" if report_evidence else "<p>No additional wake detail was recorded.</p>")
+    full_analysis = _remove_empty_additional_logs_section(p.get("agent_report") or summary)
+
+    return "\n".join([
+        '<article class="ss-point-card">',
+        '  <header class="ss-point-head">',
+        f'    <span class="ss-point-number">{int(p["index"]):02d}</span>',
+        '    <div class="ss-point-title">',
+        f'      <span class="ss-point-kicker">{esc(p.get("device_label") or "Device")} · SESSION FINDING</span>',
+        f'      <h3>Session {esc(p["session_id"])}</h3>',
+        f'      <span class="ss-point-window">{esc(p.get("window_start"))} → {esc(p.get("window_end"))}</span>',
+        '    </div>',
+        f'    <span class="ss-point-status {state_class}">{esc(state)}</span>',
+        '  </header>',
+        '  <div class="ss-point-drips">',
+        f'    <div class="ss-point-drips-label"><b>SW DRIPS</b><strong>{esc(drip_label)}</strong></div>',
+        f'    <div class="ss-point-drips-track"><i style="width:{width:.1f}%"></i><b></b></div>',
+        '    <span class="ss-point-target">80% target</span>',
+        '  </div>',
+        '  <div class="ss-point-flow">',
+        '    <div class="ss-flow-node report"><span>1 · SLEEP STUDY</span>',
+        f'      <b>{esc(report)}</b><small>{short_wakes} short device wake(s)</small></div>',
+        '    <span class="ss-flow-arrow">→</span>',
+        '    <div class="ss-flow-node driver"><span>2 · DRIVER LOG</span>',
+        f'      <b>{esc(cause)}</b><small>{esc(driver_files)}</small></div>',
+        '    <span class="ss-flow-arrow">→</span>',
+        '    <div class="ss-flow-node impact"><span>3 · POWER IMPACT</span>',
+        f'      <b>{esc(drip_label)} SW DRIPS</b><small>Target: 80%</small></div>',
+        '  </div>',
+        '  <section class="ss-point-core">',
+        '    <span>CORE FINDING</span>',
+        f'    <div><b>{esc(cause)}</b> · {esc(core_detail)}</div>',
+        '  </section>',
+        '</article>',
+        '<details class="ss-point-details"><summary>Open evidence and full analysis</summary>',
+        '',
+        f'**Sleep Study:** {esc(report)}  ',
+        f'**Window:** {esc(p.get("window_start"))} → {esc(p.get("window_end"))}  ',
+        f'**Driver log:** `{esc(driver_files)}`  ',
+        f'**DRIPS:** SW {esc(drip_label)} · HW {esc(_pct(p.get("hw_drip_pct")))} · 80% target',
+        '',
+        '<div class="ss-point-evidence-grid">',
+        f'<section><b>Report evidence</b>{evidence_list}</section>',
+        '</div>',
+        '',
+        '**Detailed driver analysis**',
+        '',
+        str(full_analysis),
+        '</details>',
+    ])
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1464,6 +1526,10 @@ def summarize_run(source: str, points: list[dict], findings: dict,
         try:
             text = llm_call(prompt, user) or ""
             conclusion = text.split(_DETAILS_MARK, 1)[0].strip().split("\n\n", 1)[0]
+            conclusion = re.sub(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?Conclusion:?\s*", "", conclusion,
+                                flags=re.IGNORECASE)
+            conclusion = conclusion.replace(r"\*", "")
+            conclusion = re.sub(r"\*{1,2}", "", conclusion).strip()
             conclusion = _short_detail(conclusion, 420)
         except Exception as exc:
             conclusion = f"Summary unavailable ({type(exc).__name__}); see the session findings below."
@@ -1477,35 +1543,122 @@ def summarize_run(source: str, points: list[dict], findings: dict,
     elif points:
         conclusion = "No driver logs were checked; the findings below reflect Sleep Study evidence only."
 
-    out = ["## Sleep Study report",
-           f"_{len(points)} wireless session(s) · {len(checked)} checked against driver logs · "
-           f"{sessions['system']} system session(s)_"]
+    valid_drips = [float(p["sw_drip_pct"]) for p in points if p.get("sw_drip_pct") is not None]
+    avg_drip = sum(valid_drips) / len(valid_drips) if valid_drips else None
+    drips_label = f"{avg_drip:.1f}%" if avg_drip is not None else "N/A"
+    causes = {}
+    for p in checked:
+        cause, _ = dominant_cause(findings[p["index"]])
+        causes[cause] = causes.get(cause, 0) + 1
+    leading_cause = max(causes, key=causes.get) if causes else "—"
+    esc = lambda value: html_escape(str(value or ""), quote=True)
+
+    out = [
+        '<section class="ss-report">',
+        '  <header class="ss-report-hero">',
+        '    <div class="ss-report-kicker">MODERN STANDBY · DRIVER LOG CORRELATION</div>',
+        '    <h2>Sleep Study report</h2>',
+        '    <p class="ss-report-subtitle">A concise view of the Sleep Study signals and what the driver logs explain.</p>',
+        '    <div class="ss-report-stats">',
+        f'      <div class="ss-stat"><strong>{len(checked)}<small> / {len(points)}</small></strong><span>sessions checked</span></div>',
+        f'      <div class="ss-stat"><strong>{drips_label}</strong><span>average SW DRIPS</span></div>',
+        f'      <div class="ss-stat"><strong>{esc(leading_cause)}</strong><span>leading driver cause</span></div>',
+        f'      <div class="ss-stat"><strong>{sessions["system"]}</strong><span>system blockers</span></div>',
+        '    </div>',
+        '  </header>',
+    ]
     if conclusion:
-        out += ["", "### Conclusion", "", conclusion]
+        out.extend([
+            '  <section class="ss-report-conclusion">',
+            '    <span class="ss-section-kicker">OVERALL FINDING</span>',
+            f'    <p>{esc(conclusion)}</p>',
+            '  </section>',
+        ])
 
     if points:
-        out += ["", "### Session findings", ""]
+        out.extend([
+            '  <section class="ss-report-section">',
+            '    <div class="ss-section-heading"><div><span class="ss-section-kicker">AT A GLANCE</span>'
+            '<h3>Session overview</h3></div><span class="ss-target-legend"><i></i> 80% DRIPS target</span></div>',
+            '    <div class="ss-drips-chart" role="img" aria-label="Software DRIPS by session; target is 80 percent">',
+        ])
+        for p in points:
+            value = p.get("sw_drip_pct")
+            width = max(0.0, min(float(value), 100.0)) if value is not None else 0.0
+            value_label = _pct(value)
+            out.append(
+                f'      <div class="ss-drips-row"><span class="ss-drips-name">Session {esc(p["session_id"])}</span>'
+                f'<span class="ss-drips-track"><i class="ss-drips-fill" style="width:{width:.1f}%"></i>'
+                '<i class="ss-drips-target"></i></span>'
+                f'<span class="ss-drips-value">{esc(value_label)}</span></div>')
+        out.extend([
+            '    </div>',
+            '    <div class="ss-drips-axis"><span>0%</span><span>80% target</span><span>100%</span></div>',
+            '  </section>',
+            '  <section class="ss-report-section">',
+            '    <div class="ss-section-heading"><div><span class="ss-section-kicker">DETAILS</span>'
+            '<h3>Session findings</h3></div><span class="ss-muted">Select a session to expand</span></div>',
+            '    <div class="ss-session-list">',
+        ])
         for p in points:
             report = str(p.get("html_verdict") or "No clear Sleep Study cause")
-            if p["index"] in findings:
-                driver_text = findings[p["index"]]
+            is_checked = p["index"] in findings
+            if is_checked:
+                driver_text = str(findings[p["index"]])
                 cause, detail = dominant_cause(driver_text)
                 driver_scenario = verdict_scenario(driver_text)
                 report_scenario = verdict_scenario(report)
-                comparison = ("agrees with the report" if driver_scenario == report_scenario
-                              else "adds a different or more specific cause" if driver_scenario != "?"
-                              else "inconclusive")
-                finding = (f"Driver: **{cause}**" + (f" — {_short_detail(detail)}" if detail else "")
-                           + f". ({comparison}.)")
+                comparison = ("Aligned" if driver_scenario == report_scenario and driver_scenario != "?"
+                              else "Driver adds context" if driver_scenario != "?"
+                              else "Needs review")
+                badge_class = "aligned" if comparison == "Aligned" else "review"
+                driver_summary = (f'<span class="ss-cause-pill">{esc(cause)}</span>'
+                                  + (f'<p class="ss-cause-detail">{esc(_short_detail(detail, 230))}</p>' if detail else ""))
+                full_driver = driver_text
             else:
-                finding = f"Driver: not checked ({p.get('status') or 'no result'})."
-            out.append(f"- **Session {p['session_id']} · {p['device_label']} · SW DRIPS "
-                       f"{_pct(p.get('sw_drip_pct'))}** — Sleep Study: {report}. {finding}")
+                comparison = "Not checked"
+                badge_class = "pending"
+                driver_summary = f'<p class="ss-cause-detail">Driver log not checked: {esc(p.get("status") or "no result")}.</p>'
+                full_driver = ""
+
+            evidence = p.get("wake_evidence") or {}
+            evidence_lines = wake_evidence_lines(evidence) + app_activity_lines(evidence)
+            evidence_html = ("<ul>" + "".join(f"<li>{esc(line.strip())}</li>" for line in evidence_lines[:8])
+                             + "</ul>" if evidence_lines else '<p class="ss-muted">No additional wake detail in the report.</p>')
+            short_wakes = int(p.get("short_device_wakes") or 0)
+            window = f'{p.get("window_start") or "?"} → {p.get("window_end") or "?"}'
+            detail_block = (
+                '<details class="ss-session-details"><summary>'
+                f'<span class="ss-session-title"><b>Session {esc(p["session_id"])}</b>'
+                f'<span>{esc(p.get("device_label") or "Device")}</span>'
+                f'<span class="ss-drip-chip">SW DRIPS {esc(_pct(p.get("sw_drip_pct")))}</span></span>'
+                f'<span class="ss-state-pill {badge_class}">{esc(comparison)}</span></summary>'
+                '<div class="ss-session-body">'
+                f'<div class="ss-session-window">{esc(window)} · {short_wakes} short device wake(s)</div>'
+                '<div class="ss-evidence-grid">'
+                f'<div class="ss-evidence-card"><span class="ss-evidence-label">SLEEP STUDY</span>'
+                f'<p>{esc(report)}</p></div>'
+                f'<div class="ss-evidence-card"><span class="ss-evidence-label">DRIVER LOG</span>'
+                f'{driver_summary}</div></div>'
+                '<details class="ss-evidence-more"><summary>View supporting evidence</summary>'
+                f'<div class="ss-evidence-columns"><div><b>From the report</b>{evidence_html}</div>'
+                + (f'<div><b>Driver conclusion</b><pre>{esc(full_driver)}</pre></div>' if full_driver else "")
+                + '</div></details></div></details>')
+            out.append(f'      {detail_block}')
+        out.extend(['    </div>', '  </section>'])
 
     if sessions["groups"]:
-        out += ["", "### System blockers", ""]
-        out.extend(f"- **{g['blocker']}** — {len(g['sessions'])} session(s); "
-                   f"lowest SW DRIPS {_pct(g['worst_sw'])}." for g in sessions["groups"])
+        out.extend([
+            '  <section class="ss-report-section ss-system-section">',
+            '    <div class="ss-section-heading"><div><span class="ss-section-kicker">PLATFORM</span>'
+            '<h3>System blockers</h3></div></div>',
+        ])
+        for group in sessions["groups"]:
+            out.append(f'    <div class="ss-system-row"><b>{esc(group["blocker"])}</b>'
+                       f'<span>{len(group["sessions"])} session(s)</span>'
+                       f'<span>lowest SW DRIPS {_pct(group["worst_sw"])}</span></div>')
+        out.append('  </section>')
+    out.append('</section>')
     return "\n".join(out)
 
 

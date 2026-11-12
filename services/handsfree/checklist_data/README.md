@@ -1,6 +1,6 @@
 # Debug checklist data — how to update
 
-`debug_checklist.json` drives the handsfree replyer's customer-facing
+`debug_checklist.json` drives Beacon's (the handsfree replyer's) customer-facing
 first-response checklist (issue domains, Required Log / Required Info /
 Initial Triage items, the General Info questions, and sub-categories).
 It is **generated** from the CE team's Excel checklist

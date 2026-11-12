@@ -8,7 +8,8 @@ servlet), the app's Salesforce session can download them, and the Claude
 model accepts images. So, per case:
 
   1. pull the rich-text comments via IpsClient.get_case_comments,
-  2. download the embedded images (force.com hosts only, bounded),
+  2. download the embedded images (Intel's own Salesforce hosts over
+     HTTPS only — the session credentials never go anywhere else; bounded),
   3. one vision call per comment with images -> one description per image,
   4. append a synthetic comment row "[Images embedded in the comment of
      <date> by <author>] 1) ... 2) ..." so the case reader, the checklist
@@ -32,7 +33,6 @@ from typing import Any, Callable, Optional
 MAX_IMAGES_PER_CASE = 8
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 _ALLOWED_MEDIA = {"image/png", "image/jpeg", "image/gif", "image/webp"}
-_ALLOWED_HOSTS = (".force.com", ".salesforce.com")
 _CACHE_LOCK = threading.Lock()
 
 _IMG_RE = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECASE)
@@ -41,6 +41,20 @@ _IMG_RE = re.compile(r"""<img\b[^>]*\bsrc\s*=\s*["']([^"']+)["']""", re.IGNORECA
 def extract_image_urls(rich_html: str) -> list[str]:
     """src of every <img> in a rich-text body, HTML entities decoded."""
     return [html.unescape(u) for u in _IMG_RE.findall(str(rich_html or ""))]
+
+
+def _urls_fingerprint(urls: list[str]) -> str:
+    """Identity of a list of embedded images: the path and query of each URL
+    (the rtaImage servlet names the image in its refid), in order, hashed.
+    The host is left out — the same image is linked through more than one of
+    the org's Salesforce hosts."""
+    import hashlib
+    from urllib.parse import urlsplit
+    parts = []
+    for u in urls:
+        s = urlsplit(str(u))
+        parts.append(f"{s.path}?{s.query}")
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
 
 def sniff_media_type(data: bytes, declared: str = "") -> str:
@@ -59,9 +73,11 @@ def sniff_media_type(data: bytes, declared: str = "") -> str:
 
 
 def _host_allowed(url: str) -> bool:
-    m = re.match(r"https?://([^/]+)/", url + "/")
-    host = (m.group(1) if m else "").lower()
-    return any(host.endswith(h) for h in _ALLOWED_HOSTS)
+    """Only the org's own Salesforce hosts, HTTPS only (ips_client.is_tenant_url):
+    fetch_binary attaches the Salesforce session to the request, so a URL on
+    any other tenant — or plain HTTP — would hand the credentials away."""
+    from .ips_client import is_tenant_url
+    return is_tenant_url(url)
 
 
 def image_blocks(images: list[tuple[str, bytes]], model: str) -> list[dict]:
@@ -173,6 +189,64 @@ def annotate_case_comments(ips, llm, case_id: str, comments: Any, *,
     cached = cache.load()
     budget = MAX_IMAGES_PER_CASE
     changed = False
+
+    # The case DESCRIPTION can embed images too (01034043: the failing
+    # measurement screenshot was only in the description). Its rich text is
+    # a Case field, not a comment: read it first, cache it under desc:<id>,
+    # and put the synthetic row ahead of the comments (case creation date).
+    get_desc = getattr(ips, "get_case_rich_description", None)
+    if callable(get_desc):
+        try:
+            desc = get_desc(case_id) or {}
+        except Exception as e:
+            say(f"case description not readable for images: {e}")
+            desc = {}
+        d_urls = [u for u in extract_image_urls(desc.get("html") or "") if _host_allowed(u)]
+        if d_urls:
+            d_key, d_date = f"desc:{case_id}", str(desc.get("created") or "")
+            # Unlike a posted comment, the description can be edited: the same
+            # NUMBER of images may be different images. The cache entry is
+            # valid only for the images it was made from (their URLs).
+            d_fp = _urls_fingerprint(d_urls)
+            entry = cached.get(d_key)
+            if (entry and entry.get("url_count") == len(d_urls)
+                    and entry.get("urls_fp", d_fp) == d_fp):
+                d_descs = entry["descriptions"]
+                if "urls_fp" not in entry:       # written before fingerprints: adopt it
+                    entry["urls_fp"] = d_fp
+                    changed = True
+                say(f"{len(d_urls)} image(s) in the case description: cached")
+            else:
+                if entry:
+                    say("the images in the case description changed — reading them again")
+                images = []
+                for u in d_urls[:budget]:
+                    got = ips.fetch_binary(u, max_bytes=MAX_IMAGE_BYTES)
+                    if got:
+                        media = sniff_media_type(got[1], got[0])
+                        if media in _ALLOWED_MEDIA:
+                            images.append((media, got[1]))
+                budget -= len(images)
+                d_descs = []
+                if images:
+                    say(f"describing {len(images)} image(s) in the case description")
+                    d_descs = describe_images(llm, images, author="Customer (case description)",
+                                              date=d_date[:16], comment_text=_text_of(desc.get("html")))
+                    if any(d_descs):
+                        cached[d_key] = {"descriptions": d_descs, "url_count": len(d_urls),
+                                         "urls_fp": d_fp,
+                                         "date": d_date, "author": "Customer (case description)"}
+                        changed = True
+                else:
+                    say("could not download the image(s) in the case description")
+            d_descs = [d for d in d_descs if d]
+            if d_descs:
+                text = (f"[Images embedded in the case description ({d_date[:10] or 'creation'})] "
+                        + " ".join(f"{i}) {d}" for i, d in enumerate(d_descs, 1)))
+                rows.insert(0, [d_date, "Customer (case description)", text])
+                details.append({"comment_id": "description", "date": d_date,
+                                "author": "Customer (case description)",
+                                "count": len(d_urls), "descriptions": d_descs})
     for c in sorted(rest, key=lambda r: r.get("CreatedDate") or ""):
         rich = str(c.get(getattr(ips, "FIELD_RICH_BODY", "Core_IPS_Rich_Comment__c")) or "")
         urls = [u for u in extract_image_urls(rich) if _host_allowed(u)]

@@ -114,7 +114,8 @@ class DriverManager:
             input("	Press Enter to close this window...") 
 
     def create_download_driver(self, download_path, additional_prefs=None , 
-                               additional_args=None, performance_logging=False, headless=True):
+                               additional_args=None, performance_logging=False, headless=True,
+                               user_data_dir=None):
         warnings.simplefilter(action='ignore', category=ResourceWarning)
         logging.basicConfig(level=logging.ERROR)
 
@@ -148,6 +149,8 @@ class DriverManager:
         ]
         if additional_args:
             performance_args.extend(additional_args)
+        if user_data_dir:
+            performance_args.append(f'--user-data-dir={user_data_dir}')
         if headless:
             performance_args.append('--headless=new')
         for arg in performance_args:

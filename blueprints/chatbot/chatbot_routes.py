@@ -61,7 +61,7 @@ import threading
 import traceback
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import ModuleType
 from typing import Any, Callable, Sequence
 
@@ -609,9 +609,16 @@ def _guard_times_inside_log_range(first_ts, last_ts, attachment_time,
     if not (first_ts and last_ts):
         return attachment_time, issue_time_str, issue_times, False, ""
 
+    # A few minutes of grace on either side: a capture usually starts
+    # seconds to minutes after the reported failure moment (the handsfree
+    # hand-off carries exactly such a time; its own coverage check allows
+    # the same 10 min), while a wrong-date LLM guess is hours or days off.
+    grace = timedelta(minutes=10)
+
     def _is_inside_log_range(s: str) -> bool:
         parsed, is_time_only = parse_issue_time_string(s)
-        return bool(parsed and not is_time_only and first_ts <= parsed <= last_ts)
+        return bool(parsed and not is_time_only
+                    and first_ts - grace <= parsed <= last_ts + grace)
 
     had_auto_candidate = bool(issue_times or attachment_time or issue_time_str)
     issue_times = [s for s in issue_times if _is_inside_log_range(s)]

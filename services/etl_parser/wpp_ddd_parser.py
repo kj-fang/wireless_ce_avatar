@@ -29,9 +29,15 @@ from configs.global_configs import app_config
 
 
 
+def _emit(event, payload):
+    # None when running headless (Handsfree CLI): log only, no web client to notify.
+    if app_config.socketio is not None:
+        app_config.socketio.emit(event, payload, namespace='/wpp_progress')
+
+
 def emit_and_log(msg):
     log.info(msg)
-    app_config.socketio.emit('wpp_log', {'data': msg}, namespace='/wpp_progress') 
+    _emit('wpp_log', {'data': msg})
 
 
 class WppParserError(Exception):
@@ -40,11 +46,7 @@ class WppParserError(Exception):
 def emit_error(msg, *, fatal=False):
     # send parser errors to the frontend without killing the worker process
     log.error(msg)
-    app_config.socketio.emit(
-        'wpp_error',
-        {'data': str(msg), 'fatal': bool(fatal)},
-        namespace='/wpp_progress',
-    )
+    _emit('wpp_error', {'data': str(msg), 'fatal': bool(fatal)})
 
 
 # disable some warning of unverified HTTP get requests
@@ -789,7 +791,7 @@ def parse_single_binary(parser: object) -> None:
     parser.run_external_formatter()
 
     # GUI conveniences for the interactive desktop flow. Skipped when the
-    # decode runs headlessly (Handsfree Replyer sets AVATAR_HEADLESS_DECODE=1)
+    # decode runs headlessly (Beacon, the handsfree replyer, sets AVATAR_HEADLESS_DECODE=1)
     # so no TextAnalysisTool / Explorer window pops on an unattended machine.
     if os.environ.get("AVATAR_HEADLESS_DECODE") != "1" and not app_config.silent_mode:
         # open text analysis
@@ -855,11 +857,7 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
 
     status = 'error' if errors else 'done'
     log.info(f'wpp_complete status={status}')
-    app_config.socketio.emit(
-        'wpp_complete',
-        {'status': status, 'errors': errors},
-        namespace='/wpp_progress',
-    )
+    _emit('wpp_complete', {'status': status, 'errors': errors})
     if errors:
         raise WppParserError("; ".join(errors))
 

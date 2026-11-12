@@ -148,6 +148,15 @@ ACE_PLAYBOOK_BT_DIR_prim = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR") \
 ACE_PLAYBOOK_BT_DIR_bkup = _os.environ.get("INTELAVATAR_ACE_PLAYBOOK_BT_DIR_BKUP") \
     or _sibling_share(FEEDBACK_DIR_bkup, _ACE_PLAYBOOK_BT_LEAF)
 
+# Handsfree Replyer shared state: review queue, per-case ledger, shared config
+# and decoded logs, read and written by the analysis server and every client.
+# Deliberately ONE location with no backup: a fallback share would split the
+# queue between machines. The env override lets a developer point at a local
+# test folder.
+_HANDSFREE_LEAF = "handsfree"
+HANDSFREE_DIR = _os.environ.get("INTELAVATAR_HANDSFREE_DIR") \
+    or _sibling_share(FEEDBACK_DIR_prim, _HANDSFREE_LEAF)
+
 # Local cache — prompt/ and filter/ are copied here from the remote on first run.
 # Using a path relative to this file so it works regardless of install location.
 from pathlib import Path as _Path

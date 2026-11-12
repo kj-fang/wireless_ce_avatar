@@ -88,6 +88,20 @@ Your tasks:
     - "next_action": e.g. "Intel to analyze the WRT log uploaded in
       comment #4 for the 10:17 failure" or "Customer to provide the
       failure time and WRT logs Intel asked for in comment #2".
+ 7. State the Intel Wi-Fi DRIVER VERSION the reported failure was observed
+    on, as stated most recently in the thread or the form (a newer driver
+    the customer already tested and still failed on supersedes the original
+    "Found In Build"; a driver the customer tested WITHOUT the failure is
+    not it). Copy it as x.y.z.w (e.g. 23.150.0.4); "" when none is stated.
+    Never invent one.
+ 8. State the LAST-KNOWN-GOOD Intel Wi-Fi DRIVER VERSION: the most recent
+    driver on which the customer states the issue did NOT reproduce (a
+    passing / previously working driver, e.g. "worked fine on 23.60.1.2",
+    "no issue with the previous driver 24.30.0.5", "regression from
+    23.90"). Copy it as written (x.y.z.w, or x.y when only the branch is
+    given). "Worked before" WITHOUT a version is not a version — return "".
+    The version the failure was observed on (task 7) is never the
+    last-known-good one. Never invent one.
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
@@ -102,7 +116,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
   "issue_domain": "<one domain name from the list, verbatim>",
   "issue_subcategory": "<sub-category name, or ''>",
   "action_owner": "<'intel' | 'customer' | 'unknown'>",
-  "next_action": "<one sentence>"
+  "next_action": "<one sentence>",
+  "driver_version": "<x.y.z.w the failure was observed on, or ''>",
+  "last_good_version": "<version the issue did NOT reproduce on, or ''>"
 }}
 
 === SUBJECT ===
@@ -141,17 +157,29 @@ ACTION_OWNER_LABELS = {"intel": "Intel (case owner)", "customer": "customer"}
 
 _INTEL_AUTHOR_PREFIXES = ("agent", "fae")
 
+# What an Intel comment that asks the customer for something looks like: a
+# question, or a request form ("please …", "could you …", "we need …",
+# "requesting …", "waiting for …"). A status note ("we are investigating",
+# "escalated to the driver team", "do not share") matches neither and is
+# not an ask. Bare verbs (share, upload, send) are deliberately not enough:
+# they appear in internal notes as often as in requests.
+_INTEL_ASK_RE = re.compile(
+    r"(?i)\?|\b(?:please|kindly|could you|can you|would you|we(?:'d| would)? need|"
+    r"need(?:ed)?|request(?:ing|ed)?|let us know|a?waiting for)\b")
+
 
 def intel_has_asked(comments: Any, ai_marker: str = "") -> bool:
-    """Is there an Intel-written comment in the thread at all (an automated
-    AI note does not count)? "Waiting on the customer" is only possible
-    after Intel actually said something to them."""
+    """Did an Intel-written comment ask the customer for something (a
+    question, or a request to provide / upload / confirm / retry)? An
+    automated AI note does not count, and neither does a status-only note:
+    "waiting on the customer" is only possible after Intel actually asked."""
     for r in _normalize_comments(comments):
         if not r["author"].strip().lower().startswith(_INTEL_AUTHOR_PREFIXES):
             continue
         if ai_marker and ai_marker in r["text"]:
             continue
-        return True
+        if _INTEL_ASK_RE.search(r["text"]):
+            return True
     return False
 
 
@@ -354,7 +382,23 @@ def read_case_history(llm, *, subject: str, description: str,
         "missing_info": missing,
         "issue_domain": resolve_domain(res.get("issue_domain")),
         "issue_subcategory": str(res.get("issue_subcategory") or "").strip(),
+        # the driver the failure was seen on, x.y.z.w only ("latest" -> "")
+        "driver_version": (lambda m: m.group(0) if m else "")(
+            re.search(r"\d+\.\d+\.\d+\.\d+", str(res.get("driver_version") or ""))),
+        # the last driver the issue did NOT reproduce on (x.y[.z[.w]]; a
+        # statement without a version -> ""), never the failing one itself
+        "last_good_version": _last_good_version(res),
     }
+
+
+def _last_good_version(res: dict) -> str:
+    m = re.search(r"\d+\.\d+(?:\.\d+){0,2}", str(res.get("last_good_version") or ""))
+    if not m:
+        return ""
+    failing = re.search(r"\d+\.\d+\.\d+\.\d+", str(res.get("driver_version") or ""))
+    if failing and failing.group(0) == m.group(0):
+        return ""
+    return m.group(0)
 
 
 def find_attachment(attachment_list: Any, name: str):

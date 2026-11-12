@@ -1,5 +1,5 @@
 """
-Headless per-case analysis pipeline for the Handsfree Replyer.
+Headless per-case analysis pipeline for Beacon (the handsfree replyer).
 
 Replays the full avatar user journey without the web UI:
 
@@ -36,6 +36,8 @@ from dataclasses import dataclass, field, asdict
 from typing import Callable, Optional
 
 from . import bsod as _bsod
+from .driver_release import (branch_of, compare_branch, effective_latest_driver,
+                             format_version, parse_version, read_capture_driver_version)
 
 # Cap agent runs per case: the UI chains one run per detected incident time;
 # headless we keep the two most relevant to bound cost.
@@ -147,6 +149,26 @@ def _classify_wireless_domain(subcategory: str) -> str:
     return ""
 
 
+def _case_radio(subcategory: str, source: str, context_radio: str = "") -> str:
+    """wifi / bt / "" (unsupported) for a case about to be analysed.
+
+    A case fetched from IPS is analysed only when its subcategory says Wi-Fi
+    or Bluetooth explicitly (_classify_wireless_domain); CaseService's legacy
+    "non-wifi -> bt" guess is deliberately NOT used for it.
+
+    An email thread (source "email") has no IPS subcategory to be explicit
+    about — email_case files it as "Email thread" — so the radio it resolved
+    from the mail text when it built the context is honoured. Without this
+    every email case was turned away as an unsupported subcategory before
+    triage and its mail recorded as handled with no reply draft."""
+    radio = _classify_wireless_domain(subcategory)
+    if not radio and str(source or "") == "email":
+        given = str(context_radio or "").strip().lower()
+        if given in ("wifi", "bt"):
+            radio = given
+    return radio
+
+
 class _Prefetch(threading.Thread):
     """Background download of one attachment (same run_dload_threads call
     the download stage uses). Results in .items, failure in .error."""
@@ -186,6 +208,61 @@ def _folder_timestamp(etl_path: str):
         return None
 
 
+def _fmt_offset(delta) -> str:
+    """A clock offset as '+11:00' / '-03:30' (rounded to the minute)."""
+    minutes = int(round(delta.total_seconds() / 60.0))
+    sign = "-" if minutes < 0 else "+"
+    minutes = abs(minutes)
+    return f"{sign}{minutes // 60:02d}:{minutes % 60:02d}"
+
+
+# How the customer's issue time was placed in the decoded log's clock.
+ANCHOR_AS_IS = "as_is"            # same clock (or nothing known): value taken as given
+ANCHOR_TZ = "tz_helper"           # system_info.txt time zone vs the decode host (GMT+8)
+ANCHOR_FOLDER = "folder_stamp"    # WRT folder stamp (DUT clock) vs the log's last line
+ANCHOR_LABELS = {ANCHOR_AS_IS: "same clock", ANCHOR_TZ: "time zone",
+                 ANCHOR_FOLDER: "capture-folder stamp"}
+
+
+
+_DOMAIN_SOURCE_LABELS = {"reader": "reader of the IPS thread",
+                         "ips_subcategory": "IPS subcategory",
+                         "triage": "triage of the description",
+                         "fallback": "fallback"}
+
+
+def _explain_domain(reader_domain: str, subcategory: str, issue_type: str) -> dict:
+    """_resolve_issue_domain, with its working shown: every candidate in
+    priority order, its resolved domain, and which one won."""
+    from .checklist import FALLBACK_DOMAIN, resolve_domain
+    cands = []
+    for source, raw in (("reader", reader_domain), ("ips_subcategory", subcategory),
+                        ("triage", issue_type)):
+        raw = str(raw or "").strip()
+        resolved = resolve_domain(raw) if raw else ""
+        cands.append({"source": source, "label": _DOMAIN_SOURCE_LABELS[source],
+                      "raw": raw, "resolved": resolved,
+                      "specific": bool(resolved and resolved != FALLBACK_DOMAIN)})
+    winner = next((c for c in cands if c["specific"]), None)
+    return {"candidates": cands,
+            "winner": winner["resolved"] if winner else FALLBACK_DOMAIN,
+            "winner_source": winner["source"] if winner else "fallback",
+            "winner_label": _DOMAIN_SOURCE_LABELS[winner["source"] if winner else "fallback"]}
+
+
+def _required_log_items(domain: str, subcat: str = "") -> list:
+    """The domain's required-log items (names) from the debug checklist,
+    narrowed to the sub-category when one is known."""
+    try:
+        from .checklist import load_checklist, _entry_in_subcat
+        dom = (load_checklist().get("domains") or {}).get(domain) or {}
+        subs = list((dom.get("subcategories") or {}).keys())
+        sub = subcat if subcat in subs else ""
+        return [str(e.get("item") or "") for e in dom.get("required_log", [])
+                if (sub and _entry_in_subcat(e, sub)) or (not sub)][:20]
+    except Exception:
+        return []
+
 
 def _resolve_issue_domain(reader_domain: str, subcategory: str,
                           issue_type: str) -> str:
@@ -200,6 +277,66 @@ def _resolve_issue_domain(reader_domain: str, subcategory: str,
         if cand and cand != FALLBACK_DOMAIN:
             return cand
     return FALLBACK_DOMAIN
+
+
+_DRIVER_SOURCE_LABELS = {"system_info": "system_info.txt of the analysed WRT capture",
+                         "env_detail": "IPS Environment Details 'Found In Build'",
+                         "reader": "driver version stated in the case thread"}
+
+
+def _env_found_in_build(env: dict) -> str:
+    """The driver version in the Environment Details form's "Found In Build"
+    answer (x.y.z.w, normalised), "" when absent or not a version."""
+    for q, a in (env or {}).items():
+        if re.search(r"found\s*in\s*build", str(q), re.IGNORECASE):
+            v = parse_version(a, min_parts=2)
+            if v:
+                return format_version(v)
+    return ""
+
+
+def _explain_driver_version(capture: str, env_version: str, reader_version: str,
+                            latest: str, latest_source: str) -> dict:
+    """The driver check with its working shown (live panel): the candidates
+    in priority order (capture system_info.txt > IPS form > thread), the
+    winner, the latest released driver and compare_branch's verdict.
+    newer_mentioned: a lower-priority candidate on a NEWER branch than the
+    winner (e.g. the thread says a newer driver was tried) - flagged for the
+    reviewer, not acted on."""
+    cands = []
+    for source, raw in (("system_info", capture), ("env_detail", env_version),
+                        ("reader", reader_version)):
+        v = parse_version(raw, min_parts=2)
+        cands.append({"source": source, "label": _DRIVER_SOURCE_LABELS[source],
+                      "raw": str(raw or ""), "resolved": format_version(v)})
+    winner = next((c for c in cands if c["resolved"]), None)
+    customer = winner["resolved"] if winner else ""
+    result = compare_branch(customer, latest)
+    newer = ""
+    if winner:
+        wb = branch_of(parse_version(customer))
+        for c in cands:
+            if c is winner or not c["resolved"]:
+                continue
+            b = branch_of(parse_version(c["resolved"]))
+            if b and b > wb:
+                newer = c["resolved"]
+                break
+    label = winner["label"] if winner else "no source"
+    if result == "skipped":
+        summary = (f"no latest release known yet (customer driver {customer or 'unknown'}) "
+                   "- check skipped")
+    elif result == "unknown":
+        summary = (f"customer driver unknown (no system_info.txt, no Found In Build, none "
+                   f"stated in the thread) vs latest release {latest} - the draft asks for it")
+    else:
+        summary = f"driver {customer} ({label}) vs latest release {latest} - {result}"
+    return {"candidates": cands, "winner": customer,
+            "winner_source": winner["source"] if winner else "", "winner_label": label,
+            "latest": latest, "latest_source": latest_source, "result": result,
+            "newer_mentioned": newer, "summary": summary,
+            "rule": ("latest = highest PV / PV-HF release up to the current work week; "
+                     "same branch = same first two numbers")}
 
 
 def _env_repro_steps(env: dict) -> str:
@@ -238,8 +375,14 @@ class StageStatus:
 
 @dataclass
 class IncidentReport:
-    issue_time: str = ""
+    issue_time: str = ""             # as reported (the customer's clock)
+    issue_time_customer: str = ""    # same, as a full datetime in the customer's clock
+    issue_time_log: str = ""         # the same moment in the decoded log's clock
+    time_anchor: str = ""            # how the two were aligned: tz_helper |
+                                     #   folder_stamp | as_is
     user_message: str = ""
+    sent_for_analysis: dict = field(default_factory=dict)  # exact agent inputs (live
+                                     #   panel + review): description, both clocks, log
     result_type: str = ""            # report | partial_report | text | error
     report: Optional[dict] = None    # submit_final_report args
     report_text: str = ""
@@ -258,6 +401,7 @@ class IncidentReport:
 class CaseAnalysis:
     case_nbr: str
     case_id: str = ""                # Salesforce 18-char id (for posting)
+    source: str = "ips"              # ips | email | ips+email — where the case thread came from
     ok: bool = False
     mode: str = ""                   # full | triage_only | unsupported | error |
                                      # request_logs | request_info | first_response |
@@ -280,6 +424,10 @@ class CaseAnalysis:
     stages: list[StageStatus] = field(default_factory=list)
     echo_insights: list = field(default_factory=list)  # Echo KB root-cause answers
     time_mismatch: dict = field(default_factory=dict)  # log doesn't cover issue time
+    time_alignment: dict = field(default_factory=dict) # how the customer's issue time was
+                                                       #   placed in the log's clock:
+                                                       #   customer_time, log_time,
+                                                       #   customer_tz, anchor, offset
     missing_info: list = field(default_factory=list)   # [{item, reason}] case-info gaps
     env_detail: dict = field(default_factory=dict)     # IPS Environment Details Q&A form
     issue_domain: str = ""                             # debug-checklist domain (tab name)
@@ -304,6 +452,29 @@ class CaseAnalysis:
                                                        #   the issue time (no WRT pipeline)
     bsod: dict = field(default_factory=dict)           # dumps, dumps_path, email, submitted,
                                                        #   status/detail, skipped, previous
+    # The driver the failure was seen on vs the latest released driver
+    # (driver_release.py): the customer-facing drafts ask an "outdated"
+    # customer to validate on latest_driver.
+    driver_version: str = ""                           # best-known customer driver x.y.z.w
+    driver_version_source: str = ""                    # system_info | env_detail | reader | ""
+    latest_driver: str = ""                            # latest released driver at run time
+    latest_driver_source: str = ""                     # manual | report | ""
+    driver_check: str = ""                             # ok | outdated | unknown | skipped
+    driver_decision: dict = field(default_factory=dict)
+    last_good_version: str = ""                        # last driver the issue did NOT
+                                                       #   reproduce on (reader); ticks the
+                                                       #   checklist's regression item
+    # How the run decided (live panel): the issue category, the issue time,
+    # the archive + capture — candidates and the rule that won, not just the
+    # winners. checklist_decision is filled after the run by checklist.build_fills.
+    domain_decision: dict = field(default_factory=dict)
+    time_decision: dict = field(default_factory=dict)
+    pick_decision: dict = field(default_factory=dict)
+    checklist_decision: dict = field(default_factory=dict)
+    # Echo knowledge-base advice asked right after the thread is read (what
+    # to request from the customer next / next debug steps); answered in the
+    # background while the log pipeline runs. {status, question, answer, error, ...}
+    echo_advice: dict = field(default_factory=dict)
     error: str = ""
 
     @property
@@ -321,11 +492,278 @@ def _noop(_stage: str, _detail: str = "") -> None:
     pass
 
 
+def _describe_attachments(attachment_list, limit: int = 25) -> list:
+    """The case's uploads as the live panel lists them (name, upload stamp,
+    subtitle, archive?)."""
+    out = []
+    for it in (attachment_list or [])[:limit]:
+        try:
+            meta = it[2] if len(it) > 2 and it[2] else ["", ""]
+            name = str(it[0])
+            out.append({"name": name,
+                        "uploaded": str(meta[0] or "")[:40] if len(meta) > 0 else "",
+                        "subtitle": str(meta[1] or "")[:120] if len(meta) > 1 else "",
+                        "is_archive": name.lower().endswith(_ARCHIVE_EXTS)})
+        except Exception:
+            continue
+    return out
+
+
+def _match_kind(found, wanted: str) -> str:
+    """How case_reader.find_attachment matched the reader's nomination."""
+    if found is None:
+        return "not_found"
+    name = str(found[0])
+    if name == wanted:
+        return "exact"
+    if name.lower() == wanted.lower():
+        return "case_insensitive"
+    return "substring"
+
+
+def _describe_captures(paths: list, issue_time_raw: str = "", limit: int = 30) -> list:
+    """One row per capture folder among the extracted ETLs: folder name, its
+    stamp (DUT clock), the YB error token when the name carries one, and the
+    signed distance to the reported issue time."""
+    from utils.issue_time_utils import parse_issue_time_string
+    issue_dt = None
+    if issue_time_raw:
+        dt, time_only = parse_issue_time_string(str(issue_time_raw))
+        if dt is not None and not time_only:
+            issue_dt = dt
+    rows, seen = [], set()
+    for p in paths or []:
+        p = str(p)
+        folder = os.path.basename(os.path.dirname(p))
+        if not folder or folder in seen:
+            continue
+        seen.add(folder)
+        stamp = _folder_timestamp(p)
+        yb = ""
+        toks = _HEX_TOKEN_RE.findall(folder)
+        try:
+            yb = next((t for t in toks if int(t, 16) != 0), "")
+        except ValueError:
+            yb = ""
+        delta = None
+        if stamp is not None and issue_dt is not None:
+            delta = int((stamp - issue_dt).total_seconds())
+        rows.append({"folder": folder,
+                     "stamp": stamp.strftime("%m/%d/%Y-%H:%M:%S") if stamp else "",
+                     "yb_code": yb, "delta_s": delta, "role": "", "decode": "",
+                     "covered": None, "kind": "bt" if re.search(r"(?i)ibt(pci|usb)", p) else
+                                             ("ddd" if re.search(r"(?i)ddd", p) else "wifi")})
+        if len(rows) >= limit:
+            break
+    return rows
+
+
+def _set_capture(analysis: "CaseAnalysis", etl_path: str, **fields) -> None:
+    folder = os.path.basename(os.path.dirname(str(etl_path or "")))
+    for c in (analysis.pick_decision or {}).get("captures") or []:
+        if c.get("folder") == folder:
+            c.update({k: v for k, v in fields.items() if v is not None})
+            return
+
+
+def _fmt_dt(dt) -> str:
+    if dt is None:
+        return ""
+    try:
+        from utils.issue_time_utils import format_issue_time
+        return format_issue_time(dt, with_ms=False)
+    except Exception:
+        return str(dt)
+
+
+def _sent_for_analysis(inc, agent, description: str, customer_tz: str,
+                       log_path: str, log_first, log_last) -> dict:
+    """What the analysis agent actually receives for one incident."""
+    log_time = inc.issue_time_log or _fmt_dt(getattr(agent, "issue_time", None))
+    return {
+        "issue_time_reported": inc.issue_time,
+        "issue_time_customer": inc.issue_time_customer or inc.issue_time,
+        "issue_time_log": log_time,
+        "time_anchor": inc.time_anchor,
+        "customer_tz": customer_tz or "",
+        "description": description,
+        "user_message": inc.user_message,
+        "log_file": os.path.basename(log_path or ""),
+        "log_range": [_fmt_dt(log_first), _fmt_dt(log_last)],
+    }
+
+
+_STEP_KINDS = (("🧠 Thinking", "thinking"), ("🧠", "playbook"), ("💭", "step"),
+               ("🔍 Fetching", "fetch"), ("🔍 Invoking", "tool"), ("🔍 Pre-Analysis", "prescan"),
+               ("🔍", "tool"), ("🧭", "plan"), ("📄", "result"), ("✅", "conclusion"),
+               ("⚠️", "warning"), ("⏹", "stopped"), ("🕒", "time"))
+
+
+def _compact_step(step: dict, limit: int = 300) -> dict:
+    """One agent step as the live panel shows it: a kind (icon), short text."""
+    role = str(step.get("role") or "")
+    # The agent writes markdown ("🧠 **Thinking:**", "🔍 **Fetching filtered
+    # logs** for `X`"): drop the bold markers so the kind markers below match.
+    text = str(step.get("content") or "").replace("**", "").strip()
+    kind = {"tool": "result", "error": "error", "token_usage": "usage"}.get(role, "agent")
+    for marker, name in _STEP_KINDS:
+        if text.startswith(marker):
+            kind = name
+            text = text[len(marker):].lstrip(" :\n")
+            break
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[:limit] + " …"
+    return {"ts": time.strftime("%H:%M:%S"), "role": role, "kind": kind, "text": text}
+
+
+def _result_summary(inc: "IncidentReport") -> dict:
+    rep = inc.report if isinstance(inc.report, dict) else {}
+    return {
+        "issue_time": inc.issue_time,
+        "issue_time_log": inc.issue_time_log,
+        "result_type": inc.result_type,
+        "confidence": inc.confidence,
+        "root_cause_summary": str(rep.get("root_cause_summary") or "")[:600],
+        "recommended_actions": [str(x) for x in (rep.get("recommended_actions") or [])][:5],
+        "involved_skills": [str(x) for x in (rep.get("involved_skills") or [])][:6],
+        "markdown_summary": str(rep.get("markdown_summary") or "")[:1500],
+        "text": "" if rep else str(inc.report_text or "")[:600],
+        "error": inc.error,
+        "steps": len(inc.steps or []),
+        # The analysis trace: which skills / steps the agent went through, in
+        # order (the live panel shows it instead of the priority action list).
+        "trace": [_compact_step(st) for st in (inc.steps or [])][-40:],
+    }
+
+
+def _compact_insight(ins: dict) -> dict:
+    return {"kind": str(ins.get("kind") or ""), "code": ins.get("code"),
+            "question": str(ins.get("question") or "")[:400],
+            "answer": str(ins.get("answer") or "")[:900],
+            "error": str(ins.get("error") or "")[:300]}
+
+
+def live_fields(a: "CaseAnalysis") -> dict:
+    """Compact, JSON-safe view of what is known about a case so far (the
+    page's live panel renders it while the run is in flight)."""
+    reader = a.case_reader or {}
+    bsod = a.bsod or {}
+    return {
+        "case_id": a.case_id,
+        "source": a.source,
+        "subject": a.subject,
+        "subcategory": a.subcategory,
+        "wifi_or_bt": a.wifi_or_bt,
+        "issue_type": a.issue_type,
+        "issue_domain": a.issue_domain,
+        "issue_subcategory": a.issue_subcategory,
+        "clean_description": (a.clean_description or "")[:2000],
+        "issue_times": list(a.issue_times or []),
+        "vague_times": list(reader.get("vague_times") or []),
+        "issue_time_source": str(reader.get("issue_time_source") or ""),
+        "reader_attachment": str(reader.get("attachment_name") or ""),
+        "reader_attachment_reason": str(reader.get("attachment_reason") or ""),
+        "action_owner": a.action_owner,
+        "next_action": a.next_action,
+        "missing_info": [m.get("item") for m in (a.missing_info or []) if isinstance(m, dict)],
+        "chosen_attachment": a.chosen_attachment,
+        "attachment_time": a.attachment_time,
+        "archive_contents": dict(a.archive_contents or {}),
+        "etl_capture": os.path.basename(os.path.dirname(a.etl_path)) if a.etl_path else "",
+        "etl_file": os.path.basename(a.etl_path or ""),
+        "log_file": os.path.basename(a.log_path or ""),
+        "log_path": a.log_path or "",
+        "comment_images": [{"comment_id": i.get("comment_id"), "date": str(i.get("date") or "")[:16],
+                            "author": i.get("author"), "count": i.get("count"),
+                            "descriptions": [str(x)[:900] for x in (i.get("descriptions") or [])]}
+                           for i in (a.comment_images or []) if isinstance(i, dict)][:10],
+        "domain_decision": dict(a.domain_decision or {}),
+        "driver_version": a.driver_version,
+        "driver_version_source": a.driver_version_source,
+        "latest_driver": a.latest_driver,
+        "latest_driver_source": a.latest_driver_source,
+        "driver_check": a.driver_check,
+        "driver_decision": dict(a.driver_decision or {}),
+        "last_good_version": a.last_good_version,
+        "time_decision": dict(a.time_decision or {}),
+        "pick_decision": dict(a.pick_decision or {}),
+        "checklist_decision": dict(a.checklist_decision or {}),
+        "echo_advice": {k: (v if k != "answer" else str(v)[:6000])
+                        for k, v in (a.echo_advice or {}).items()},
+        "incidents": [_result_summary(i) for i in (a.incidents or [])],
+        "echo_insights": [_compact_insight(i) for i in (a.echo_insights or [])
+                          if isinstance(i, dict)],
+        "time_mismatch": {k: v for k, v in (a.time_mismatch or {}).items()
+                          if k in ("issue_times", "log_first", "log_last",
+                                   "log_first_customer", "log_last_customer",
+                                   "also_tried", "yb_assert_override")},
+        "time_alignment": dict(getattr(a, "time_alignment", None) or {}),
+        "yb_case": a.yb_case,
+        "bsod_case": a.bsod_case,
+        "bsod": {
+            "dumps": list(bsod.get("dumps") or []),
+            "dumps_path": bsod.get("dumps_path") or "",
+            "submitted": bool(bsod.get("submitted")),
+            "skipped": bsod.get("skipped") or "",
+            "failed": list(bsod.get("failed") or []),
+            "results": [{"dump": r.get("dump"), "bugcheck_code": r.get("bugcheck_code"),
+                         "bugcheck_str": r.get("bugcheck_str"),
+                         "failure_bucket_id": r.get("failure_bucket_id"),
+                         "wifi_fault": r.get("wifi_fault"), "bt_fault": r.get("bt_fault")}
+                        for r in (bsod.get("results") or [])],
+        } if (a.bsod_case or bsod) else {},
+        "stages": [{"name": st.name, "ok": st.ok, "duration_ms": st.duration_ms,
+                    "detail": (st.detail or "")[:200]} for st in (a.stages or [])],
+        "mode": a.mode,
+        "log_request_reason": a.log_request_reason,
+        "error": (a.error or "")[:400],
+    }
+
+
 class HandsfreeRunner:
     """One instance per run; stateless between cases."""
 
-    def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None):
+    # How long the end of a run waits for a background prefetch nobody
+    # consumed (the reader chose another archive, or the run stopped at an
+    # early gate) before giving up on it.
+    PREFETCH_JOIN_TIMEOUT_S = 15 * 60
+    # Echo next-step advice: asked in a background thread after the reader;
+    # the run waits at most this long for it before the draft is composed.
+    ECHO_ADVICE_ENABLED = True
+    ECHO_ADVICE_TIMEOUT_S = 90
+    ECHO_ADVICE_JOIN_S = 75      # Echo answers in ~70 s; a down Echo must not hold every run hostage
+    # Minutes of slack on either side of the decoded log when deciding whether
+    # a reported issue time is covered / can be placed in the log's clock.
+    TIME_GRACE_MIN = 10
+
+    def __init__(self, progress_cb: Optional[Callable[[str, str], None]] = None,
+                 snapshot_cb: Optional[Callable[[dict], None]] = None):
         self.progress = progress_cb or _noop
+        # snapshot_cb(fields): structured facts about the case as they become
+        # known (live panel on the page). Optional; never allowed to break a run.
+        self.snapshot_cb = snapshot_cb
+        self._prefetch: Optional[_Prefetch] = None
+        self._echo_thread: Optional[threading.Thread] = None
+
+    def _snap(self, **fields) -> None:
+        if self.snapshot_cb is None:
+            return
+        try:
+            self.snapshot_cb(fields)
+        except Exception as e:
+            print(f"[handsfree.runner] snapshot failed (ignored): {e}")
+
+    def _snap_analysis(self, analysis: "CaseAnalysis", **extra) -> None:
+        if self.snapshot_cb is None:
+            return
+        try:
+            fields = live_fields(analysis)
+        except Exception as e:
+            print(f"[handsfree.runner] live fields failed (ignored): {e}")
+            fields = {}
+        fields.update(extra)
+        self._snap(**fields)
 
     # ---- stage helper ----
     def _stage(self, analysis: CaseAnalysis, name: str):
@@ -335,6 +773,7 @@ class HandsfreeRunner:
             def __enter__(ctx):
                 ctx.t0 = time.time()
                 runner.progress(name, "started")
+                runner._snap(current_stage=name)
                 return ctx
 
             def __exit__(ctx, exc_type, exc, tb):
@@ -346,34 +785,125 @@ class HandsfreeRunner:
                     detail = f"{type(exc).__name__}: {exc}"
                     analysis.stages.append(StageStatus(name, False, detail, dur))
                     runner.progress(name, f"failed: {detail}")
+                runner._snap_analysis(analysis, current_stage="")
                 # Never propagate — callers check the returned ok flags.
                 return True
 
         return _Ctx()
 
+    # ---- driver under test vs the latest released driver ----
+    def _settle_driver_version(self, analysis: CaseAnalysis, quiet: bool = False) -> None:
+        """The driver the failure was seen on (the capture's system_info.txt,
+        then the IPS form's Found In Build, then the thread) against the
+        latest released driver from the shared config. Fills driver_version /
+        driver_version_source / latest_driver / latest_driver_source /
+        driver_check and the decision record for the live panel. Idempotent
+        (run again once the capture is decoded); never raises.
+
+        Wi-Fi only: the latest-release table is the Wi-Fi driver's, so a
+        Bluetooth case is not compared against it (driver_check "skipped",
+        decision not_applicable "bt") and no draft asks a BT customer to
+        validate on a Wi-Fi driver."""
+        if str(analysis.wifi_or_bt or "").strip().lower() == "bt":
+            summary = "Bluetooth case - the latest Wi-Fi driver release check does not apply"
+            analysis.driver_version = ""
+            analysis.driver_version_source = ""
+            analysis.latest_driver = ""
+            analysis.latest_driver_source = ""
+            analysis.driver_check = "skipped"
+            analysis.driver_decision = {
+                "candidates": [], "winner": "", "winner_source": "", "winner_label": "",
+                "latest": "", "latest_source": "", "result": "skipped",
+                "newer_mentioned": "", "not_applicable": "bt", "summary": summary,
+                "rule": "the latest-release check covers the Wi-Fi driver only"}
+            if not quiet:
+                self.progress("driver_check", summary)
+            return
+        try:
+            capture = read_capture_driver_version(analysis.log_path or analysis.etl_path)
+        except Exception:
+            capture = ""
+        env_v = _env_found_in_build(analysis.env_detail or {})
+        reader_v = format_version(parse_version(
+            (analysis.case_reader or {}).get("driver_version"), min_parts=4))
+        try:
+            latest, latest_src = effective_latest_driver(_bsod.handsfree_config())
+        except Exception as e:
+            print(f"[handsfree.runner] latest driver config unreadable: {e}")
+            latest, latest_src = "", ""
+        dec = _explain_driver_version(capture, env_v, reader_v, latest, latest_src)
+        analysis.driver_version = dec["winner"]
+        analysis.driver_version_source = dec["winner_source"]
+        analysis.latest_driver = latest
+        analysis.latest_driver_source = latest_src
+        analysis.driver_check = dec["result"]
+        analysis.driver_decision = dec
+        if not quiet:
+            self.progress("driver_check", dec["summary"])
+
     # ------------------------------------------------------------------
     def analyze_case(self, case_nbr: str, *, max_steps: int = MAX_AGENT_STEPS,
-                     max_incidents: int = MAX_INCIDENTS) -> CaseAnalysis:
+                     max_incidents: int = MAX_INCIDENTS, case_ctx=None) -> CaseAnalysis:
+        """Run the pipeline for one case. Whatever path the run takes, a
+        background archive prefetch it started is waited for before this
+        returns: the caller releases the run lock right after, and an orphan
+        download would overlap the next run's use of the shared
+        DriverManager / download globals."""
+        self._prefetch = None
+        self._echo_thread = None
+        try:
+            analysis = self._analyze_case(case_nbr, max_steps=max_steps,
+                                          max_incidents=max_incidents, case_ctx=case_ctx)
+            self._join_echo_advice(analysis)
+            best = analysis.best_incident
+            self._snap_analysis(analysis, current_stage="", finished=True,
+                                confidence=best.confidence if best else None)
+            return analysis
+        finally:
+            pf, self._prefetch = self._prefetch, None
+            if pf is not None and pf.is_alive():
+                self.progress("download",
+                              f"waiting for the background prefetch of {pf.attachment_name} "
+                              "to finish before the run ends")
+                pf.join(timeout=self.PREFETCH_JOIN_TIMEOUT_S)
+                if pf.is_alive():
+                    print(f"[handsfree.runner] prefetch of {pf.attachment_name} still "
+                          "running after the join timeout — left to finish on its own")
+
+    def _analyze_case(self, case_nbr: str, *, max_steps: int,
+                      max_incidents: int, case_ctx=None) -> CaseAnalysis:
         from configs.global_configs import app_config
 
         analysis = CaseAnalysis(case_nbr=str(case_nbr))
-        case_ctx = None
+        given_ctx, case_ctx = case_ctx, None
 
         # -- 1. fetch case info ------------------------------------------------
+        # A prebuilt context replaces the IPS fetch: the email thread of the
+        # case (stage 1 of the Outlook intake), later the IPS+email merge.
+        # Every stage after this one runs on the context unchanged.
         with self._stage(analysis, "fetch_case"):
-            from models.models import CaseContext
-            from services.case_info_service import CaseService
-            case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
+            if given_ctx is not None:
+                case_ctx = given_ctx
+                analysis.source = str(getattr(case_ctx, "source", "") or "ips")
+                msgs = getattr(case_ctx, "messages", None) or []
+                if msgs:
+                    self.progress("fetch_case",
+                                  f"email thread of case {case_nbr}: {len(msgs)} mail(s) "
+                                  f"({msgs[0].received[:10]} → {msgs[-1].received[:10]}), "
+                                  f"{len(case_ctx.attachment_list or [])} file attachment(s), "
+                                  f"{len(getattr(case_ctx, 'image_files', []) or [])} image(s)")
+            else:
+                from models.models import CaseContext
+                from services.case_info_service import CaseService
+                case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
             analysis.case_id = case_ctx.id or ""
             analysis.subject = case_ctx.subject or ""
             analysis.description = case_ctx.description or ""
             analysis.subcategory = str(case_ctx.subcategory or "")
-            # Explicit IPS subcategory wins; otherwise keep CaseService's
-            # legacy derivation (non-"wifi" -> bt) so cases such as "OEM
-            # Tools" still get the BT-gated triage + first-response checklist
-            # validated on 2026-10-01 instead of being skipped as unsupported.
-            analysis.wifi_or_bt = (_classify_wireless_domain(analysis.subcategory)
-                                   or str(case_ctx.wifi_or_bt or ""))
+            # Only an explicit Wi-Fi/BT subcategory is analyzed; CaseService's
+            # legacy "non-wifi -> bt" guess is deliberately NOT used.
+            analysis.wifi_or_bt = _case_radio(analysis.subcategory, analysis.source,
+                                              getattr(case_ctx, "wifi_or_bt", ""))
             analysis.env_detail = dict(case_ctx.env_detail or {})
             from .case_reader import customer_visible_history
             analysis.customer_history = customer_visible_history(case_ctx.comments)
@@ -381,7 +911,10 @@ class HandsfreeRunner:
             analysis.mode = "error"
             analysis.error = "case fetch failed — no subject/description"
             return analysis
-        if not analysis.wifi_or_bt:
+        bsod_hint = _bsod.quick_hint(analysis.subject, analysis.subcategory,
+                                     analysis.description)
+        # BSOD cases go to the BSOD branch whatever their subcategory says.
+        if not analysis.wifi_or_bt and not bsod_hint:
             analysis.mode = "unsupported"
             analysis.error = (f"unsupported IPS subcategory: "
                               f"{analysis.subcategory or '(empty)'}")
@@ -393,16 +926,17 @@ class HandsfreeRunner:
         # The reader usually nominates the newest upload; when it picks
         # another file the normal download runs and this one is discarded.
         prefetch = None
-        if _bsod.quick_hint(analysis.subject, analysis.subcategory, analysis.description):
+        if bsod_hint:
             # A BSOD case's newest archive is a memory dump (GBs), not a WRT
             # capture — the BSOD branch downloads it to the BSOD share instead.
             self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
-        elif analysis.wifi_or_bt == "wifi":
+        elif analysis.wifi_or_bt == "wifi" and not getattr(case_ctx, "local_paths", None):
             try:
                 newest = _pick_latest_archive(case_ctx.attachment_list)
                 if newest is not None:
                     prefetch = _Prefetch(newest, case_ctx.case_download_dir)
                     prefetch.start()
+                    self._prefetch = prefetch     # joined by analyze_case on every exit
                     self.progress("fetch_case",
                                   f"prefetching {prefetch.attachment_name} in the background")
             except Exception as e:
@@ -413,7 +947,9 @@ class HandsfreeRunner:
         with self._stage(analysis, "triage"):
             from services.case_info_service import CaseService
             llm = app_config.llm_helper
-            prompt_path = CaseService.load_case_summary_prompt(analysis.wifi_or_bt)
+            # A BSOD case without an explicit Wi-Fi/BT subcategory keeps the legacy prompt pick.
+            prompt_path = CaseService.load_case_summary_prompt(
+                analysis.wifi_or_bt or str(case_ctx.wifi_or_bt or "bt"))
             ctx_dict = case_ctx.to_dict()
             triage = llm.analyze_desc(prompt_path, ctx_dict)
             if isinstance(triage, dict):
@@ -423,11 +959,12 @@ class HandsfreeRunner:
 
         # Provisional checklist domain before any early exit (the reader can
         # upgrade it later): IPS subcategory is customer-selected and often
-        # exact ("OEM Tools"); note wifi_or_bt is derived as "bt" whenever
-        # the subcategory lacks the word "wifi", so BT-gated cases MUST get
-        # their domain here or the first-response checklist falls to Others.
+        # exact; BT-gated cases MUST get their domain here or the
+        # first-response checklist falls to Others.
         analysis.issue_domain = _resolve_issue_domain(
             "", analysis.subcategory, analysis.issue_type)
+        analysis.domain_decision = _explain_domain("", analysis.subcategory, analysis.issue_type)
+        analysis.domain_decision["provisional"] = analysis.issue_domain
 
         # -- 2b. images embedded in comments (screenshots) ----------------------
         # Snowflake keeps the plain text only; the rich-text comments in IPS
@@ -442,10 +979,17 @@ class HandsfreeRunner:
             cache = (Path(app_config.avatarfiles_dir) / "handsfree"
                      / "image_descriptions.json"
                      if getattr(app_config, "avatarfiles_dir", None) else None)
-            rows, info = annotate_case_comments(
-                IpsClient(), app_config.llm_helper, analysis.case_id,
-                case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
-                progress=lambda m: self.progress("read_images", m))
+            if analysis.source == "email":
+                # The thread's image attachments (screenshots sent by mail).
+                from .email_case import annotate_email_images
+                rows, info = annotate_email_images(
+                    app_config.llm_helper, case_ctx, cache_path=cache,
+                    progress=lambda m: self.progress("read_images", m))
+            else:
+                rows, info = annotate_case_comments(
+                    IpsClient(), app_config.llm_helper, analysis.case_id,
+                    case_ctx.comments, cache_path=cache, skip_marker=AI_MARKER,
+                    progress=lambda m: self.progress("read_images", m))
             analysis.comment_images = info
             if info:
                 case_ctx.comments = rows
@@ -481,6 +1025,20 @@ class HandsfreeRunner:
                     analysis.issue_times = reader["issue_times"][:max_incidents]
                 analysis.action_owner = reader.get("action_owner") or ""
                 analysis.next_action = reader.get("next_action") or ""
+                analysis.last_good_version = str(reader.get("last_good_version") or "")
+                src = str(reader.get("issue_time_source") or "")
+                analysis.time_decision = {
+                    "found": [{"time": str(t), "source": src, "used": i < max_incidents}
+                              for i, t in enumerate(reader.get("issue_times") or [])],
+                    "ignored_vague": [str(t) for t in (reader.get("vague_times") or [])],
+                    "rule": "only times stated to the minute count; a bare date, "
+                            "'yesterday' or an upload time is not an issue time",
+                    "reasoning": str(reader.get("reasoning") or "")[:600],
+                    "gaps": [{"item": m.get("item"), "action": "reader",
+                              "reason": m.get("reason", "")}
+                             for m in (reader.get("missing_info") or [])],
+                    "gate": "", "organizer_used": False, "placements": [], "coverage": {},
+                }
                 self.progress(
                     "read_case_history",
                     f"issue_times={reader.get('issue_times')} "
@@ -502,6 +1060,29 @@ class HandsfreeRunner:
         # resolved inside checklist.build_fills at compose time.
         analysis.issue_subcategory = str(
             (analysis.case_reader or {}).get("issue_subcategory") or "")
+        provisional = (analysis.domain_decision or {}).get("provisional", "")
+        analysis.domain_decision = _explain_domain(
+            (analysis.case_reader or {}).get("issue_domain") or "",
+            analysis.subcategory, analysis.issue_type)
+        analysis.domain_decision.update({
+            "provisional": provisional,
+            "subcategory_raw": analysis.issue_subcategory,
+            "required_logs": _required_log_items(analysis.issue_domain,
+                                                 analysis.issue_subcategory)})
+        self.progress("read_case_history",
+                      f"issue category: {analysis.issue_domain} "
+                      f"(from the {analysis.domain_decision['winner_label']})"
+                      + (f", sub-category {analysis.issue_subcategory}"
+                         if analysis.issue_subcategory else ""))
+        # Charles (2026-11-09): the driver the failure was seen on vs the
+        # latest released driver - before every early exit, so each request
+        # draft can ask an outdated customer to validate on the latest release.
+        with self._stage(analysis, "driver_check"):
+            self._settle_driver_version(analysis)
+        # Charles (2026-10-20): alongside the analysis, ask the Echo knowledge
+        # base what to request from the customer next / the next debug steps
+        # for this kind of issue — in the background, shown in its own panel.
+        self._start_echo_advice(analysis, case_ctx)
 
         # Ball with the customer (Intel already asked for logs / info / repro
         # and nothing came back): nothing to analyze and nothing to ask.
@@ -534,6 +1115,9 @@ class HandsfreeRunner:
         # LLM-judged completeness (description clarity / issue time / repro
         # steps) with deterministic backstops for outright-empty fields.
         dump_items: list = []
+        td = analysis.time_decision if isinstance(analysis.time_decision, dict) else {}
+        analysis.time_decision = td
+        gaps = td.setdefault("gaps", [])
         with self._stage(analysis, "check_case_info"):
             missing = list((analysis.case_reader or {}).get("missing_info") or [])
             flagged = {m.get("item") for m in missing}
@@ -542,9 +1126,13 @@ class HandsfreeRunner:
                     and "issue_description" not in flagged):
                 missing.append({"item": "issue_description",
                                 "reason": "the case has no issue description"})
+                gaps.append({"item": "issue_description", "action": "backstop",
+                             "reason": "the case has no issue description"})
             if not analysis.issue_times and "issue_time" not in flagged:
                 missing.append({"item": "issue_time",
                                 "reason": "no failure time stated anywhere in the case"})
+                gaps.append({"item": "issue_time", "action": "backstop",
+                             "reason": "no minute-precise failure time anywhere in the case"})
             # A filled "Steps to reproduce" form field IS the repro steps —
             # retract a reader-flagged gap so we never ask for what the
             # customer already provided in the Environment Details form.
@@ -552,6 +1140,8 @@ class HandsfreeRunner:
                 if any(m.get("item") == "repro_steps" for m in missing):
                     missing = [m for m in missing
                                if m.get("item") != "repro_steps"]
+                    gaps.append({"item": "repro_steps", "action": "retracted",
+                                 "reason": "the Environment Details form has 'Steps to reproduce'"})
                     self.progress("check_case_info",
                                   "repro steps found in the Environment "
                                   "Details form — gap retracted")
@@ -566,11 +1156,17 @@ class HandsfreeRunner:
                 dump_items = _bsod.find_dump_attachments(case_ctx.attachment_list)
                 if dump_items and any(m.get("item") == "issue_time" for m in missing):
                     missing = [m for m in missing if m.get("item") != "issue_time"]
+                    gaps.append({"item": "issue_time", "action": "retracted",
+                                 "reason": "BSOD case: the crash dump carries the crash time"})
                     self.progress("check_case_info",
                                   "BSOD case with dump upload(s) "
                                   f"{', '.join(str(i[0]) for i in dump_items)} — "
                                   "issue time not required, gap retracted")
             analysis.missing_info = missing
+            td["gate"] = ("request_info" if any(m.get("item") == "issue_time" for m in missing)
+                          and not analysis.bsod_case else "ok")
+            if analysis.bsod_case:
+                td["gate"] = "bsod_no_time_needed" if dump_items else "bsod_no_dump"
             self.progress(
                 "check_case_info",
                 ("missing/unclear: " + ", ".join(m["item"] for m in missing))
@@ -623,19 +1219,42 @@ class HandsfreeRunner:
             from utils.etl_utils import extract_time_from_description
             from .case_reader import find_attachment
             chosen_name = (analysis.case_reader or {}).get("attachment_name") or ""
+            pd = analysis.pick_decision = {
+                "archives": _describe_attachments(case_ctx.attachment_list),
+                "reader_pick": chosen_name,
+                "reader_reason": str((analysis.case_reader or {}).get("attachment_reason") or "")[:300],
+                "match": "", "fallback_used": False, "chosen": "", "chosen_rule": "",
+                "prefetch": {"name": prefetch.attachment_name if prefetch is not None else "",
+                             "used": False},
+                "download_attempts": 0, "contents": {}, "captures": [],
+                "etl_rule": "", "issue_time_used": "", "alternates_tried": 0,
+            }
             if chosen_name:
                 zip_item = find_attachment(case_ctx.attachment_list, chosen_name)
+                pd["match"] = _match_kind(zip_item, chosen_name)
                 if zip_item is not None and not str(zip_item[0]).lower().endswith(_ARCHIVE_EXTS):
                     self.progress("pick_zip",
                                   f"reader chose non-archive '{zip_item[0]}' — falling back")
+                    pd["match"] = "non_archive"
                     zip_item = None
+                elif zip_item is not None:
+                    self.progress("pick_zip",
+                                  f"reader chose '{zip_item[0]}' ({pd['match']} match)"
+                                  + (f" — {pd['reader_reason'][:120]}" if pd["reader_reason"] else ""))
             if zip_item is None:
                 zip_item = _pick_latest_archive(case_ctx.attachment_list)
-                if chosen_name and zip_item is not None:
+                pd["fallback_used"] = bool(chosen_name)
+                if zip_item is not None:
+                    n_arch = sum(1 for a in pd["archives"] if a["is_archive"])
+                    pd["chosen_rule"] = "only_archive" if n_arch == 1 else "newest_upload"
                     self.progress("pick_zip",
-                                  f"fallback to newest archive: {zip_item[0]}")
+                                  (f"fallback to newest archive: {zip_item[0]}" if chosen_name
+                                   else f"newest upload of {n_arch} archive(s): {zip_item[0]}"))
+            else:
+                pd["chosen_rule"] = "reader"
             if zip_item is not None:
                 analysis.chosen_attachment = str(zip_item[0])
+                pd["chosen"] = str(zip_item[0])
                 try:
                     subtitle = (zip_item[2] or ["", ""])[1] if len(zip_item) > 2 else ""
                     analysis.attachment_time = extract_time_from_description(subtitle) or ""
@@ -678,13 +1297,20 @@ class HandsfreeRunner:
                 prefetch.join()
                 if prefetch.items and not prefetch.error:
                     downloaded.extend(prefetch.items)
+                    analysis.pick_decision.get("prefetch", {})["used"] = True
                     self.progress("download", "prefetched during triage/reader")
                 else:
                     self.progress("download",
                                   f"prefetch failed ({prefetch.error}); downloading normally")
+            # A file that came with the mail is already on disk.
+            local_path = (getattr(case_ctx, "local_paths", None) or {}).get(str(zip_item[0]))
+            if not downloaded and local_path and Path(local_path).exists():
+                downloaded.append([local_path, str(zip_item[0]), True])
+                self.progress("download", "attached to the mail — already on disk, nothing to download")
             for attempt in (1, 2):
                 if downloaded:
                     break
+                analysis.pick_decision["download_attempts"] = attempt
                 try:
                     for item in run_dload_threads([zip_item],
                                                   case_ctx.case_download_dir,
@@ -722,6 +1348,7 @@ class HandsfreeRunner:
                 "wifi_wpp": len(wifi_files or []), "ddd": len(ddd_files or []),
                 "event_logs": len(_evt or []), "bt": len(bt_files or []),
                 "fw": len(_fw or [])}
+            analysis.pick_decision["contents"] = dict(analysis.archive_contents)
             decompose_ok = True
         if not decompose_ok:
             # decompose CRASHED (_stage swallowed the exception): the archive
@@ -790,6 +1417,7 @@ class HandsfreeRunner:
                 ) or {}
                 analysis.clean_description = (organized.get("clean_description")
                                               or "").strip()
+                analysis.time_decision["organizer_used"] = True
             self.progress("issue_time",
                           "anchoring on " + ", ".join(analysis.issue_times[:3]))
         if not analysis.clean_description:
@@ -798,8 +1426,13 @@ class HandsfreeRunner:
         # -- 8. pick the ETL ----------------------------------------------------
         etl_path = None
         with self._stage(analysis, "pick_etl"):
+            pd = analysis.pick_decision
+            pd["captures"] = _describe_captures(
+                list(wifi_files or []) + list(ddd_files or []) + list(bt_files or []),
+                analysis.issue_times[0] if analysis.issue_times else "")
             if analysis.wifi_or_bt == "bt":
                 etl_path = self._pick_bt_etl(bt_files)
+                pd["etl_rule"] = "bt_newest"
             else:
                 # YB / assert issues: the capture folder whose NAME carries a
                 # nonzero error code (e.g. ..._12_4222_0xa_0x0_0x1fffff) is the
@@ -813,14 +1446,30 @@ class HandsfreeRunner:
                 if yb_assert:
                     etl_path = _pick_etl_yb_earliest(wifi_files, ddd_files)
                     if etl_path:
+                        pd["etl_rule"] = "yb_earliest"
                         self.progress(
                             "pick_etl",
                             "YB/assert issue — earliest capture with nonzero "
                             f"error code in folder name: {os.path.basename(os.path.dirname(etl_path))}")
                 if not etl_path:
-                    etl_path = self._pick_etl(wifi_files, ddd_files,
-                                              analysis.issue_times[0] if analysis.issue_times else "")
+                    etl_path, rule, used = self._pick_etl(
+                        wifi_files, ddd_files,
+                        analysis.issue_times[0] if analysis.issue_times else "")
+                    pd["etl_rule"], pd["issue_time_used"] = rule, used
+                    if etl_path:
+                        folder = os.path.basename(os.path.dirname(etl_path))
+                        self.progress("pick_etl", {
+                            "closest_at_or_after_issue": f"closest capture at/after the issue time {used}: {folder}",
+                            "newest_ddd": f"newest DDD capture: {folder}"
+                                          + ("" if used else " (no usable issue time)"),
+                            "newest_wifi": f"newest WRT capture: {folder}"
+                                           + ("" if used else " (no usable issue time)"),
+                        }.get(rule, f"capture: {folder}"))
             analysis.etl_path = etl_path or ""
+            if etl_path:
+                for c in pd["captures"]:
+                    if c["folder"] == os.path.basename(os.path.dirname(etl_path)):
+                        c["role"] = "chosen"
         if not etl_path:
             analysis.mode = "triage_only"
             analysis.ok = bool(analysis.triage)
@@ -829,10 +1478,17 @@ class HandsfreeRunner:
 
         # -- 9. decode ETL -> analysis log --------------------------------------
         if analysis.wifi_or_bt == "bt":
-            from services.etl_parser.bt_parser import find_ready_hci
-            log_path = find_ready_hci(etl_path) or ""
-            if not log_path:
-                with self._stage(analysis, "decode_bt"):
+            # Same as the Wi-Fi branch: an already-decoded HCI is a fast
+            # "done", not a skip, or the stage table shows decode_bt pending
+            # forever on re-runs.
+            log_path = ""
+            with self._stage(analysis, "decode_bt"):
+                from services.etl_parser.bt_parser import find_ready_hci
+                log_path = find_ready_hci(etl_path) or ""
+                if log_path:
+                    self.progress("decode_bt",
+                                  f"reusing existing decoded HCI ({os.path.basename(log_path)})")
+                else:
                     log_path = self._decode_bt(etl_path) or ""
         else:
             # Always record the stage: a cached .log (this case analyzed before)
@@ -868,6 +1524,10 @@ class HandsfreeRunner:
                     f"ETL decode did not produce {os.path.basename(log_path)}")
             return analysis
         analysis.log_path = log_path
+        # The decoded capture's system_info.txt names the driver under test:
+        # it outranks the form and the thread, so settle the driver check again.
+        self._settle_driver_version(analysis, quiet=True)
+        self._snap_analysis(analysis)
 
         # -- 9b. does the log actually cover the reported issue time? ----------
         # e.g. case 01025350: issue stated at 17:14, capture covered
@@ -879,11 +1539,14 @@ class HandsfreeRunner:
                 self._check_time_coverage(analysis)
             except Exception as e:
                 print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+            _set_capture(analysis, etl_path, decode="ok",
+                         covered=not analysis.time_mismatch)
             also_tried = 0
             if analysis.time_mismatch:
                 for alt in self._alternate_etls(
                         wifi_files, ddd_files, analysis.issue_times, {etl_path})[:2]:
                     alt_log = alt + ".log"
+                    _set_capture(analysis, alt, role="alternate")
                     with self._stage(analysis, "decode_etl"):
                         self.progress("decode_etl",
                                       "trying the capture closest to the issue time: "
@@ -891,6 +1554,7 @@ class HandsfreeRunner:
                         if not os.path.exists(alt_log):
                             self._decode_etl(alt)
                     if not os.path.exists(alt_log):
+                        _set_capture(analysis, alt, decode="failed")
                         continue
                     also_tried += 1
                     analysis.time_mismatch = {}
@@ -899,8 +1563,11 @@ class HandsfreeRunner:
                         self._check_time_coverage(analysis)
                     except Exception as e:
                         print(f"[handsfree.runner] time-coverage check failed (non-fatal): {e}")
+                    _set_capture(analysis, alt, decode="ok", covered=not analysis.time_mismatch)
                     if not analysis.time_mismatch:
+                        _set_capture(analysis, alt, role="chosen")
                         break
+                analysis.pick_decision["alternates_tried"] = also_tried
                 if analysis.time_mismatch and also_tried:
                     analysis.time_mismatch["also_tried"] = also_tried
             if analysis.time_mismatch and analysis.yb_case:
@@ -951,11 +1618,12 @@ class HandsfreeRunner:
                 src = {"wrt_log": "from WRT log", "agent_text": "from agent text",
                        "env_detail": "from IPS Environment Details form",
                        None: ""}.get(evidence.get("source"), "")
-                self.progress(
-                    "echo_kb",
-                    f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}"
-                    + (f" ({src})" if src else "")
-                    + f", yellow bang: {evidence['yellow_bang']}")
+                echo_summary = (f"asking Echo KB — asserts: {evidence['assert_codes'] or 'none'}"
+                                + (f" ({src})" if src else "")
+                                + f", yellow bang: {evidence['yellow_bang']}")
+                self.progress("echo_kb", echo_summary)
+                echo_live: list[dict] = []
+                self._snap(echo_live_summary=echo_summary, echo_live=[])
 
                 def _clip(text: object, limit: int) -> str:
                     s = str(text).strip()
@@ -963,24 +1631,45 @@ class HandsfreeRunner:
 
                 def _ask_logged(question: str) -> str:
                     # Surface the exchange in the run log (full text stays in
-                    # analysis.echo_insights → draft's Analysis details).
+                    # analysis.echo_insights → draft's Analysis details) and
+                    # in the live panel as each answer arrives.
                     self.progress("echo_kb", "Q → Echo:\n" + _clip(question, 700))
+                    entry = {"kind": "", "code": None, "question": _clip(question, 400),
+                             "answer": "", "error": ""}
+                    echo_live.append(entry)
+                    self._snap(echo_live=[dict(e) for e in echo_live])
                     try:
                         answer = ask_echo_kb(question)
                     except EchoUnavailable as e:
                         self.progress("echo_kb", f"Echo unavailable: {_clip(e, 300)}")
+                        entry["error"] = _clip(e, 300)
+                        self._snap(echo_live=[dict(e) for e in echo_live])
                         raise
                     self.progress("echo_kb", "A ← Echo:\n" + _clip(answer, 900))
+                    entry["answer"] = _clip(answer, 900)
+                    self._snap(echo_live=[dict(e) for e in echo_live])
                     return answer
 
+                # The same windowed evidence drives the questions: a
+                # recompute without the window would ask about the asserts
+                # just ignored as another incident's.
                 analysis.echo_insights = collect_echo_insights(analysis,
-                                                               ask=_ask_logged)
+                                                               ask=_ask_logged,
+                                                               evidence=evidence)
                 answered = sum(1 for i in analysis.echo_insights if i.get("answer"))
                 self.progress(
                     "echo_kb",
                     f"{answered}/{len(analysis.echo_insights)} insight(s) answered")
+                # Final form: kind + code per insight (the live entries only
+                # knew the question text).
+                self._snap(echo_live=[_compact_insight(i) for i in analysis.echo_insights
+                                      if isinstance(i, dict)],
+                           echo_live_summary=echo_summary
+                           + f" — {answered}/{len(analysis.echo_insights)} answered")
             else:
                 self.progress("echo_kb", "no assert / yellow-bang evidence — skipped")
+                self._snap(echo_live_summary="no assert / yellow-bang evidence — skipped",
+                           echo_live=[])
 
         got_report = any(i.report for i in analysis.incidents)
         analysis.mode = "full" if got_report else "triage_only"
@@ -991,15 +1680,15 @@ class HandsfreeRunner:
 
     # ------------------------------------------------------------------
     def _check_time_coverage(self, analysis: CaseAnalysis,
-                             grace_minutes: int = 10) -> None:
+                             grace_minutes: int = TIME_GRACE_MIN) -> None:
         """Flag when NO reported issue time falls inside the decoded log's
-        time range (±grace). Only full datetimes count — time-only values
-        borrow the log's date downstream, so they are inside by construction.
+        time range (±grace). Full datetimes are mapped into the log's clock;
+        a clock-only value ("10:17", accepted as minute-precise) is placed
+        on the dates the log spans — a capture of 08:00–08:10 does not cover
+        an issue reported at 10:17 just because the date was not stated.
         Sets analysis.time_mismatch and emits a WARNING progress line."""
         from datetime import timedelta
-        from utils.issue_time_utils import (format_issue_time,
-                                            parse_issue_time_string,
-                                            read_log_time_range)
+        from utils.issue_time_utils import format_issue_time, read_log_time_range
 
         if not analysis.issue_times or not analysis.log_path:
             return
@@ -1009,31 +1698,130 @@ class HandsfreeRunner:
 
         grace = timedelta(minutes=grace_minutes)
         checked: list[str] = []
-        covered = False
+        mapped: list[str] = []       # each checked value in the log's clock
+        covered = None               # (customer_dt, log_dt, anchor) that matched
+        customer_tz = self._customer_tz(analysis.log_path)
+        placements: list[dict] = []  # live panel: every candidate tried
         for raw in analysis.issue_times:
-            dt, time_only = parse_issue_time_string(str(raw))
-            if dt is None or time_only:
+            cands = self._issue_time_candidates_tagged(raw, analysis.log_path, first, last)
+            if not cands:
+                placements.append({"time": str(raw), "candidates": [],
+                                   "note": "clock-only time occurs on no date the log spans"})
                 continue
             checked.append(str(raw))
-            for cand in self._log_frame_candidates(dt, analysis.log_path, first, last):
+            rows = []
+            for cust, cand, anchor in cands[:8]:
+                inside = first - grace <= cand <= last + grace
+                delta = 0 if inside else int((first - cand).total_seconds() if cand < first
+                                              else (cand - last).total_seconds())
+                rows.append({"customer": format_issue_time(cust, with_ms=False),
+                             "log": format_issue_time(cand, with_ms=False),
+                             "anchor": anchor, "inside": inside, "outside_s": delta})
+            placements.append({"time": str(raw), "candidates": rows})
+            for cust, cand, anchor in cands:
                 if first - grace <= cand <= last + grace:
-                    covered = True
+                    covered = (cust, cand, anchor)
                     break
             if covered:
                 break
+            best = self._preferred_candidate(cands)
+            mapped.append(format_issue_time(best[1], with_ms=False) if best else "")
+        td = analysis.time_decision if isinstance(analysis.time_decision, dict) else {}
+        analysis.time_decision = td
+        td["placements"] = placements
+        td["coverage"] = {"log_file": os.path.basename(analysis.log_path or ""),
+                          "log_first": format_issue_time(first, with_ms=False),
+                          "log_last": format_issue_time(last, with_ms=False),
+                          "grace_min": grace_minutes, "covered": bool(covered),
+                          "customer_tz": customer_tz}
+        if covered:
+            td["coverage"]["chosen"] = {"customer": format_issue_time(covered[0], with_ms=False),
+                                       "log": format_issue_time(covered[1], with_ms=False),
+                                       "anchor": covered[2]}
 
-        if checked and not covered:
+        if covered:
+            cust, cand, anchor = covered
+            analysis.time_alignment = {
+                "customer_time": format_issue_time(cust, with_ms=False),
+                "log_time": format_issue_time(cand, with_ms=False),
+                "customer_tz": customer_tz,
+                "anchor": anchor,
+                "offset": _fmt_offset(cand - cust),
+            }
+            if anchor != ANCHOR_AS_IS:
+                self.progress(
+                    "decode_etl",
+                    f"issue time {analysis.time_alignment['customer_time']} (customer) = "
+                    f"{analysis.time_alignment['log_time']} (log clock, "
+                    f"{analysis.time_alignment['offset']} via {ANCHOR_LABELS[anchor]})")
+        elif checked:
             analysis.time_mismatch = {
                 "issue_times": checked,
                 "log_first": format_issue_time(first, with_ms=False),
                 "log_last": format_issue_time(last, with_ms=False),
                 "grace_minutes": grace_minutes,
+                "customer_tz": customer_tz,
             }
+            if any(mapped):
+                analysis.time_mismatch["issue_times_log"] = mapped
+            # The log's range in the customer's clock, so the public request
+            # never shows the customer Taiwan times.
+            shift = self._log_to_customer_shift(analysis.log_path, first, last, customer_tz)
+            if shift:
+                cust_first, cust_last, anchor, offset = shift
+                analysis.time_mismatch.update({
+                    "log_first_customer": format_issue_time(cust_first, with_ms=False),
+                    "log_last_customer": format_issue_time(cust_last, with_ms=False),
+                    "anchor": anchor,
+                    "offset": _fmt_offset(offset),
+                })
             self.progress(
                 "decode_etl",
                 f"WARNING: log covers {analysis.time_mismatch['log_first']} – "
                 f"{analysis.time_mismatch['log_last']} but the reported issue "
                 f"time(s) {', '.join(checked)} are OUTSIDE this window")
+
+    @staticmethod
+    def _customer_tz(log_path: str) -> str:
+        """The customer's time zone name (system_info.txt / sidecar), '' when unknown."""
+        try:
+            from utils.timezone_utils import get_effective_timezone
+            return get_effective_timezone(log_path) or ""
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _log_to_customer_shift(log_path: str, first, last, customer_tz: str):
+        """(first, last, anchor, offset) with the log's range expressed in the
+        customer's clock: the tz helper when it moves the time, else the
+        capture-folder stamp, else None (same clock as far as we know)."""
+        from datetime import timedelta
+        if first is None or last is None:
+            return None
+        if customer_tz:
+            try:
+                from utils.timezone_utils import taiwan_to_local
+                cf, cl = taiwan_to_local(first, customer_tz), taiwan_to_local(last, customer_tz)
+                if cf is not None and cl is not None and cf != first:
+                    return cf, cl, ANCHOR_TZ, first - cf
+            except Exception:
+                pass
+        folder_ts = _folder_timestamp(log_path)
+        if folder_ts is not None:
+            offset = last - folder_ts
+            if timedelta(minutes=20) <= abs(offset) <= timedelta(hours=26):
+                return first - offset, last - offset, ANCHOR_FOLDER, offset
+        return None
+
+    @staticmethod
+    def _preferred_candidate(cands: list):
+        """Of the tagged candidates for one value, the one to quote when none
+        falls inside the log: tz helper, then folder stamp, then as-is."""
+        for want in (ANCHOR_TZ, ANCHOR_FOLDER, ANCHOR_AS_IS):
+            for c in cands:
+                if c[2] == want:
+                    return c
+        return cands[0] if cands else None
 
     # Asserts count as evidence for THIS issue only inside this window
     # around the reported time (minutes before / after).
@@ -1055,14 +1843,23 @@ class HandsfreeRunner:
             the DUT clock; the helper alone rejected a log that covered the
             issue.
         """
+        return [c for c, _anchor in
+                HandsfreeRunner._log_frame_candidates_tagged(dt, log_path, first, last)]
+
+    @staticmethod
+    def _log_frame_candidates_tagged(dt, log_path: str, first, last) -> list:
+        """_log_frame_candidates with the anchor that produced each value:
+        [(log_dt, ANCHOR_AS_IS | ANCHOR_TZ | ANCHOR_FOLDER)], as-is first."""
         from datetime import timedelta
-        cands = [dt]
+        cands = [(dt, ANCHOR_AS_IS)]
+        seen = [dt]
         try:
             from utils.issue_time_ai import determine_issue_time_frames
             mapped = determine_issue_time_frames(
                 dt, [log_path], first, last).get("log_frame")
-            if mapped and mapped not in cands:
-                cands.append(mapped)
+            if mapped and mapped not in seen:
+                cands.append((mapped, ANCHOR_TZ))
+                seen.append(mapped)
         except Exception:
             pass
         folder_ts = _folder_timestamp(log_path)
@@ -1070,29 +1867,86 @@ class HandsfreeRunner:
             offset = last - folder_ts
             if abs(offset) <= timedelta(hours=26) and abs(offset) >= timedelta(minutes=20):
                 shifted = dt + offset
-                if shifted not in cands:
-                    cands.append(shifted)
+                if shifted not in seen:
+                    cands.append((shifted, ANCHOR_FOLDER))
         return cands
 
+    @staticmethod
+    def _issue_time_candidates(raw: str, log_path: str, first, last) -> list:
+        """The reported issue time as datetimes in the log's clock. A full
+        datetime goes through _log_frame_candidates; a clock-only value is
+        placed on every date the log spans (one day either side too, for
+        the clock offsets _log_frame_candidates applies) and each placement
+        mapped the same way. [] when the value does not parse, or when a
+        clock-only value has no log range to be placed on."""
+        return [c for _cust, c, _anchor in
+                HandsfreeRunner._issue_time_candidates_tagged(raw, log_path, first, last)]
+
+    @staticmethod
+    def _issue_time_candidates_tagged(raw: str, log_path: str, first, last) -> list:
+        """_issue_time_candidates keeping the customer-clock value each log
+        candidate came from: [(customer_dt, log_dt, anchor)]. For a clock-only
+        value customer_dt is the clock placed on a date the log spans."""
+        from datetime import datetime, timedelta
+        from utils.issue_time_utils import parse_issue_time_string
+        dt, time_only = parse_issue_time_string(str(raw))
+        if dt is None:
+            return []
+        if not time_only:
+            return [(dt, c, a) for c, a in
+                    HandsfreeRunner._log_frame_candidates_tagged(dt, log_path, first, last)]
+        if first is None or last is None:
+            return []
+        out: list = []
+        seen: list = []
+        day0 = first.date() - timedelta(days=1)
+        days = min((last.date() - first.date()).days, 7) + 2
+        for n in range(days + 1):
+            placed = datetime.combine(day0 + timedelta(days=n), dt.time())
+            for cand, anchor in HandsfreeRunner._log_frame_candidates_tagged(
+                    placed, log_path, first, last):
+                if cand not in seen:
+                    seen.append(cand)
+                    out.append((placed, cand, anchor))
+        return out
+
+    def _align_issue_time(self, raw: str, log_path: str, first, last) -> Optional[dict]:
+        """One reported issue time placed in the log's clock:
+        {customer: dt, log: dt, anchor, inside: bool}. The candidate that
+        falls inside the log window wins (inside=True); otherwise, full
+        datetimes only, the tz helper's mapping, then the folder stamp's,
+        then the value as-is (inside=False). A clock-only value that occurs
+        nowhere in the log gives None, as does an unparseable one."""
+        from utils.issue_time_utils import parse_issue_time_string
+        cands = self._issue_time_candidates_tagged(raw, log_path, first, last)
+        if not cands:
+            return None
+        if first and last:
+            # Same grace as the coverage check: a capture usually starts
+            # seconds to minutes after the reported moment (01033659: the
+            # reported 20:10:00 vs a log starting 20:11:13).
+            from datetime import timedelta
+            grace = timedelta(minutes=self.TIME_GRACE_MIN)
+            for cust, cand, anchor in cands:
+                if first - grace <= cand <= last + grace:
+                    return {"customer": cust, "log": cand, "anchor": anchor, "inside": True}
+        if parse_issue_time_string(str(raw))[1]:
+            return None          # clock-only, never inside the log: no anchor
+        cust, cand, anchor = self._preferred_candidate(cands)
+        return {"customer": cust, "log": cand, "anchor": anchor, "inside": False}
+
     def _issue_datetime_in_log_frame(self, analysis: CaseAnalysis):
-        """First reported issue time as a full datetime in the log's clock:
-        the candidate that falls inside the log window wins, else the tz
-        helper's mapping. None when no full datetime is known."""
-        from utils.issue_time_utils import (parse_issue_time_string,
-                                            read_log_time_range)
+        """First reported issue time as a full datetime in the log's clock
+        (see _align_issue_time), or None."""
+        from utils.issue_time_utils import read_log_time_range
         if not analysis.issue_times or not analysis.log_path:
             return None
         first, last = read_log_time_range(analysis.log_path)
         for raw in analysis.issue_times:
-            dt, time_only = parse_issue_time_string(str(raw))
-            if dt is None or time_only:
+            if not self._issue_time_candidates_tagged(raw, analysis.log_path, first, last):
                 continue
-            cands = self._log_frame_candidates(dt, analysis.log_path, first, last)
-            if first and last:
-                for cand in cands:
-                    if first <= cand <= last:
-                        return cand
-            return cands[1] if len(cands) > 1 else cands[0]
+            align = self._align_issue_time(raw, analysis.log_path, first, last)
+            return align["log"] if align else None
         return None
 
     def _run_bsod_branch(self, analysis: CaseAnalysis, case_ctx,
@@ -1146,7 +2000,25 @@ class HandsfreeRunner:
             if not dest:
                 raise RuntimeError("BSOD dump share unreachable")
             from utils.attachment_download import run_dload_threads
+            # Dumps that came with the mail: copy them to the share.
+            local = getattr(case_ctx, "local_paths", None) or {}
+            if local:
+                import shutil
+                remaining = []
+                for it in new_items:
+                    src = local.get(str(it[0]))
+                    if src and Path(src).exists():
+                        target = str(Path(dest) / str(it[0]))
+                        if not Path(target).exists():
+                            shutil.copy2(src, target)
+                        downloaded.append([target, str(it[0]), True])
+                        self.progress("bsod_download", f"{it[0]}: copied from the mail attachment")
+                    else:
+                        remaining.append(it)
+                new_items = remaining
             for attempt in (1, 2):
+                if not new_items:
+                    break
                 try:
                     for item in run_dload_threads(new_items, dest, socketio=None):
                         downloaded.append(item)
@@ -1273,6 +2145,74 @@ class HandsfreeRunner:
                           "no PotatoFarm result in the folder yet — the next round "
                           "picks it up (the parser also e-mails it)")
 
+    def _start_echo_advice(self, analysis: CaseAnalysis, case_ctx) -> None:
+        if not self.ECHO_ADVICE_ENABLED:
+            return
+        try:
+            from .case_reader import _normalize_comments, _CUSTOMER_AUTHOR_PREFIXES
+            from .echo_client import build_next_steps_question
+            latest = ""
+            for r_ in reversed(_normalize_comments(getattr(case_ctx, "comments", None))):
+                if r_["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES):
+                    latest = r_["text"]
+                    break
+            question = build_next_steps_question(
+                subject=analysis.subject, description=analysis.clean_description or analysis.description,
+                domain=analysis.issue_domain, subcategory=analysis.issue_subcategory,
+                issue_times=analysis.issue_times,
+                missing_info=(analysis.case_reader or {}).get("missing_info"),
+                attachments=getattr(case_ctx, "attachment_list", None),
+                latest_customer_comment=latest, reader_next_action=analysis.next_action)
+        except Exception as e:
+            print(f"[handsfree.runner] echo advice question not built: {e}")
+            return
+        analysis.echo_advice = {"status": "asking", "question": question, "answer": "",
+                                "error": "", "started_at": time.time(), "elapsed_s": 0}
+        self._snap(echo_advice=dict(analysis.echo_advice))
+        self.progress("read_case_history",
+                      "asking the Echo knowledge base for next-step suggestions (in the background)")
+
+        def _run(adv=analysis.echo_advice):
+            from .echo_client import EchoUnavailable, ask_echo_kb
+            try:
+                adv["answer"] = str(ask_echo_kb(question, timeout=self.ECHO_ADVICE_TIMEOUT_S) or "")
+                adv["status"] = "answered" if adv["answer"].strip() else "empty"
+            except EchoUnavailable as e:
+                adv["status"], adv["error"] = "unavailable", str(e)[:300]
+            except Exception as e:
+                adv["status"], adv["error"] = "unavailable", f"{type(e).__name__}: {e}"[:300]
+            adv["elapsed_s"] = int(time.time() - adv["started_at"])
+            self._snap(echo_advice=dict(adv))
+            self.progress("read_case_history",
+                          f"Echo next-step suggestions: {adv['status']}"
+                          + (f" ({len(adv['answer'])} chars, {adv['elapsed_s']} s)"
+                             if adv["status"] == "answered" else
+                             (f" — {adv['error']}" if adv["error"] else "")))
+
+        self._echo_thread = threading.Thread(target=_run, daemon=True,
+                                             name="handsfree-echo-advice")
+        self._echo_thread.start()
+
+    def _join_echo_advice(self, analysis: CaseAnalysis) -> None:
+        t, self._echo_thread = self._echo_thread, None
+        if t is None:
+            return
+        if t.is_alive():
+            self.progress("read_case_history",
+                          "waiting for the Echo next-step suggestions before composing the draft")
+            t.join(timeout=self.ECHO_ADVICE_JOIN_S)
+        if t.is_alive() and analysis.echo_advice.get("status") == "asking":
+            # Still no answer: the draft is composed without it; the thread
+            # keeps running and the live panel shows the answer when it lands.
+            analysis.echo_advice.update(
+                note=f"no answer within {self.ECHO_ADVICE_JOIN_S} s — the draft was composed "
+                     "without it; the live panel updates when Echo answers",
+                elapsed_s=int(time.time() - analysis.echo_advice["started_at"]))
+            self._snap(echo_advice=dict(analysis.echo_advice))
+            self.progress("read_case_history",
+                          f"Echo next-step suggestions not in within {self.ECHO_ADVICE_JOIN_S} s — "
+                          "continuing; they show in the live panel when they arrive")
+
     def _assert_window(self, analysis: CaseAnalysis):
         from datetime import timedelta
         if getattr(analysis, "yb_case", False):
@@ -1314,7 +2254,7 @@ class HandsfreeRunner:
         if not bt_files:
             return None
         try:
-            from blueprints.bt_chatbot.bt_chatbot_routes import _parse_path_timestamp
+            from blueprints.log_parser.log_parser_routes import _parse_path_timestamp
             dated = [(path, _parse_path_timestamp(path)) for path in bt_files]
             dated = [(path, ts) for path, ts in dated if ts is not None]
             if dated:
@@ -1324,18 +2264,31 @@ class HandsfreeRunner:
         return sorted(bt_files)[-1]
 
     def _pick_etl(self, wifi_files: list, ddd_files: list,
-                  issue_time_str: str) -> Optional[str]:
+                  issue_time_str: str) -> tuple:
         """AI-time pick first; fallback = newest DDD, then newest Wi-Fi ETL.
-        (Deliberately NOT get_auto_analysis_etl — that reads the Flask session.)"""
-        from utils.issue_time_ai import pick_etl_by_ai_time
+        (Deliberately NOT get_auto_analysis_etl — that reads the Flask session.)
+        Returns (path, rule, issue_time_used): rule is
+        closest_at_or_after_issue | newest_ddd | newest_wifi | none.
 
+        The reader copies the issue time "exactly as written" ("16:31/12/13/2025",
+        "2026-1-14-13-54-47"); pick_etl_by_ai_time only parses MM/DD/YYYY-HH:MM:SS
+        / ISO / HH:MM:SS, so the value is normalized first — otherwise the
+        pick silently fell back to the newest capture."""
+        from utils.issue_time_ai import pick_etl_by_ai_time
+        from utils.issue_time_utils import format_issue_time, parse_issue_time_string
+
+        used = ""
+        if issue_time_str:
+            dt, time_only = parse_issue_time_string(str(issue_time_str))
+            if dt is not None:
+                used = dt.strftime("%H:%M:%S") if time_only else format_issue_time(dt, with_ms=False)
         file_dicts = {"wifi_dict": {"zip": list(wifi_files or [])},
                       "ddd_dict": {"zip": list(ddd_files or [])}}
-        if issue_time_str:
+        if used:
             try:
-                picked = pick_etl_by_ai_time(file_dicts, issue_time_str)
+                picked = pick_etl_by_ai_time(file_dicts, used)
                 if picked:
-                    return picked
+                    return picked, "closest_at_or_after_issue", used
             except Exception as e:
                 print(f"[handsfree.runner] AI-time ETL pick failed: {e}")
 
@@ -1355,7 +2308,11 @@ class HandsfreeRunner:
             except Exception:
                 return sorted(etls)[-1]
 
-        return _newest(ddd_files) or _newest(wifi_files)
+        picked = _newest(ddd_files)
+        if picked:
+            return picked, "newest_ddd", used
+        picked = _newest(wifi_files)
+        return picked, ("newest_wifi" if picked else "none"), used
 
     def _decode_etl(self, etl_path: str) -> None:
         """Run the WPP/DDD decoder headlessly.
@@ -1420,26 +2377,75 @@ class HandsfreeRunner:
             attachment_time=analysis.attachment_time,
         )
 
+        # The log's clock (decoder host, GMT+8) vs the customer's: the agent's
+        # PreScan window must sit on the reported moment AS WRITTEN IN THE LOG.
+        log_first = log_last = None
+        customer_tz = ""
+        if analysis.wifi_or_bt == "wifi" and analysis.log_path:
+            try:
+                from utils.issue_time_utils import read_log_time_range
+                log_first, log_last = read_log_time_range(analysis.log_path)
+                customer_tz = self._customer_tz(analysis.log_path)
+            except Exception as e:
+                print(f"[handsfree.runner] log time range unavailable: {e}")
+
         times = analysis.issue_times or [""]
-        for t in times:
+        sent_all: list[dict] = []
+        agent_results: list[dict] = []
+        for idx, t in enumerate(times):
             inc = IncidentReport(issue_time=t)
             captured: list[dict] = []
+            live_steps: list[dict] = []
+            live_head = {"incident": t, "index": idx + 1, "total": len(times),
+                         "status": "running"}
 
-            def _capture(step, _cap=captured):
-                if isinstance(step, dict) and len(_cap) < _MAX_STEPS_KEPT:
+            def _capture(step, _cap=captured, _live=live_steps, _head=live_head):
+                if not isinstance(step, dict):
+                    return
+                if len(_cap) < _MAX_STEPS_KEPT:
                     _cap.append({
                         "role": str(step.get("role") or ""),
                         "content": str(step.get("content") or "")[:_STEP_CONTENT_CAP],
                     })
+                # Live panel: the last steps as they happen (bounded).
+                _live.append(_compact_step(step))
+                del _live[:-40]
+                self._snap(agent_live=dict(_head, steps=list(_live), result=None))
 
-            # Mirror the UI: per-incident issue-time override on the agent.
+            # Mirror the UI: per-incident issue-time override on the agent —
+            # in the LOG's clock when the reported time maps inside the log
+            # (the same alignment the coverage check accepted), else as before.
             if t:
                 try:
-                    from utils.issue_time_utils import parse_issue_time_string, resolve_issue_time
-                    dt, _time_only = parse_issue_time_string(t)
-                    if dt is not None:
-                        resolved, _src = resolve_issue_time(t, analysis.log_path)
-                        agent.issue_time = resolved or dt
+                    from utils.issue_time_utils import (format_issue_time,
+                                                        parse_issue_time_string,
+                                                        resolve_issue_time)
+                    align = None
+                    if log_first is not None and log_last is not None:
+                        align = self._align_issue_time(t, analysis.log_path,
+                                                       log_first, log_last)
+                    if align and align["inside"]:
+                        agent.issue_time = align["log"]
+                        for attr, val in (("_issue_time_time_only", False),
+                                          ("issue_time_customer", align["customer"]),
+                                          ("issue_time_tz", customer_tz)):
+                            if hasattr(agent, attr):
+                                setattr(agent, attr, val)
+                        inc.issue_time_customer = format_issue_time(align["customer"], with_ms=False)
+                        inc.issue_time_log = format_issue_time(align["log"], with_ms=False)
+                        inc.time_anchor = align["anchor"]
+                        if align["anchor"] != ANCHOR_AS_IS:
+                            self.progress(
+                                "agent_analysis",
+                                f"issue time {inc.issue_time_customer} (customer) = "
+                                f"{inc.issue_time_log} (log, "
+                                f"{_fmt_offset(align['log'] - align['customer'])} via "
+                                f"{ANCHOR_LABELS[align['anchor']]})")
+                    else:
+                        dt, _time_only = parse_issue_time_string(t)
+                        if dt is not None:
+                            resolved, _src = resolve_issue_time(t, analysis.log_path)
+                            agent.issue_time = resolved or dt
                 except Exception as e:
                     print(f"[handsfree.runner] issue-time override failed ({t}): {e}")
 
@@ -1447,6 +2453,11 @@ class HandsfreeRunner:
                 f"{analysis.clean_description} at around {t}" if t
                 else analysis.clean_description
             )
+            inc.sent_for_analysis = _sent_for_analysis(
+                inc, agent, primed_description, customer_tz,
+                analysis.log_path, log_first, log_last)
+            sent_all.append(inc.sent_for_analysis)
+            self._snap(sent_for_analysis=list(sent_all))
             self.progress("agent_analysis", f"incident @ {t or 'unspecified time'}")
             try:
                 res = agent.chat(inc.user_message, max_steps=max_steps,
@@ -1467,3 +2478,8 @@ class HandsfreeRunner:
                 print(f"[handsfree.runner] agent run failed:\n{traceback.format_exc()}")
             inc.steps = captured
             analysis.incidents.append(inc)
+            summary = _result_summary(inc)
+            agent_results.append(summary)
+            self._snap(agent_live=dict(live_head, status=inc.result_type or "error",
+                                       steps=list(live_steps), result=summary),
+                       agent_results=list(agent_results))

@@ -93,9 +93,19 @@ def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> 
     the case text -> the sub-category named like the domain -> first one.
     Returns "" for domains without sub-categories, and for _SUBCAT_ASK
     domains when nothing matched (the reply then asks which one)."""
+    return resolve_subcategory_explained(domain, name, context_text)[0]
+
+
+def resolve_subcategory_explained(domain: str, name: str = "",
+                                  context_text: str = "") -> tuple:
+    """resolve_subcategory plus HOW it decided (the live panel shows it):
+    (sub, rule), rule one of "none" (domain has no sub-categories),
+    "explicit" (the reader / IPS named it), "keyword:<word>" (found in the
+    case text), "named_like_domain", "ask" (OEM Tools: nothing matched, the
+    reply asks which tool), "first" (default)."""
     subs = domain_subcategories(domain)
     if not subs:
-        return ""
+        return "", "none"
 
     def _word(sub: str, text: str) -> bool:
         return bool(re.search(rf"\b{re.escape(sub.lower())}\b", text))
@@ -108,9 +118,9 @@ def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> 
         # words only — "ant" must not hit "constant" / "antenna".
         if sub.isupper():
             if _word(sub, raw):
-                return sub
+                return sub, "explicit"
         elif sub.lower() == raw or sub.lower() in raw or raw in sub.lower():
-            return sub
+            return sub, "explicit"
     text = str(context_text or "").lower()
     if text:
         # most-specific keyword first (e.g. "roam"/"scan" beat generic connect)
@@ -119,17 +129,17 @@ def resolve_subcategory(domain: str, name: str = "", context_text: str = "") -> 
                 continue
             if sub.isupper():
                 if _word(sub, text):
-                    return sub
+                    return sub, f"keyword:{sub}"
                 continue
             root = sub.lower().rstrip("gmi")[:4] if len(sub) > 4 else sub.lower()
             if root and root in text:
-                return sub
+                return sub, f"keyword:{root}"
     for sub in subs:
         if sub.lower() == domain.lower():
-            return sub
+            return sub, "named_like_domain"
     if domain in _SUBCAT_ASK:
-        return ""
-    return next(iter(subs))
+        return "", "ask"
+    return next(iter(subs)), "first"
 
 
 def subcategory_ask(domain: str, subcat: str) -> str:
@@ -178,6 +188,7 @@ def deterministic_fills(analysis, fills: dict) -> None:
             if rx.search(e["item"]) and not e["provided"] and value:
                 e["provided"] = True
                 e["value"] = value
+                e["source"] = "pipeline"       # the pipeline itself vouches for it
 
     chosen = getattr(analysis, "chosen_attachment", "") or ""
     log_ok = bool(getattr(analysis, "log_path", "") or "")
@@ -215,6 +226,24 @@ def deterministic_fills(analysis, fills: dict) -> None:
             mark("general_info", r"reproduction steps", a[:200])
         if re.search(r"frequency", str(q), re.IGNORECASE):
             mark("general_info", r"reproduction rate", a[:100])
+    # Driver check (runner._settle_driver_version): a customer on the latest
+    # released branch has answered the "latest driver release" question;
+    # otherwise the item stays open and the reply's driver paragraph asks.
+    if getattr(analysis, "driver_check", "") == "ok":
+        mark("general_info", _DRIVER_ITEM_RE.pattern,
+             f"driver {getattr(analysis, 'driver_version', '')} is on the latest "
+             f"released branch ({getattr(analysis, 'latest_driver', '')})")
+    # Regression test (Charles, 2026-11-09): the item asks whether the issue
+    # is absent on an EARLIER version and WHICH one passed, so the build
+    # that introduced it can be isolated. The reproducing version alone
+    # says nothing about that — only a last-known-good version the thread
+    # states (reader field last_good_version) answers the item.
+    last_good = str(getattr(analysis, "last_good_version", "") or "").strip()
+    if last_good:
+        failing = str(getattr(analysis, "driver_version", "") or "").strip()
+        mark("general_info", _REGRESSION_ITEM_RE.pattern,
+             f"Yes — the issue does not reproduce on driver {last_good}"
+             + (f"; reproduces on {failing}" if failing else ""))
 
 
 _FILL_PROMPT = """\
@@ -238,21 +267,42 @@ List only the items that ARE provided.
 
 _WRT_ITEM_RE = re.compile(r"WRT Log|WPP driver log", re.IGNORECASE)
 _DUMP_ITEM_RE = re.compile(r"Kernel Dump|memory dump|minidump|crash dump", re.IGNORECASE)
+_DRIVER_ITEM_RE = re.compile(r"latest driver release", re.IGNORECASE)
+_REGRESSION_ITEM_RE = re.compile(r"regression issue", re.IGNORECASE)
+# What the reply asks for while the regression item is open (fixed text,
+# posts publicly).
+REGRESSION_ASK = ("the last driver version on which the issue did NOT reproduce "
+                  "(regression test)")
 
 
 def llm_fill(llm, fills: dict, case_material: str, *,
-             lock_wrt_items: bool = False, lock_dump_items: bool = False) -> None:
+             lock_wrt_items: bool = False, lock_dump_items: bool = False,
+             lock_driver_item: bool = False,
+             lock_regression_item: bool = False) -> None:
     """One LLM pass over the still-unfilled items. Mutates `fills`; any
     failure leaves items unfilled (the customer is simply asked again).
     lock_wrt_items: the pipeline established that no usable WRT/WPP log was
     provided (request_logs) — the text pass must not tick those items from
     an attachment label, or the reply would contradict itself.
-    lock_dump_items: same for the BSOD dump when the reply asks for it."""
-    todo: list[tuple[str, dict]] = [
-        (sec, e) for sec in ("general_info", "required_log", "required_info")
-        for e in fills.get(sec, []) if not e["provided"]
-        and not (lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))
-        and not (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))]
+    lock_dump_items: same for the BSOD dump when the reply asks for it.
+    lock_driver_item: same for "replicated on the latest driver release"
+    when the driver check found the customer outdated (or unknown) and the
+    reply asks for validation on the latest release.
+    lock_regression_item: same for "Is this a regression issue?" when no
+    last-known-good version is stated — a reproducing version alone must
+    not tick it; the reply asks which earlier version passed."""
+    todo: list[tuple[str, dict]] = []
+    for sec in ("general_info", "required_log", "required_info"):
+        for e in fills.get(sec, []):
+            if e["provided"]:
+                continue
+            if ((lock_wrt_items and _WRT_ITEM_RE.search(e["item"]))
+                    or (lock_dump_items and _DUMP_ITEM_RE.search(e["item"]))
+                    or (lock_driver_item and _DRIVER_ITEM_RE.search(e["item"]))
+                    or (lock_regression_item and _REGRESSION_ITEM_RE.search(e["item"]))):
+                e["source"] = "locked"         # the reply itself asks for it
+                continue
+            todo.append((sec, e))
     if not todo or llm is None:
         return
     items_block = "\n".join(f"{i + 1}. {e['item']}" for i, (_, e) in enumerate(todo))
@@ -279,6 +329,7 @@ def llm_fill(llm, fills: dict, case_material: str, *,
                 if val:
                     todo[idx][1]["provided"] = True
                     todo[idx][1]["value"] = val
+                    todo[idx][1]["source"] = "case text"   # read from what the customer wrote
     except Exception as e:
         print(f"[handsfree.checklist] llm fill skipped: {e}")
 
@@ -286,7 +337,7 @@ def llm_fill(llm, fills: dict, case_material: str, *,
 def build_fills(analysis, llm=None) -> dict:
     """Deterministic pipeline facts first, then one LLM pass for the rest."""
     domain = getattr(analysis, "issue_domain", "") or FALLBACK_DOMAIN
-    subcat = resolve_subcategory(
+    subcat, subcat_rule = resolve_subcategory_explained(
         domain, getattr(analysis, "issue_subcategory", ""),
         " ".join([str(getattr(analysis, "clean_description", "") or ""),
                   str(getattr(analysis, "description", "") or ""),
@@ -311,8 +362,66 @@ def build_fills(analysis, llm=None) -> dict:
     ]))
     llm_fill(llm, fills, material,
              lock_wrt_items=getattr(analysis, "mode", "") == "request_logs",
-             lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump")
+             lock_dump_items=getattr(analysis, "log_request_reason", "") == "no_dump",
+             lock_driver_item=getattr(analysis, "driver_check", "") in ("outdated", "unknown"),
+             # no passing version stated -> the text pass may not tick it
+             lock_regression_item=not str(getattr(analysis, "last_good_version", "")
+                                          or "").strip())
+    try:
+        analysis.checklist_decision = checklist_decision(analysis, fills, domain,
+                                                         subcat, subcat_rule)
+    except Exception as e:
+        print(f"[handsfree.checklist] decision record skipped: {e}")
     return fills
+
+
+def checklist_decision(analysis, fills: dict, domain: str, subcat: str,
+                       subcat_rule: str) -> dict:
+    """What the first-response checklist concluded for the live panel: the
+    domain's required logs with provided/missing + how each was filled, the
+    required-info items, and what the customer will be asked for."""
+    def _entries(sec):
+        return [{"item": e.get("item", ""), "provided": bool(e.get("provided")),
+                 "value": str(e.get("value") or "")[:160],
+                 "source": e.get("source") or ("" if not e.get("provided") else "case text")}
+                for e in fills.get(sec, [])]
+    req_logs = _entries("required_log")
+    req_info = _entries("required_info")
+    general = fills.get("general_info", [])
+    asks: list[str] = []
+    try:
+        from .composer import _INFO_ASKS
+        for m in (getattr(analysis, "missing_info", None) or []):
+            ask = _INFO_ASKS.get(m.get("item") if isinstance(m, dict) else str(m))
+            if ask:
+                asks.append(ask)
+    except Exception:
+        pass
+    asks += [e["item"] for e in req_logs if not e["provided"]]
+    ask_which = subcategory_ask(domain, subcat)
+    if ask_which:
+        asks.append(ask_which)
+    check = getattr(analysis, "driver_check", "")
+    latest = getattr(analysis, "latest_driver", "")
+    if latest and check in ("outdated", "unknown"):
+        asks.append(("the driver version in use and " if check == "unknown" else "")
+                    + f"validation on the latest driver release {latest}")
+    if any(_REGRESSION_ITEM_RE.search(str(e.get("item", ""))) and not e.get("provided")
+           for e in general):
+        asks.append(REGRESSION_ASK)
+    return {
+        "domain": domain, "subcategory": subcat, "subcategory_rule": subcat_rule,
+        "driver_check": check, "latest_driver": latest,
+        "last_good_version": str(getattr(analysis, "last_good_version", "") or ""),
+        "required_logs": req_logs,
+        "missing_logs": [e["item"] for e in req_logs if not e["provided"]],
+        "required_info": req_info,
+        "general": {"provided": sum(1 for e in general if e.get("provided")),
+                    "total": len(general)},
+        "asks": asks,
+        "mode": getattr(analysis, "mode", ""),
+        "log_request_reason": getattr(analysis, "log_request_reason", ""),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +436,10 @@ def _render_entries(entries: list[dict]) -> list[str]:
             notes.append(f"  {e['item']}")
         elif e.get("provided"):
             checked.append(f"  [✓] {e['item']} — provided: {e['value']}")
+        elif _REGRESSION_ITEM_RE.search(str(e["item"])):
+            # The open regression item asks for the PASSING version, not
+            # for the example BKC table.
+            unchecked.append(f"  [ ] {e['item']} — please provide {REGRESSION_ASK}")
         else:
             hint = f" ({e['example']})" if e.get("example") else ""
             unchecked.append(f"  [ ] {e['item']} — please provide{hint}")
@@ -380,6 +493,12 @@ def render_first_response(analysis, fills: dict) -> list[str]:
     ]
     parts += render_checklist_body(domain, fills,
                                    getattr(analysis, "issue_subcategory", ""))
+    # Latest-driver ask (composer owns the customer-facing wording; the
+    # request_* drafts use the same lines).
+    from .composer import latest_driver_lines
+    driver = latest_driver_lines(analysis)
+    if driver:
+        parts += [""] + driver
     parts += ["",
               "Thank you — we will proceed as soon as the missing items are "
               "available."]

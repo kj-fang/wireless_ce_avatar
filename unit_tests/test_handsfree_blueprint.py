@@ -3,7 +3,14 @@
 
 The routes are a thin JSON layer over ``services.handsfree.orchestrator`` and
 the ``HandsfreeStore`` draft queue; both are patched at point of use so no
-background run starts and nothing is written under ``avatarfiles_dir``.
+background run starts and nothing is written anywhere.
+
+The store is the SHARED network folder that the Beacon server and every
+client read live (``services.handsfree.queue.open_store``), and the routes
+reach it through ``handsfree_routes._store``. That function is what these
+tests patch. A test that forgot to would change the team's real settings and
+queue, so ``BaseTestCase`` also makes the shared folder unreachable for every
+test (see ``TestHandsfreeShareIsNeverOpened``).
 
 Branch-specific: this branch wires the IPS "Environment Details" form
 (``CaseContext.env_detail``) into the handsfree reader path (commit 5c1658d9).
@@ -14,16 +21,17 @@ prompt) and ``runner._env_repro_steps`` / ``runner._env_brief`` (retract the
 "repro steps missing" gap and build the agent's environment brief).
 """
 import unittest
-from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from blueprints.handsfree.handsfree_routes import handsfree_bp
 from services.handsfree.case_reader import READER_PROMPT, _format_env_detail
 from services.handsfree.composer import AI_MARKER
+from services.handsfree.queue import HandsfreeShareUnavailable, HandsfreeStore
 from services.handsfree.runner import _env_brief, _env_repro_steps
-from unit_tests.base_test import TEST_AVATARFILES_DIR, BaseTestCase
+from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.handsfree.handsfree_routes"
+SCHEDULER = "services.handsfree.scheduler"
 
 
 class TestHandsfreeBlueprintStructure(BaseTestCase):
@@ -52,22 +60,66 @@ class TestHandsfreeBlueprintStructure(BaseTestCase):
             "/handsfree/queue/<draft_id>/reject", "/handsfree/config", "/handsfree/discover_fields",
             "/handsfree/auto", "/handsfree/auto/run_now", "/handsfree/list_views",
             "/handsfree/queue/<draft_id>/open_log_folder",
+            # server / client roles, reviewer sign-in, email intake, hand-off
+            "/handsfree/login", "/handsfree/requests", "/handsfree/latest_driver/refresh",
+            "/handsfree/email/run_case", "/handsfree/email/check_now",
+            "/handsfree/case/<case_nbr>/reset", "/handsfree/chatbot_handoff",
         })
         self.assertTrue({"GET", "PUT", "POST"}.issubset(rules["/handsfree/queue/<draft_id>"]))
         self.assertNotIn("GET", rules["/handsfree/queue/<draft_id>/approve"])
+        self.assertNotIn("GET", rules["/handsfree/latest_driver/refresh"])
+        self.assertNotIn("GET", rules["/handsfree/case/<case_nbr>/reset"])
 
 
-@patch(f"{ROUTES}.HandsfreeStore")
+class TestHandsfreeShareIsNeverOpened(BaseTestCase):
+    """The safety net under every other class in this module."""
+
+    blueprint = handsfree_bp
+
+    def test_shared_folder_lookup_is_replaced_by_the_guard(self):
+        """The function that resolves the shared folder is the guard, not the real one.
+
+        Input: services.handsfree.queue.handsfree_root inside a test.
+        Expected: it is BaseTestCase's mock and raises HandsfreeShareUnavailable,
+        so open_store() (which every caller goes through) raises too.
+        """
+        from services.handsfree import queue
+
+        # Assert: checked BEFORE anything is called, so a missing guard fails
+        # here instead of opening the share.
+        self.assertIsInstance(queue.handsfree_root, Mock)
+        with self.assertRaises(HandsfreeShareUnavailable):
+            queue.open_store()
+
+    def test_unpatched_store_is_refused_not_opened(self):
+        """A route whose store is NOT patched cannot reach the shared folder.
+
+        Input: GET /handsfree/config with nothing patched (a read, so even a
+        missing guard could not change anything).
+        Expected: 503 with the share-unavailable error from BaseTestCase's
+        guard.
+        """
+        # Act
+        resp = self.client.get("/handsfree/config")
+
+        # Assert
+        self.assertEqual(resp.status_code, 503)
+        self.assertFalse(resp.get_json()["ok"])
+        self.assertIn("unit tests never open", resp.get_json()["error"])
+
+
+@patch(f"{ROUTES}._store")
 class TestHandsfreeIndexAndConfig(BaseTestCase):
     blueprint = handsfree_bp
 
+    @patch(f"{SCHEDULER}.role", return_value="client")
     @patch(f"{ROUTES}.render_template", return_value="handsfree-page")
-    def test_index_renders_with_store_config(self, mock_render, mock_store_cls):
+    def test_index_renders_with_store_config(self, mock_render, _mock_role, mock_store_cls):
         """The index page renders with the store's config.
 
         Input: GET /handsfree/ where the store loads a config dict.
-        Expected: 200; the store is built from the handsfree dir and
-        handsfree.html is rendered with the loaded config.
+        Expected: 200; the shared store is opened once and handsfree.html is
+        rendered with the loaded config, no share error and this PC's role.
         """
         # Arrange
         mock_store_cls.return_value.load_config.return_value = {"owner_name": "Tester", "dry_run": True}
@@ -78,8 +130,31 @@ class TestHandsfreeIndexAndConfig(BaseTestCase):
         # Assert
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_data(as_text=True), "handsfree-page")
-        mock_store_cls.assert_called_once_with(Path(TEST_AVATARFILES_DIR) / "handsfree")
-        mock_render.assert_called_once_with("handsfree.html", config={"owner_name": "Tester", "dry_run": True})
+        mock_store_cls.assert_called_once_with()
+        mock_render.assert_called_once_with(
+            "handsfree.html", config={"owner_name": "Tester", "dry_run": True},
+            share_error="", role="client")
+
+    @patch(f"{SCHEDULER}.role", return_value="server")
+    @patch(f"{ROUTES}.render_template", return_value="handsfree-page")
+    def test_index_renders_defaults_when_share_is_unavailable(self, mock_render, _mock_role, mock_store_cls):
+        """The index page still renders when the shared folder is down.
+
+        Input: GET /handsfree/ where opening the store raises
+        HandsfreeShareUnavailable.
+        Expected: 200; the page gets the default config and the error text.
+        """
+        # Arrange
+        mock_store_cls.side_effect = HandsfreeShareUnavailable("share is down")
+
+        # Act
+        resp = self.client.get("/handsfree/")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        mock_render.assert_called_once_with(
+            "handsfree.html", config=dict(HandsfreeStore.DEFAULT_CONFIG),
+            share_error="share is down", role="server")
 
     def test_get_config_returns_store_config(self, mock_store_cls):
         """GET /config returns the stored config.
@@ -134,6 +209,80 @@ class TestHandsfreeIndexAndConfig(BaseTestCase):
         self.assertEqual(resp.status_code, 200)
         mock_store_cls.return_value.save_config.assert_called_once_with({})
 
+    def test_post_config_normalises_the_latest_driver_override(self, mock_store_cls):
+        """The latest-driver override is stored as a full x.y.z.w, or cleared.
+
+        Input: POST /handsfree/config with latest_driver_manual " 24.90.0.3 ",
+        then with "".
+        Expected: save_config gets "24.90.0.3", then "" (use the report).
+        """
+        # Arrange
+        store = mock_store_cls.return_value
+        store.save_config.return_value = {}
+
+        # Act
+        self.client.post("/handsfree/config", json={"latest_driver_manual": " 24.90.0.3 "})
+        self.client.post("/handsfree/config", json={"latest_driver_manual": ""})
+
+        # Assert
+        self.assertEqual([c.args[0] for c in store.save_config.call_args_list],
+                         [{"latest_driver_manual": "24.90.0.3"}, {"latest_driver_manual": ""}])
+
+    def test_post_config_rejects_a_partial_latest_driver(self, mock_store_cls):
+        """A branch-only override is refused and nothing is saved.
+
+        Input: POST /handsfree/config with latest_driver_manual "24.90".
+        Expected: 400 naming the expected form; save_config is not called.
+        """
+        # Act
+        resp = self.client.post("/handsfree/config", json={"latest_driver_manual": "24.90"})
+
+        # Assert
+        self.assertEqual(resp.status_code, 400)
+        self.assertFalse(resp.get_json()["ok"])
+        self.assertIn("24.90.0.3", resp.get_json()["error"])
+        mock_store_cls.return_value.save_config.assert_not_called()
+
+    @patch(f"{SCHEDULER}.status", return_value={"enabled": True})
+    @patch(f"{SCHEDULER}.ensure_started")
+    @patch(f"{SCHEDULER}.can_schedule_here", return_value=False)
+    def test_latest_driver_refresh_leaves_a_request_for_the_server(
+            self, _mock_can, mock_ensure, _mock_status, mock_store_cls):
+        """"Refresh now" on a client only stamps the shared config.
+
+        Input: POST /handsfree/latest_driver/refresh on a client PC.
+        Expected: 200 {ok, **scheduler.status()}; the request time is saved
+        and no scheduler is started here.
+        """
+        # Act
+        resp = self.client.post("/handsfree/latest_driver/refresh")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"ok": True, "enabled": True})
+        (updates,), _ = mock_store_cls.return_value.save_config.call_args
+        self.assertEqual(list(updates), ["latest_driver_refresh_requested_at"])
+        self.assertTrue(updates["latest_driver_refresh_requested_at"])
+        mock_ensure.assert_not_called()
+
+    @patch(f"{SCHEDULER}.role", return_value="client")
+    def test_requests_lists_the_share_requests(self, _mock_role, mock_store_cls):
+        """GET /requests returns the case requests and this PC's role.
+
+        Input: GET /handsfree/requests where the store lists one request.
+        Expected: 200 with {items, role}.
+        """
+        # Arrange
+        mock_store_cls.return_value.list_requests.return_value = [{"case_nbr": "00123456", "status": "pending"}]
+
+        # Act
+        resp = self.client.get("/handsfree/requests")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {
+            "items": [{"case_nbr": "00123456", "status": "pending"}], "role": "client"})
+
 
 @patch(f"{ROUTES}.orchestrator")
 class TestHandsfreeRunRoutes(BaseTestCase):
@@ -174,10 +323,11 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.assertEqual(resp.get_json(), {"ok": False, "error": "owner_name required"})
         mock_orch.start_check_now.assert_called_once_with(None)
 
-    def test_run_case_passes_case_nbr(self, mock_orch):
-        """run_case forwards the case number to the orchestrator.
+    @patch(f"{SCHEDULER}.can_schedule_here", return_value=True)
+    def test_run_case_passes_case_nbr(self, _mock_can, mock_orch):
+        """On the server, run_case forwards the case number to the orchestrator.
 
-        Input: POST /handsfree/run_case with a case_nbr.
+        Input: POST /handsfree/run_case with a case_nbr on the server role.
         Expected: 200 echoing the result; start_case_run is called with the case
         number.
         """
@@ -192,10 +342,11 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.assertEqual(resp.get_json(), {"ok": True, "case_nbr": "00123456"})
         mock_orch.start_case_run.assert_called_once_with("00123456")
 
-    def test_run_case_without_body_passes_none(self, mock_orch):
-        """run_case passes None when no case number is given.
+    @patch(f"{SCHEDULER}.can_schedule_here", return_value=True)
+    def test_run_case_without_body_passes_none(self, _mock_can, mock_orch):
+        """On the server, run_case passes None when no case number is given.
 
-        Input: POST /handsfree/run_case with no body.
+        Input: POST /handsfree/run_case with no body on the server role.
         Expected: start_case_run is called with None and its error result is
         returned.
         """
@@ -208,6 +359,52 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         # Assert
         self.assertEqual(resp.get_json()["ok"], False)
         mock_orch.start_case_run.assert_called_once_with(None)
+
+    @patch(f"{ROUTES}._signed_in_name", return_value="Reviewer One")
+    @patch(f"{ROUTES}._store")
+    @patch(f"{SCHEDULER}.can_schedule_here", return_value=False)
+    def test_run_case_on_a_client_queues_a_request_for_the_server(
+            self, _mock_can, mock_store, _mock_name, mock_orch):
+        """On a client, run_case becomes a request on the share.
+
+        Input: POST /handsfree/run_case with a seven-digit case number on the
+        client role, signed in as "Reviewer One".
+        Expected: 200 {ok, requested, request}; the store queues the
+        normalised eight-digit number under the reviewer's name and nothing
+        runs on this PC.
+        """
+        # Arrange
+        req = {"case_nbr": "01009610", "status": "pending"}
+        mock_store.return_value.request_case.return_value = req
+
+        # Act
+        resp = self.client.post("/handsfree/run_case", json={"case_nbr": "1009610"})
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"ok": True, "requested": True, "request": req})
+        mock_store.return_value.request_case.assert_called_once_with("01009610", requested_by="Reviewer One")
+        mock_orch.start_case_run.assert_not_called()
+
+    @patch(f"{ROUTES}._store")
+    @patch(f"{SCHEDULER}.can_schedule_here", return_value=False)
+    def test_run_case_on_a_client_refuses_a_bad_case_number(self, _mock_can, mock_store, mock_orch):
+        """On a client, a bad or empty case number queues nothing.
+
+        Input: POST /handsfree/run_case with "abc", then with no body, on the
+        client role.
+        Expected: {ok: False} naming the problem; the store is never opened.
+        """
+        # Act
+        bad = self.client.post("/handsfree/run_case", json={"case_nbr": "abc"})
+        empty = self.client.post("/handsfree/run_case")
+
+        # Assert
+        self.assertFalse(bad.get_json()["ok"])
+        self.assertIn("not an IPS case number", bad.get_json()["error"])
+        self.assertEqual(empty.get_json(), {"ok": False, "error": "empty case number"})
+        mock_store.assert_not_called()
+        mock_orch.start_case_run.assert_not_called()
 
     def test_status_returns_run_state(self, mock_orch):
         """status returns the orchestrator run state.
@@ -229,8 +426,9 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         """approve forwards the edited draft text.
 
         Input: POST /handsfree/queue/d-1/approve with draft_plain.
-        Expected: approve_and_post is called with the draft id and edited_plain;
-        its result is returned.
+        Expected: approve_and_post is called with the draft id and edited_plain,
+        and no visibility (the orchestrator then posts Internal to Intel); its
+        result is returned.
         """
         # Arrange
         mock_orch.approve_and_post.return_value = {"ok": True, "posted": True}
@@ -240,13 +438,51 @@ class TestHandsfreeRunRoutes(BaseTestCase):
 
         # Assert
         self.assertEqual(resp.get_json(), {"ok": True, "posted": True})
-        mock_orch.approve_and_post.assert_called_once_with("d-1", edited_plain="edited text")
+        mock_orch.approve_and_post.assert_called_once_with("d-1", edited_plain="edited text", visibility=None)
+
+    def test_approve_passes_the_reviewers_visibility(self, mock_orch):
+        """approve forwards who the reviewer chose to show the post to.
+
+        Input: POST /handsfree/queue/d-1/approve with visibility "external".
+        Expected: approve_and_post is called with visibility="external".
+        """
+        # Arrange
+        mock_orch.approve_and_post.return_value = {"ok": True}
+
+        # Act
+        self.client.post("/handsfree/queue/d-1/approve",
+                         json={"draft_plain": "edited text", "visibility": "external"})
+
+        # Assert
+        mock_orch.approve_and_post.assert_called_once_with(
+            "d-1", edited_plain="edited text", visibility="external")
+
+    def test_approve_passes_the_pages_attempt_id(self, mock_orch):
+        """approve forwards the page's attempt id, and only when one is sent.
+
+        Input: POST /handsfree/queue/d-1/approve with attempt "a-12345678".
+        Expected: approve_and_post is called with attempt_id="a-12345678" (the
+        orchestrator records the attempt on the draft so a page that lost the
+        answer can read THIS approval's outcome back). Without it the call
+        has no attempt_id at all - see the tests around this one.
+        """
+        # Arrange
+        mock_orch.approve_and_post.return_value = {"ok": True}
+
+        # Act
+        self.client.post("/handsfree/queue/d-1/approve",
+                         json={"draft_plain": "edited text", "attempt": "a-12345678"})
+
+        # Assert
+        mock_orch.approve_and_post.assert_called_once_with(
+            "d-1", edited_plain="edited text", visibility=None, attempt_id="a-12345678")
 
     def test_approve_without_body_passes_none(self, mock_orch):
-        """approve passes edited_plain=None with no body.
+        """approve passes edited_plain=None and visibility=None with no body.
 
         Input: POST /handsfree/queue/d-1/approve with no body.
-        Expected: approve_and_post is called with edited_plain=None.
+        Expected: approve_and_post is called with edited_plain=None and
+        visibility=None.
         """
         # Arrange
         mock_orch.approve_and_post.return_value = {"ok": True}
@@ -255,7 +491,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.client.post("/handsfree/queue/d-1/approve")
 
         # Assert
-        mock_orch.approve_and_post.assert_called_once_with("d-1", edited_plain=None)
+        mock_orch.approve_and_post.assert_called_once_with("d-1", edited_plain=None, visibility=None)
 
     def test_approve_rejects_get(self, mock_orch):
         """approve rejects GET.
@@ -335,16 +571,20 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.assertEqual(resp.get_json(), {"error": "ConnectionError: IPS unreachable"})
 
 
-@patch(f"{ROUTES}.HandsfreeStore")
+@patch(f"{ROUTES}._store")
 class TestHandsfreeQueueRoutes(BaseTestCase):
     blueprint = handsfree_bp
 
-    def test_list_queue_defaults_to_open_drafts(self, mock_store_cls):
-        """Listing the queue defaults to open drafts only.
+    @patch(f"{ROUTES}._own_mailbox", return_value="me@intel.com")
+    @patch(f"{ROUTES}._signed_in_name", return_value="Reviewer One")
+    def test_list_queue_defaults_to_the_reviewers_open_drafts(self, _mock_name, _mock_box, mock_store_cls):
+        """Listing the queue defaults to the reviewer's own open drafts.
 
-        Input: GET /handsfree/queue with no query params.
+        Input: GET /handsfree/queue with no query params, signed in to IPS as
+        "Reviewer One" on a PC whose mailbox is me@intel.com.
         Expected: 200 with {items}; list_drafts is called with
-        include_closed=False.
+        include_closed=False, that reviewer as the IPS case owner AND the
+        mailbox (an Outlook-intake draft has no IPS owner).
         """
         # Arrange
         mock_store_cls.return_value.list_drafts.return_value = [{"draft_id": "d-1"}]
@@ -355,12 +595,79 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
         # Assert
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.get_json(), {"items": [{"draft_id": "d-1"}]})
-        mock_store_cls.return_value.list_drafts.assert_called_once_with(include_closed=False, owner_name="")
+        mock_store_cls.return_value.list_drafts.assert_called_once_with(
+            include_closed=False, owner_name="Reviewer One", mailbox="me@intel.com")
+
+    @patch(f"{ROUTES}._own_mailbox", return_value="")
+    @patch(f"{ROUTES}._signed_in_name", return_value="")
+    def test_list_queue_without_any_identity_is_empty_and_says_so(self, _mock_name, _mock_box, mock_store_cls):
+        """Without an IPS sign-in or a mailbox the own view is empty, not everyone's.
+
+        Input: GET /handsfree/queue with no reviewer signed in and no mail
+        address known for this PC.
+        Expected: 200 with {items: [], signed_out: True}; the store is not
+        read.
+        """
+        # Act
+        resp = self.client.get("/handsfree/queue")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"items": [], "signed_out": True})
+        mock_store_cls.return_value.list_drafts.assert_not_called()
+
+    @patch(f"{ROUTES}._own_mailbox", return_value="me@intel.com")
+    @patch(f"{ROUTES}._signed_in_name", return_value="")
+    def test_list_queue_signed_out_still_lists_the_mailbox_drafts(self, _mock_name, _mock_box, mock_store_cls):
+        """Email drafts need no IPS sign-in: they are listed while signed out.
+
+        Input: GET /handsfree/queue with no IPS sign-in on a PC whose mailbox
+        is me@intel.com.
+        Expected: 200 with the mailbox's drafts and signed_out: True (the
+        page still offers the sign-in); list_drafts is filtered by the
+        mailbox alone, never unfiltered.
+        """
+        # Arrange
+        mock_store_cls.return_value.list_drafts.return_value = [{"draft_id": "e-1"}]
+
+        # Act
+        resp = self.client.get("/handsfree/queue")
+
+        # Assert
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.get_json(), {"items": [{"draft_id": "e-1"}], "signed_out": True})
+        mock_store_cls.return_value.list_drafts.assert_called_once_with(
+            include_closed=False, owner_name="", mailbox="me@intel.com")
+
+    @patch(f"{ROUTES}._own_mailbox")
+    @patch(f"{ROUTES}._signed_in_name", return_value="")
+    def test_list_queue_everyone_lifts_the_owner_filter(self, _mock_name, mock_box, mock_store_cls):
+        """?everyone=1 lists every owner's drafts, optionally one owner's.
+
+        Input: GET /handsfree/queue?everyone=1, then with &owner=Ann, with no
+        reviewer signed in.
+        Expected: list_drafts is called with owner_name "" and then "Ann",
+        and no mailbox filter (this PC's mailbox is not even looked up).
+        """
+        # Arrange
+        store = mock_store_cls.return_value
+        store.list_drafts.return_value = []
+
+        # Act
+        self.client.get("/handsfree/queue", query_string={"everyone": "1"})
+        self.client.get("/handsfree/queue", query_string={"everyone": "1", "owner": " Ann "})
+
+        # Assert
+        self.assertEqual([c.kwargs for c in store.list_drafts.call_args_list], [
+            {"include_closed": False, "owner_name": "", "mailbox": ""},
+            {"include_closed": False, "owner_name": "Ann", "mailbox": ""}])
+        mock_box.assert_not_called()
 
     def test_list_queue_all_flag_variants_include_closed(self, mock_store_cls):
         """The ?all flag's truthy variants include closed drafts.
 
-        Input: GET /handsfree/queue?all=<value> for truthy and falsy variants.
+        Input: GET /handsfree/queue?everyone=1&all=<value> for truthy and
+        falsy variants.
         Expected: list_drafts is called with include_closed matching the
         truthiness of each value.
         """
@@ -373,10 +680,11 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
                 store.list_drafts.reset_mock()
 
                 # Act
-                self.client.get("/handsfree/queue", query_string={"all": value})
+                self.client.get("/handsfree/queue", query_string={"everyone": "1", "all": value})
 
                 # Assert
-                store.list_drafts.assert_called_once_with(include_closed=expected, owner_name="")
+                store.list_drafts.assert_called_once_with(
+                    include_closed=expected, owner_name="", mailbox="")
 
     def test_get_draft_found(self, mock_store_cls):
         """Fetching an existing draft returns it.
@@ -483,6 +791,65 @@ class TestHandsfreeQueueRoutes(BaseTestCase):
         # Assert
         self.assertEqual(resp.status_code, 404)
         self.assertEqual(resp.get_json(), {"ok": False, "error": "not found"})
+
+
+@patch("services.check_ips_service.attach")
+@patch(f"{ROUTES}.decoded_log_file", return_value=__file__)      # any file that exists
+@patch(f"{ROUTES}._store")
+class TestHandsfreeChatbotHandoff(BaseTestCase):
+    """"Open in Avatar analysis": the chatbot must match the radio the run analysed."""
+
+    blueprint = handsfree_bp
+
+    def _handoff(self, mock_store, radio):
+        mock_store.return_value.get.return_value = {
+            "case_nbr": "01009610", "case_id": "500X", "subject": "s",
+            "analysis": {"wifi_or_bt": radio, "subject": "s", "clean_description": "d",
+                         "incidents": [{"sent_for_analysis": {"issue_time_log": "2026-10-22 10:15:00"}}]}}
+        return self.client.post("/handsfree/chatbot_handoff",
+                                json={"case_nbr": "01009610", "draft_id": "d-1"})
+
+    def test_bluetooth_draft_opens_the_bluetooth_chatbot(self, mock_store, _mock_log, mock_attach):
+        """A Bluetooth draft is handed to /bt_chatbot/, not the Wi-Fi chatbot.
+
+        Input: POST /handsfree/chatbot_handoff for a draft whose analysis says
+        wifi_or_bt "bt" (its decoded log is an HCI log).
+        Expected: 200; the URL is /bt_chatbot/ with auto_run and the issue
+        time, mode "bt", and the last-analysed log is set to the HCI log:
+        the chatbot page pre-fills its log box from it and the automatic
+        analysis reads that box.
+        """
+        # Act
+        resp = self._handoff(mock_store, "bt")
+
+        # Assert
+        body = resp.get_json()
+        self.assertEqual(resp.status_code, 200)
+        self.assertTrue(body["url"].startswith("/bt_chatbot/?auto_run=analyze_all"))
+        self.assertIn("issue_time=2026-10-22", body["url"])
+        self.assertEqual(body["mode"], "bt")
+        self.assertEqual(self.app_config.last_analyzed_log_path, __file__)
+        mock_attach.assert_called_once()
+
+    def test_wifi_draft_opens_the_wifi_chatbot(self, mock_store, _mock_log, _mock_attach):
+        """A Wi-Fi draft (and one with no radio recorded) goes to /log_chatbot/.
+
+        Input: POST /handsfree/chatbot_handoff for analyses with wifi_or_bt
+        "wifi" and "".
+        Expected: 200; the URL is /log_chatbot/, mode "log", and the
+        last-analysed log is set for the Wi-Fi chatbot.
+        """
+        for radio in ("wifi", ""):
+            with self.subTest(radio=radio):
+                # Act
+                resp = self._handoff(mock_store, radio)
+
+                # Assert
+                body = resp.get_json()
+                self.assertEqual(resp.status_code, 200)
+                self.assertTrue(body["url"].startswith("/log_chatbot/?auto_run=analyze_all"))
+                self.assertEqual(body["mode"], "log")
+                self.assertEqual(self.app_config.last_analyzed_log_path, __file__)
 
 
 class TestHandsfreeEnvDetail(unittest.TestCase):

@@ -22,6 +22,12 @@
 
     function setQueueLocked(locked) {
         queueLocked = locked;
+        const dashboard = element('queue').closest('.home-review-unframed');
+        dashboard.inert = locked;
+        dashboard.setAttribute('aria-disabled', String(locked));
+        dashboard.classList.toggle('is-locked', locked);
+        const splitter = element('splitter');
+        if (splitter) splitter.setAttribute('aria-disabled', String(locked));
         const scroll = element('queue').closest('.review-scroll');
         scroll.inert = locked;
         scroll.setAttribute('aria-disabled', String(locked));
@@ -108,8 +114,28 @@
         return '<span class="review-pill ' + style + '" title="' + escapeHtml(title) + '">' + escapeHtml(text) + '</span>';
     }
 
+    function updateBannerClock() {
+        const dateElement = document.getElementById('home-banner-date');
+        const timeElement = document.getElementById('home-banner-time');
+        if (!dateElement || !timeElement) return;
+        const now = new Date();
+        dateElement.textContent = new Intl.DateTimeFormat('en-US', {
+            weekday: 'long', month: 'long', day: '2-digit',
+        }).format(now);
+        timeElement.textContent = new Intl.DateTimeFormat('en-US', {
+            hour: '2-digit', minute: '2-digit',
+        }).format(now);
+        timeElement.dateTime = now.toISOString();
+    }
+
     function renderLogin() {
         const signedIn = login.status === 'signed_in' && login.identity;
+        const profileName = document.getElementById('home-profile-name');
+        const profileInitials = document.getElementById('home-profile-initials');
+        if (profileName) profileName.textContent = signedIn ? login.identity.name : 'IPS account';
+        if (profileInitials) profileInitials.textContent = signedIn
+            ? String(login.identity.name || '').trim().split(/\s+/).slice(0, 2).map(part => part[0] || '').join('').toUpperCase()
+            : 'IPS';
         element('login-badge').textContent = signedIn ? 'IPS: ' + login.identity.name
             : login.status === 'signing_in' ? 'IPS: signing in...' : 'IPS: not signed in';
         element('login-badge').className = 'review-pill ' + (signedIn ? 'good' : 'warn');
@@ -148,10 +174,15 @@
     }
 
     async function loadQueue() {
+        if (queueLocked) return;
         const sequence = ++queueRequest;
         const params = new URLSearchParams();
+        const everyone = element('everyone').checked;
         if (element('show-closed').checked) params.set('all', '1');
-        if (element('everyone').checked) {
+        element('queue').classList.toggle('show-owner', everyone);
+        const placeholder = element('queue').querySelector('tbody td[colspan]');
+        if (placeholder) placeholder.colSpan = everyone ? 4 : 3;
+        if (everyone) {
             params.set('everyone', '1');
             const owner = element('owner').value.trim();
             if (owner) params.set('owner', owner);
@@ -197,7 +228,7 @@
                 tbody.appendChild(row);
             }
             if (!tbody.children.length) {
-                tbody.innerHTML = '<tr><td colspan="4">' +
+                tbody.innerHTML = '<tr><td colspan="' + (everyone ? '4' : '3') + '">' +
                     (result.signed_out ? 'No cases loaded.' : 'Queue is empty.') + '</td></tr>';
             }
         } catch (error) {
@@ -504,6 +535,18 @@
         }
     }
 
+    window.addEventListener('home:submission-state', event => {
+        const wasLocked = queueLocked;
+        setQueueLocked(!!event.detail?.locked);
+        if (wasLocked && !queueLocked) loadQueue();
+    });
+    element('queue').closest('.home-review-unframed').addEventListener('click', event => {
+        if (!queueLocked) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+    }, true);
+    if (window.homeSubmissionLocked) setQueueLocked(true);
+
     element('folder').addEventListener('click', openFolder);
     element('avatar').addEventListener('click', openInAvatar);
     element('approve').addEventListener('click', approveDraft);
@@ -529,5 +572,7 @@
         loadQueue();
     });
     element('owner').addEventListener('change', loadQueue);
+    updateBannerClock();
+    setInterval(updateBannerClock, 1000);
     signIn(false);
 })();

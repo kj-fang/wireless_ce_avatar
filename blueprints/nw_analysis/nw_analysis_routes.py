@@ -767,7 +767,7 @@ def analyze_sleepstudy_point():
     Request JSON: {
       "log_path":   "<sleepstudy-report.html>",
       "index":      <time point number from /sleepstudy_plan>,
-      "driver_log": "<WRT folder, a WiFiLog file, a decoded Wi-Fi log, or ''>",
+      "driver_log": "<WRT folder, a WiFiLog, a decoded Wi-Fi log, a *.hci.txt, or ''>",
       "position":   <1-based place in this run>, "total": <points in this run>
     }
     """

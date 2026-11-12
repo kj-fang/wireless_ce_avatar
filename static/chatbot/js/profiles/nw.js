@@ -307,7 +307,7 @@
                            placeholder="Driver log for this time point…"
                            onchange="checkPlanLog(${p.index})" style="min-width:0;">
                     <button class="btn-browse" onclick="browsePlanLog(${p.index})"
-                            ${locked ? 'disabled' : ''} title="Browse for a WiFiLog file">📁</button>
+                            ${locked ? 'disabled' : ''} title="Browse for a WiFiLog or a decoded *.hci.txt">📁</button>
                 </div>
                 <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
             return `<tr class="ss-plan-row" data-index="${p.index}" style="${picked ? '' : 'opacity:0.58;'}">
@@ -458,7 +458,8 @@
             } catch (e) {
                 console.warn('[sleepstudy] run not saved to History:', e);
                 row.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
-                ev.currentTarget.style.display = '';
+                // Not ev.currentTarget: the click dispatch ended at the await above.
+                runBtn.style.display = '';
                 labelRun();
                 showStatus(document.getElementById('sleepstudy-status'),
                            '✘ ' + e.message, 'err');
@@ -521,10 +522,13 @@
             `<button class="btn-set-log" style="padding:3px 12px;margin-left:8px;width:auto;"
                      onclick="${handler}()">${label}</button>`;
         if (state === 'running') {
+            // Pause does not need run.controller: it is only set once
+            // analyseOnePoint() is inside its fetch, and cleared between
+            // points, so testing it here would hide the button all run.
             run.bar.innerHTML = run.summarizing
                 ? '📊 Writing the combined Sleep Study report…'
                 : `⏳ Analysing time point <b>${at}/${total}</b>…` +
-                  (run.controller ? btn('⏸ Pause', 'pauseSleepstudyRun') : '');
+                  btn('⏸ Pause', 'pauseSleepstudyRun');
         } else if (state === 'paused') {
             run.bar.innerHTML = `⏸ Paused at time point <b>${at}/${total}</b>.` +
                                 btn('▶ Resume', 'continueSleepstudyRun');
@@ -535,12 +539,24 @@
         }
     }
 
-    // core.js stopChat(): aborts the stream on screen and asks the server to
-    // cancel the running agent (chat_stop knows the time point's agent).
+    // Pause has to reach the server as well. Aborting the browser's reader
+    // only stops the rendering: the agent runs on a worker thread and would
+    // keep spending until it next tried to yield. /chat/stop sets that
+    // agent's cancel_event, and Resume waits on `run.pausing` so a second
+    // worker cannot start on top of the first.
     function pauseSleepstudyRun() {
         const run = ssRun;
-        if (run && run.controller) run.controller.abort();
-        else if (typeof stopChat === 'function') stopChat();
+        if (!run) {
+            if (typeof stopChat === 'function') stopChat();
+            return;
+        }
+        if (run.bar) run.bar.innerHTML = '⏸ Stopping the running agent…';
+        run.pausing = fetch(`${CHATBOT_API}/chat/stop`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({conversation_id: run.conversationId || ''}),
+        }).catch(e => console.warn('[sleepstudy] stop request failed:', e));
+        if (run.controller) run.controller.abort();
     }
 
     async function continueSleepstudyRun(runOverride) {
@@ -557,6 +573,8 @@
             const outcome = await analyseOnePoint(run, item, run.next + 1, run.items.length);
             if (outcome === 'paused') {
                 markPointStatus(run, item.index, '⏸ paused', '#b45309');
+                // Offer Resume only once the server has acknowledged the cancel.
+                if (run.pausing) { try { await run.pausing; } catch (e) {} run.pausing = null; }
                 run.busy = false;
                 if (run.conversationId) delete window.__nwSleepstudyRuns[run.conversationId];
                 renderRunBar('paused', run);
@@ -620,9 +638,12 @@
         }
     }
 
-    // One time point over SSE. Returns 'paused' when the user stopped it.
+    // One time point over SSE. Returns 'done' only when the stream carried a
+    // terminal "done" event; anything else ('paused') leaves the point
+    // unfinished so the run bar offers Resume instead of writing the report.
     async function analyseOnePoint(run, item, position, total) {
         let card = null;
+        let finished = false;
         const isVisible = () => isSleepstudyRunVisible(run);
         const ctl = new AbortController();
         run.controller = ctl;
@@ -661,6 +682,7 @@
                 } else if (evt.type === 'step') {
                     if (card) card.append(evt.step);
                 } else if (evt.type === 'done') {
+                    finished = true;
                     if (isVisible()) removeTyping();
                     if (card) card.collapse();
                     const r = evt.result || {};
@@ -693,7 +715,12 @@
                 lines.forEach(processLine);
             }
             if (buffer) processLine(buffer);
-            return 'done';
+            if (!finished) {
+                markPointStatus(run, item.index, '⚠ stopped before finishing', '#b45309');
+                if (isVisible()) removeTyping();
+                if (card) card.collapse();
+            }
+            return finished ? 'done' : 'paused';
         } catch (e) {
             if (e.name === 'AbortError') {
                 if (isVisible()) removeTyping();
@@ -704,7 +731,8 @@
                 removeTyping();
                 appendAssistantText('❌ Network error: ' + e.message);
             } else run.needsHistoryRefresh = true;
-            return 'done';
+            if (card) card.collapse();
+            return finished ? 'done' : 'paused';
         } finally {
             if (run.controller === ctl) run.controller = null;
             if (window.__streamCtl === ctl) window.__streamCtl = null;

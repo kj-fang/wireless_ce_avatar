@@ -34,7 +34,7 @@ import queue
 import re
 import tempfile
 import threading
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Callable, Iterator, Optional
@@ -95,6 +95,14 @@ _WIFILOG_TIME = re.compile(r"^(\d{2}):(\d{2}):(\d{2}):(\d{3})$")
 _WIFI_ETL_TS = re.compile(r"^﻿?(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})")
 _WIFI_ETL_FMT = "%m/%d/%Y-%H:%M:%S.%f"
 
+# A decoded Bluetooth HCI log (.hci.txt, from the WRT BT decoder) stamps its
+# lines with the time of day only -- <HH:MM:SS.mmm>, no date anywhere in the
+# file. Its segments are therefore indexed dateless and placed on a calendar
+# by _anchored(), against the window they are being checked for.
+_BT_HCI_TS = re.compile(r"<(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?>")
+_BT_HCI_SUFFIX = ".hci.txt"
+_DATELESS_DAY = datetime(1900, 1, 1)
+
 # A clock that runs backwards by more than this has crossed midnight; anything
 # smaller is a thread printing out of order.
 _MIDNIGHT_JUMP = timedelta(hours=12)
@@ -105,16 +113,28 @@ class LogSegment:
     """One driver log file and the wall-clock span it covers."""
     path: str
     device: str
-    kind: str                     # "wrt_wifilog" | "wifi_etl"
+    kind: str                     # "wrt_wifilog" | "wifi_etl" | "bt_hci"
     start: datetime
     end: Optional[datetime]
     # Where each edge was read from, so a person can check the time a file is
     # said to cover: its own name, the next file's name, or a line inside it.
     start_from: str = ""
     end_from: str = ""
+    # True for a log that stamps the time of day but no date (BT HCI). Its
+    # start/end sit on _DATELESS_DAY until _anchored() moves them.
+    dateless: bool = False
 
     def overlaps(self, lo: datetime, hi: datetime) -> bool:
         return self.start < hi and (self.end is None or self.end > lo)
+
+    def anchored(self, day) -> "LogSegment":
+        """This segment placed on `day`. A no-op once it carries a date."""
+        if not self.dateless:
+            return self
+        shift = datetime.combine(day, datetime.min.time()) - _DATELESS_DAY
+        return replace(self, start=self.start + shift,
+                       end=None if self.end is None else self.end + shift,
+                       dateless=False)
 
     def describe(self) -> dict:
         return {
@@ -125,6 +145,17 @@ class LogSegment:
             "start_from": self.start_from,
             "end_from": self.end_from,
         }
+
+
+def _anchored(segments: list[LogSegment], day) -> list[LogSegment]:
+    """
+    Every segment on a calendar, dateless ones placed on `day`.
+
+    A BT HCI log knows only the time of day, so the day it belongs to has to
+    come from the window it is being checked against. The report and the
+    capture are from the same machine, so that window is the only sane guess.
+    """
+    return [s.anchored(day) for s in segments]
 
 
 def _wifilog_start(name: str) -> Optional[datetime]:
@@ -194,6 +225,46 @@ def _wifi_etl_range(path: str) -> tuple[Optional[datetime], Optional[datetime]]:
     return first, last
 
 
+def _is_bt_hci(name: str) -> bool:
+    return name.lower().endswith(_BT_HCI_SUFFIX)
+
+
+def _bt_hci_clock(line: str) -> Optional[datetime]:
+    """The <HH:MM:SS.mmm> of one HCI line, on _DATELESS_DAY."""
+    m = _BT_HCI_TS.search(line)
+    if not m:
+        return None
+    hh, mi, ss = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if hh > 23 or mi > 59 or ss > 59:
+        return None
+    ms = int((m.group(4) or "0").ljust(3, "0")[:3])
+    return _DATELESS_DAY.replace(hour=hh, minute=mi, second=ss, microsecond=ms * 1000)
+
+
+def _bt_hci_range(path: str) -> tuple[Optional[datetime], Optional[datetime]]:
+    """
+    First and last clock of a .hci.txt, both on _DATELESS_DAY.
+
+    A capture that ends earlier than it started has crossed one midnight; a
+    BT decode spans hours, not days, so one is the only correction needed.
+    """
+    first = last = None
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            first = _bt_hci_clock(line)
+            if first is not None:
+                break
+    if first is None:
+        return None, None
+    for line in reversed(_tail_lines(path)):
+        last = _bt_hci_clock(line)
+        if last is not None:
+            break
+    if last is not None and last < first:
+        last += timedelta(days=1)
+    return first, last
+
+
 def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[str]]:
     """
     Index the driver logs under `path` by device family.
@@ -202,6 +273,8 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
       - WRT rolling Wi-Fi logs (WiFiLog--*.LOG), anywhere under the folder;
         a single WiFiLog file means its whole folder
       - a decoded Wi-Fi ETL log (MM/DD/YYYY-HH:MM:SS.mmm lines)
+      - a decoded Bluetooth HCI log (*.hci.txt), indexed dateless: it stamps
+        the time of day only, so _anchored() puts it on the window's day
 
     Returns ({device: [segments, oldest first]}, warnings).
     """
@@ -226,13 +299,26 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
         if start is not None:
             wifilogs.append((start, f))
             continue
+        if _is_bt_hci(os.path.basename(f)):
+            # A decoded BT log sits next to the Wi-Fi ones in a WRT capture,
+            # so it is picked up from a folder as well as when chosen alone.
+            first, last = _bt_hci_range(f)
+            if first is None:
+                warnings.append(
+                    f"{os.path.basename(f)}: no <HH:MM:SS> line this tool can read.")
+                continue
+            found.setdefault(ssa.DEVICE_BT, []).append(
+                LogSegment(f, ssa.DEVICE_BT, "bt_hci", first, last,
+                           "first timestamped line", "last timestamped line",
+                           dateless=True))
+            continue
         if not os.path.isdir(path):
-            # A single file that is not a WiFiLog must be a decoded ETL log.
+            # A single file that is neither must be a decoded Wi-Fi ETL log.
             first, last = _wifi_etl_range(f)
             if first is None:
                 warnings.append(
-                    f"{os.path.basename(f)}: no timestamp this tool can read; "
-                    "expected a WRT WiFiLog or a decoded Wi-Fi ETL log.")
+                    f"{os.path.basename(f)}: no timestamp this tool can read; expected a "
+                    "WRT WiFiLog, a decoded Wi-Fi ETL log, or a decoded BT *.hci.txt.")
                 continue
             found.setdefault(ssa.DEVICE_WIFI, []).append(
                 LogSegment(f, ssa.DEVICE_WIFI, "wifi_etl", first, last,
@@ -253,12 +339,15 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
                        "file name", end_from))
 
     if os.path.isdir(path) and not found:
-        warnings.append(f"No WiFiLog--*.LOG files under {path}.")
+        warnings.append(f"No WiFiLog--*.LOG or *.hci.txt files under {path}.")
+    for segments in found.values():
+        segments.sort(key=lambda s: s.start)
     return found, warnings
 
 
 def coverage_of(segments: list[LogSegment], lo: datetime, hi: datetime) -> tuple[str, list[LogSegment]]:
     """'full', 'partial' or 'none', and the segments that overlap [lo, hi)."""
+    segments = _anchored(segments, lo.date())
     hits = [s for s in segments if s.overlaps(lo, hi)]
     if not hits:
         return "none", []
@@ -281,7 +370,7 @@ def check_driver_log(path: str, device: str, window_start: str, window_end: str)
     lo = datetime.strptime(window_start, "%m/%d/%Y %H:%M:%S")
     hi = datetime.strptime(window_end, "%m/%d/%Y %H:%M:%S")
     index, warnings = discover_driver_logs(path)
-    segments = index.get(device, [])
+    segments = _anchored(index.get(device, []), lo.date())
     coverage, hits = coverage_of(segments, lo, hi)
     return {
         "coverage": coverage,
@@ -337,6 +426,35 @@ def _iter_wifi_etl(seg: LogSegment) -> Iterator[tuple[Optional[datetime], str]]:
             yield datetime.strptime(m.group(1), _WIFI_ETL_FMT), line[m.end():].lstrip()
 
 
+def _iter_bt_hci(seg: LogSegment) -> Iterator[tuple[Optional[datetime], str]]:
+    """
+    Yield (timestamp, message) for each line of a decoded BT HCI log.
+
+    The file has no date of its own, so the day comes from the segment as
+    _anchored() placed it, and is carried across midnight the same way the
+    WiFiLog reader does.
+    """
+    day = seg.start.date()
+    prev: Optional[datetime] = None
+    with open(seg.path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line = raw.rstrip("\r\n")
+            m = _BT_HCI_TS.search(line)
+            clock = _bt_hci_clock(line) if m else None
+            if clock is None:
+                yield None, line
+                continue
+            dt = datetime.combine(day, clock.time())
+            if prev is None and dt > seg.start + _MIDNIGHT_JUMP:
+                dt -= timedelta(days=1)
+                day = dt.date()
+            elif prev is not None and dt < prev - _MIDNIGHT_JUMP:
+                dt += timedelta(days=1)
+                day = dt.date()
+            prev = dt
+            yield dt, (line[:m.start()] + line[m.end():]).strip(" -:|\t")
+
+
 def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_path: str) -> dict:
     """
     Copy every line logged in [lo, hi] into `out_path`, written in the decoded
@@ -346,9 +464,10 @@ def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_pa
     kept = 0
     first = last = None
     sources = []
+    readers = {"wrt_wifilog": _iter_wifilog, "bt_hci": _iter_bt_hci}
     with open(out_path, "w", encoding="utf-8", newline="\n") as out:
-        for seg in sorted(segments, key=lambda s: s.start):
-            reader = _iter_wifilog if seg.kind == "wrt_wifilog" else _iter_wifi_etl
+        for seg in sorted(_anchored(segments, lo.date()), key=lambda s: s.start):
+            reader = readers.get(seg.kind, _iter_wifi_etl)
             in_window = False
             seg_kept = 0
             for dt, msg in reader(seg):

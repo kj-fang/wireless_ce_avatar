@@ -81,6 +81,18 @@ class BaseTestCase(unittest.TestCase):
                 cls._start_patch(patch.object(module, "app_config", cls.mock_app_config))
                 cls.rebound_modules.append(name)
 
+        # The Handsfree (Beacon) store is NOT under avatarfiles_dir: it is one
+        # shared network folder that the Beacon server and every client read
+        # live (settings, review queue, case requests). A route test that
+        # forgets to mock the store would change the team's real settings, so
+        # make the folder unreachable for every test: open_store() resolves it
+        # through handsfree_root(), which now raises instead.
+        import services.handsfree.queue as handsfree_queue
+        cls._start_patch(patch.object(
+            handsfree_queue, "handsfree_root",
+            side_effect=handsfree_queue.HandsfreeShareUnavailable(
+                "unit tests never open the shared Handsfree folder")))
+
     @classmethod
     def tearDownClass(cls):
         for patcher in reversed(cls._patchers):

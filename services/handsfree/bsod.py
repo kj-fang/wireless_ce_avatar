@@ -1,5 +1,5 @@
 """
-BSOD branch of the Handsfree Replyer — Avatar's BSOD flow, unattended.
+BSOD branch of Beacon (the handsfree replyer) — Avatar's BSOD flow, unattended.
 
 Avatar's manual flow (index page "BSOD" toggle -> select attachments ->
 download -> bsod.html -> bsod_submit): the uploads are downloaded, NOT
@@ -27,6 +27,7 @@ carries the parsed verdict, so the BSOD analysis continues in handsfree.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -93,9 +94,8 @@ def share_case_dir(case_nbr: str, backend_id: str = "") -> str:
 
 def handsfree_config() -> dict:
     try:
-        from configs.global_configs import app_config
-        from .queue import HandsfreeStore
-        return HandsfreeStore(Path(app_config.avatarfiles_dir) / "handsfree").load_config()
+        from .queue import open_store
+        return open_store().load_config()
     except Exception as e:
         print(f"[handsfree.bsod] config unavailable: {e}")
         return {}
@@ -142,8 +142,9 @@ def submit_to_potatofarm(dumps_path: str, email: str, key=None) -> dict:
 # ---------------------------------------------------------------------------
 
 def _submissions_path() -> Path:
-    from configs.global_configs import app_config
-    return Path(app_config.avatarfiles_dir) / "handsfree" / "bsod_submissions.json"
+    # Shared, so the server and a client never submit the same dumps twice.
+    from .queue import handsfree_root
+    return handsfree_root() / "bsod_submissions.json"
 
 
 def _load() -> dict:
@@ -154,6 +155,32 @@ def _load() -> dict:
     except Exception as e:
         print(f"[handsfree.bsod] submissions read failed: {e}")
     return {}
+
+
+_LEDGER_LOCK_WAIT_S = 15       # a transaction is one small read and one small write
+_LEDGER_LOCK_STALE_S = 60      # older than this: left by a process that died mid-write
+
+
+@contextlib.contextmanager
+def _ledger_transaction():
+    """One read-modify-write of the shared ledger at a time, across threads
+    (_LOCK) AND across machines (queue.shared_file_lock): the server records
+    submissions while a client's "reset case" removes one. Yields
+    (path, data): data is what is on the share NOW, read inside the lock. A
+    ledger that cannot be read is never overwritten with a shorter one: the
+    read is retried, then raises (queue.read_json_for_update)."""
+    from .queue import read_json_for_update, shared_file_lock
+    with _LOCK:
+        p = _submissions_path()
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with shared_file_lock(p, wait_s=_LEDGER_LOCK_WAIT_S, stale_s=_LEDGER_LOCK_STALE_S):
+            yield p, read_json_for_update(p, what="BSOD submission record")
+
+
+def _write_ledger(p: Path, data: dict) -> None:
+    # Unique temp name + retry while a reader on another PC holds the file.
+    from .queue import _atomic_write
+    _atomic_write(p, json.dumps(data, indent=2))
 
 
 def submissions(case_nbr: str) -> list[dict]:
@@ -187,20 +214,25 @@ def names_to_skip(case_nbr: str) -> set[str]:
     return skip
 
 
+def forget_case(case_nbr: str) -> int:
+    """Drop a case's submission record (handsfree 'reset case'). Returns the
+    number of entries removed."""
+    with _ledger_transaction() as (p, data):
+        entries = data.pop(str(case_nbr), None) or []
+        if entries:
+            _write_ledger(p, data)
+        return len(entries)
+
+
 def record_submission(case_nbr: str, attachments: list, dumps_path: str,
                       email: str, status, failed: list | None = None) -> None:
-    with _LOCK:
-        data = _load()
+    with _ledger_transaction() as (p, data):
         data.setdefault(str(case_nbr), []).append({
             "submitted_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "attachments": [str(a) for a in attachments],
             "failed": [str(a) for a in (failed or [])],
             "dumps_path": dumps_path, "email": email, "status": status})
-        p = _submissions_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        tmp = p.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
-        os.replace(tmp, p)
+        _write_ledger(p, data)
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +324,10 @@ def assessment(results: list[dict]) -> str:
         return ""
     blamed = [r for r in results if r.get("wifi_fault") or r.get("bt_fault")]
     if blamed:
-        who = sorted({"Wi-Fi driver" if r.get("wifi_fault") else "BT driver" for r in blamed})
+        who = sorted({label for r in blamed
+                      for label, flag in (("Wi-Fi driver", r.get("wifi_fault")),
+                                          ("BT driver", r.get("bt_fault")))
+                      if flag})
         return (f"PotatoFarm blames the Intel {' / '.join(who)} in "
                 f"{len(blamed)}/{len(results)} dump(s) — driver issue to debug.")
     on_stack = [r for r in results if r.get("driver_on_stack")]

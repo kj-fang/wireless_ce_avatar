@@ -88,13 +88,12 @@
 
   <!-- Navbar -->
   <div class="form-container mb-4 p-0 overflow-hidden"
-       style="position: relative; border-radius: 0; margin-top: -30px; margin-left: -30px; margin-right: -30px;">
-    <img src="{{ url_for('static', filename='nav_bar.svg') }}"
-         alt="nav_bar"
-         class="w-100"
-         style="border-radius: 0; display: block;">
+       style="box-sizing: border-box; display: flex; align-items: center; height: 96px; padding: 0 32px; position: relative; border-radius: 0; margin-top: -30px; margin-left: -30px; margin-right: -30px; background: #1f4059;">
+     <img src="{{ url_for('static', filename='new_logo.svg') }}"
+        alt="Wireless CE"
+        style="display: block; width: auto; height: 80px; max-width: 240px; object-fit: contain;">
     <a href="{{ url_for('main.index') }}"
-       style="position: absolute; top: 0; left: 0; width: 20%; height: 100%;
+      style="position: absolute; top: 0; left: 0; width: 272px; max-width: 100%; height: 100%;
               cursor: pointer; z-index: 10;"
        title="Return to home" aria-label="Return to home"></a>
   </div>

@@ -37,6 +37,11 @@ class GlobalConfig:
         self.prompt_dir: Optional[str] = None
         self.project_root: Optional[str] = None
         self.silent_mode: bool = False
+        # Handsfree (Beacon) role of this machine: 'client' (a reviewer's PC:
+        # review queue, Run now, Approve) or 'server' (also runs the scheduled
+        # analysis rounds). Set once at start (app.py --handsfree-role /
+        # INTELAVATAR_HANDSFREE_ROLE); read through services.handsfree.scheduler.role().
+        self.handsfree_role: str = 'client'
         # Download results storage
         self.download_results: Dict[str, Dict[str, Any]] = {}
     

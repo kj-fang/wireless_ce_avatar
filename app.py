@@ -119,7 +119,7 @@ def _bring_chrome_to_front(server_pid):
     except Exception as e:
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
 
-def _build_startup_path(input_paths, sendto_token=None):
+def _build_startup_path(input_paths, sendto_token=None, default='/'):
     """Route any SendTo path straight to open_local_analysis and let that route
     do ALL validation (existence, directory-vs-file, allowed extension) so
     every rejection reason is surfaced to the user as a flash-modal on the
@@ -127,7 +127,7 @@ def _build_startup_path(input_paths, sendto_token=None):
     """
     candidate_paths = [p for p in input_paths if p]
     if not candidate_paths:
-        return '/'
+        return default
 
     if len(candidate_paths) > 1:
         print(f"⚠️ Multiple SendTo files were provided; only the first one will be used: {candidate_paths[0]}")
@@ -253,11 +253,26 @@ if __name__ == "__main__":
     parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
     parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
+    parser.add_argument('--handsfree', action='store_true', help='Open the Handsfree review dashboard instead of the home page.')
+    parser.add_argument('--handsfree-role', choices=('client', 'server'), default=None,
+                        help="Handsfree (Beacon) role of this machine: 'client' (default) reviews and approves drafts; "
+                             "'server' also runs the scheduled analysis rounds from the Beacon page. "
+                             "Falls back to the INTELAVATAR_HANDSFREE_ROLE environment variable, then to the "
+                             "role baked into a packaged build (handsfree_role.txt next to the bundled files).")
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
-    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token)
+    from services.handsfree.scheduler import bundled_role
+    handsfree_role = (args.handsfree_role or os.environ.get('INTELAVATAR_HANDSFREE_ROLE', '')
+                      or bundled_role() or 'client').strip().lower()
+    if handsfree_role not in ('client', 'server'):
+        handsfree_role = 'client'
+    # The server machine lives on the Beacon page: open it unless told otherwise.
+    home_path = '/handsfree/' if (args.handsfree or handsfree_role == 'server') else '/'
+    startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token,
+                                       default=home_path)
     from configs.global_configs import app_config
     app_config.silent_mode = args.silent_mode
+    app_config.handsfree_role = handsfree_role     # before create_app(): the Handsfree blueprint reads it
     
     # Check whether to run in tray mode
     if args.tray_mode:
@@ -270,6 +285,22 @@ if __name__ == "__main__":
     # short-lived SendTo instances don't overwrite the .lnk with a new token)
     existing = check_already_running()
     if existing:
+        if handsfree_role == 'server':
+            # The instance that is running must BE a server: opening a client's
+            # page and exiting would leave the requests and rounds unserved.
+            from services.handsfree.scheduler import role_mismatch, running_role
+            problem = role_mismatch('server', running_role(existing.get('url') or ''),
+                                    existing.get('url') or '')
+            if problem:
+                print(f"❌ {problem}", file=sys.stderr)
+                if getattr(sys, 'frozen', False):
+                    # A packaged build has no console to read that on.
+                    try:
+                        import ctypes
+                        ctypes.windll.user32.MessageBoxW(0, problem, "Beacon Server", 0x30)
+                    except Exception:
+                        pass
+                sys.exit(1)
         print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
         if startup_path and startup_path != '/':
             # This process was launched by File Explorer (SendTo) so it has
@@ -356,7 +387,7 @@ if __name__ == "__main__":
     # Rebuild startup_path using THIS instance's token (app_config.sendto_token).
     # The CLI --sendto-token arg may be from a stale shortcut (previous run),
     # which would cause token validation to fail in open_local_analysis.
-    startup_path = _build_startup_path(args.input_paths)
+    startup_path = _build_startup_path(args.input_paths, default=home_path)
     # =========================================================================
     
     app_config.driver_manager.run_driver(socketio, app, port=port, startup_path=startup_path)

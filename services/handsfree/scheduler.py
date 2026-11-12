@@ -4,26 +4,62 @@ Automatic analysis scheduler: runs orchestrator.run_auto_scan on a cadence.
 Config (HandsfreeStore config.json):
     auto_check_enabled   bool
     auto_check_mode      "4h" | "8h" | "nightly"   (nightly = every day 23:00 local)
+    auto_check_host      str                        machine that pressed Start: the
+                                                    config is shared, only that
+                                                    machine runs the rounds
     auto_check_max_cases int                        cases per round (newest first)
-    auto_source          "owner" | "list_view"      what a round scans (default owner)
-    auto_list_view       str                        IPS list view developer name
-                                                    (closed cases run only in trial mode)
+    auto_source          "owner" | "list_view" | "owners_file"
+                                                    what a round scans (default owner)
+    auto_owners          [str]                      up to MAX_OWNERS IPS Owner.Name
+                                                    for the owner source; empty =
+                                                    the Settings owner_name
+    auto_owners_file     str                        owners_file source: path (on the
+                                                    machine that runs the round) of
+                                                    the CLI's --owners-file text file,
+                                                    one Owner.Name per line
+    auto_list_views      [str]                      up to MAX_LIST_VIEWS IPS list view
+                                                    developer names; a round runs the
+                                                    union of their cases (closed cases
+                                                    only in trial mode)
+    auto_list_view       str                        legacy single name (first of the list)
     auto_next_run_at     ISO local                  persisted so a restart resumes
     auto_last_scan_at    ISO UTC                    written by run_auto_scan
     auto_last_result     str                        "<n> case(s) run" / "failed: …"
+    email_watch_enabled  bool                       also scan an Outlook folder each round
+    email_folder         str                        "Inbox" or "Inbox/<subfolder>"
+    email_lookback_days  int                        how far back a round looks
+    email_max_per_round  int                        cases per round from mail
+    email_reply_all      bool                       Reply all (default) or Reply
+    email_last_scan_at / email_last_result          written by run_email_scan
+    latest_driver / latest_driver_manual / latest_driver_checked_at /
+    latest_driver_last_attempt_at / latest_driver_error / latest_driver_rows_count /
+    latest_driver_refresh_requested_at              the latest released Wi-Fi driver
+                                                    (driver_release.py): the server
+                                                    re-reads the PAE Wi-Fi Dashboard
+                                                    once a day, or when a page pressed
+                                                    "Refresh now"; the Settings override
+                                                    (latest_driver_manual) wins when set
 
-One daemon thread, started lazily (ensure_started) by the blueprint; it
-re-reads the config every tick so Start/Stop/mode changes from the UI need
-no restart. Drafts land in the review queue — nothing is ever posted here.
+One daemon thread per SERVER process (role() == "server": app.py
+--handsfree-role server / INTELAVATAR_HANDSFREE_ROLE), started by the
+blueprint when it registers and by configure(enabled=True); it re-reads the
+config every tick so Start/Stop/mode changes from the UI need no restart. A
+client (a reviewer's PC, the default role) never starts it: it sees the
+schedule read-only and keeps "Run now". Drafts land in the review queue —
+nothing is ever posted here.
 """
 
 from __future__ import annotations
 
+import os
+import sys
 import threading
 import time
 import traceback
 from datetime import datetime, timedelta
 from typing import Optional
+
+from .driver_release import effective_latest_driver, is_refresh_due, refresh_latest_driver
 
 MODES = {"4h": "every 4 hours", "8h": "every 8 hours",
          "nightly": "once overnight (23:00)"}
@@ -51,79 +87,402 @@ def _store():
     return orchestrator_store()
 
 
+ROLES = ("client", "server")
+
+
+def role() -> str:
+    """This machine's Handsfree role: app_config.handsfree_role (set by app.py
+    from --handsfree-role), else the INTELAVATAR_HANDSFREE_ROLE environment
+    variable, else "client". Anything unknown is a client."""
+    import os
+    try:
+        from configs.global_configs import app_config
+        value = getattr(app_config, "handsfree_role", "") or ""
+    except Exception:
+        value = ""
+    value = (str(value) or os.environ.get("INTELAVATAR_HANDSFREE_ROLE", "")).strip().lower()
+    return value if value in ROLES else "client"
+
+
+BUNDLED_ROLE_FILE = "handsfree_role.txt"
+
+
+def bundled_role(base: Optional[str] = None) -> str:
+    """The role baked into a packaged build: the first line of
+    handsfree_role.txt next to the bundled files (PyInstaller's _MEIPASS,
+    i.e. the _internal folder of the Client / Server package). "" when
+    there is no such file or it names no known role — a source checkout has
+    none, so the flag, the environment or 'client' decide there."""
+    base = base or getattr(sys, "_MEIPASS", "")
+    if not base:
+        return ""
+    try:
+        with open(os.path.join(base, BUNDLED_ROLE_FILE), encoding="utf-8") as fh:
+            value = fh.readline().strip().lower()
+    except OSError:
+        return ""
+    return value if value in ROLES else ""
+
+
+def running_role(instance_url: str, timeout: float = 5.0) -> str:
+    """The Beacon role of the Avatar already running at instance_url, asked
+    over its own /handsfree/auto: "server", "client", or "" when it cannot
+    be asked (an older build without roles, or still starting)."""
+    import json
+    from urllib.request import ProxyHandler, Request, build_opener
+    try:
+        req = Request(str(instance_url).rstrip("/") + "/handsfree/auto")
+        with build_opener(ProxyHandler({})).open(req, timeout=timeout) as r:
+            value = str(json.loads(r.read().decode("utf-8")).get("role") or "").strip().lower()
+    except Exception:
+        return ""
+    return value if value in ROLES else ""
+
+
+def role_mismatch(wanted: str, running: str, instance_url: str = "") -> str:
+    """Why the Avatar that is already running cannot stand in for the one
+    being started, or "" when it can. The role is fixed per process, and
+    only a SERVER serves the clients' case requests and runs the scheduled
+    rounds — so starting the Beacon Server while a client (or an older
+    build) is running must not just open that instance's page and exit:
+    nothing would be served. A client start is content with any instance."""
+    if str(wanted or "").lower() != "server" or str(running or "").lower() == "server":
+        return ""
+    what = (f"as the Beacon {str(running).upper()}" if running
+            else "without the Beacon server role (an older build, or still starting)")
+    where = f" at {instance_url}" if instance_url else ""
+    return (f"Avatar is already running{where} {what}, so the Beacon SERVER was not started: "
+            "case requests and scheduled rounds would stay unserved. The role is fixed per "
+            "process - stop that Avatar first (its tray icon > Exit, or close its console "
+            "window), then start the Beacon Server again.")
+
+
+def can_schedule_here() -> bool:
+    """Only the server role may start the schedule (and run its rounds)."""
+    return role() == "server"
+
+
+def _this_host() -> str:
+    import socket
+    return socket.gethostname().casefold()
+
+
+def _runs_here(cfg: dict) -> bool:
+    """The schedule is pinned to the machine that pressed Start (the config
+    is shared by every PC); a second server would otherwise run every round
+    twice."""
+    return str(cfg.get("auto_check_host") or "").casefold() == _this_host()
+
+
+MAX_LIST_VIEWS = 3
+MAX_OWNERS = 10
+
+
+SOURCES = ("owner", "list_view", "owners_file")
+
+
 def _source(cfg: dict) -> str:
-    return "list_view" if cfg.get("auto_source") == "list_view" else "owner"
+    value = str(cfg.get("auto_source") or "")
+    return value if value in SOURCES else "owner"
+
+
+def read_owners_file(path) -> list[str]:
+    """The owners in a CLI owners file: UTF-8 (BOM allowed), one Owner.Name
+    per line, blank lines and # comments ignored, deduped case-insensitively
+    in file order. Raises ValueError when the file cannot be read."""
+    from pathlib import Path
+    p = Path(str(path).strip())
+    if not p.is_file():
+        raise ValueError(f"owners file not found: {p}")
+    try:
+        lines = p.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as e:
+        raise ValueError(f"cannot read owners file {p}: {e}") from e
+    out: list[str] = []
+    seen: set = set()
+    for line in lines:
+        name = line.strip()
+        if not name or name.startswith("#") or name.casefold() in seen:
+            continue
+        out.append(name)
+        seen.add(name.casefold())
+    return out
+
+
+def _owners_file_info(cfg: dict) -> tuple[list[str], str]:
+    """(owners, error) of the configured owners file."""
+    path = str(cfg.get("auto_owners_file") or "").strip()
+    if not path:
+        return [], "no owners file configured"
+    try:
+        owners = read_owners_file(path)
+    except ValueError as e:
+        return [], str(e)
+    return owners, ("" if owners else f"owners file is empty: {path}")
+
+
+def _clean_views(values) -> list[str]:
+    """Strip / drop empties / dedupe (order kept) / cap at MAX_LIST_VIEWS."""
+    if isinstance(values, str):
+        values = [values]
+    out: list[str] = []
+    for v in values or []:
+        name = str(v or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out[:MAX_LIST_VIEWS]
+
+
+def _list_views(cfg: dict) -> list[str]:
+    # auto_list_view / trial_list_view: where the single name lived before
+    # several views could be chosen (2026-10-15 / 2026-10-14).
+    views = _clean_views(cfg.get("auto_list_views"))
+    if not views:
+        views = _clean_views(cfg.get("auto_list_view") or cfg.get("trial_list_view") or "")
+    return views
 
 
 def _list_view(cfg: dict) -> str:
-    # trial_list_view: where the name lived while the list view was a
-    # Settings/trial-batch thing (before 2026-10-14).
-    return str(cfg.get("auto_list_view") or cfg.get("trial_list_view") or "").strip()
+    views = _list_views(cfg)
+    return views[0] if views else ""
+
+
+def _clean_owners(values) -> list[str]:
+    """Strip / drop empties / dedupe case-insensitively (order kept) / cap."""
+    if isinstance(values, str):
+        values = [values]
+    out: list[str] = []
+    seen: set = set()
+    for v in values or []:
+        name = str(v or "").strip()
+        if name and name.casefold() not in seen:
+            out.append(name)
+            seen.add(name.casefold())
+    return out[:MAX_OWNERS]
+
+
+def _owners(cfg: dict) -> list[str]:
+    """The owners a round scans: auto_owners, else the Settings owner_name
+    (how every config looked before several owners could be chosen)."""
+    owners = _clean_owners(cfg.get("auto_owners"))
+    if not owners:
+        owners = _clean_owners(cfg.get("owner_name") or "")
+    return owners
 
 
 def scan_target(cfg: dict) -> dict:
     """What a round scans, from the config:
-    {"owner": str, "list_view": str, "error": str} — error set when the
-    chosen source is not configured."""
+    {"owner": str (first owner), "owners": [str], "list_views": [str],
+     "list_view": str (first), "error": str}
+    — error set when the chosen source is not configured."""
     if _source(cfg) == "list_view":
-        lv = _list_view(cfg)
-        return {"owner": "", "list_view": lv,
-                "error": "" if lv else "no IPS list view name configured"}
-    owner = (cfg.get("owner_name") or "").strip()
-    return {"owner": owner, "list_view": "",
-            "error": "" if owner else "no owner name configured"}
+        views = _list_views(cfg)
+        return {"owner": "", "owners": [], "list_views": views,
+                "list_view": views[0] if views else "",
+                "error": "" if views else "no IPS list view configured"}
+    if _source(cfg) == "owners_file":
+        # The CLI's --owners-file, read on the machine that runs the round.
+        owners, error = _owners_file_info(cfg)
+        return {"owner": owners[0] if owners else "", "owners": owners, "list_views": [],
+                "list_view": "", "error": error}
+    owners = _owners(cfg)
+    return {"owner": owners[0] if owners else "", "owners": owners, "list_views": [],
+            "list_view": "", "error": "" if owners else "no owner name configured"}
+
+
+EMAIL_DEFAULTS = {"email_watch_enabled": False, "email_folder": "Inbox",
+                  "email_lookback_days": 7, "email_max_per_round": 3,
+                  "email_reply_all": True}
+
+
+def _int(value, default: int) -> int:
+    """int(value); the default only for an absent/blank/non-numeric value
+    (0 is a value, clamped by the caller)."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def email_settings(cfg: dict) -> dict:
+    """run_email_scan keyword arguments from the config."""
+    return {"folder": str(cfg.get("email_folder") or "Inbox").strip() or "Inbox",
+            "max_cases": max(1, min(20, int(cfg.get("email_max_per_round") or 3))),
+            "lookback_days": max(1, min(60, int(cfg.get("email_lookback_days") or 7))),
+            "reply_all": bool(cfg.get("email_reply_all", True))}
 
 
 def status(cfg: Optional[dict] = None) -> dict:
     cfg = cfg if cfg is not None else _store().load_config()
+    em = email_settings(cfg)
+    _latest = effective_latest_driver(cfg)
     return {
+        "email_watch_enabled": bool(cfg.get("email_watch_enabled")),
+        "email_folder": em["folder"],
+        "email_lookback_days": em["lookback_days"],
+        "email_max": em["max_cases"],
+        "email_reply_all": em["reply_all"],
+        "email_last_scan_at": cfg.get("email_last_scan_at") or "",
+        "email_last_result": cfg.get("email_last_result") or "",
         "enabled": bool(cfg.get("auto_check_enabled")),
         "mode": cfg.get("auto_check_mode") or "nightly",
         "mode_label": MODES.get(cfg.get("auto_check_mode") or "nightly", ""),
         "max_cases": int(cfg.get("auto_check_max_cases") or 10),
         "source": _source(cfg),
+        "owners": _owners(cfg),
+        "max_owners": MAX_OWNERS,
+        "owners_file": str(cfg.get("auto_owners_file") or "").strip(),
+        "owners_file_owners": _owners_file_info(cfg)[0],
+        "owners_file_error": _owners_file_info(cfg)[1],
         "list_view": _list_view(cfg),
+        "list_views": _list_views(cfg),
+        "max_list_views": MAX_LIST_VIEWS,
         "next_run_at": cfg.get("auto_next_run_at") or "",
         "last_scan_at": cfg.get("auto_last_scan_at") or "",
         "last_result": cfg.get("auto_last_result") or "",
         "running": _running.is_set(),
         "thread_alive": bool(_thread and _thread.is_alive()),
+        # Where the schedule runs: this machine's role, the machine that
+        # pressed Start, and whether that is this one.
+        "role": role(),
+        "can_schedule": can_schedule_here(),
+        "host": cfg.get("auto_check_host") or "",
+        "runs_here": _runs_here(cfg),
+        "cli_last_run": cli_last_run(),
+        # Latest released Wi-Fi driver: the effective value (Settings override
+        # or the report), the report's own value and how the last fetch went.
+        "latest_driver": _latest[0],
+        "latest_driver_source": _latest[1],
+        "latest_driver_auto": str(cfg.get("latest_driver") or ""),
+        "latest_driver_checked_at": str(cfg.get("latest_driver_checked_at") or ""),
+        "latest_driver_error": str(cfg.get("latest_driver_error") or ""),
+        "latest_driver_rows_count": int(cfg.get("latest_driver_rows_count") or 0),
+        "latest_driver_refresh_pending": _refresh_pending(cfg),
     }
 
 
-def _settings_updates(max_cases=None, source=None, list_view=None) -> dict:
+def _refresh_pending(cfg: dict) -> bool:
+    """A page pressed "Refresh now" and the server has not fetched since."""
+    req = str(cfg.get("latest_driver_refresh_requested_at") or "")
+    att = str(cfg.get("latest_driver_last_attempt_at") or "")
+    return bool(req) and (not att or req > att)
+
+
+_CLI_STATUS_MAX_AGE_S = 24 * 3600
+
+
+def cli_running_message(last_status: str) -> str:
+    """Why Start is refused while the Task Scheduler CLI is still active here."""
+    return (f"the Task Scheduler CLI (tools/handsfree_server_run.py) ran on this server "
+            f"in the last 24 hours ({last_status}): disable that scheduled task first, "
+            "then start the schedule here — one scheduler per server")
+
+
+def scheduled_in_app_here(cfg: dict) -> str:
+    """Non-empty when the Beacon page schedules the rounds on THIS machine
+    (the CLI round must then stay out of the way): the reason text."""
+    if cfg.get("auto_check_enabled") and _runs_here(cfg) and cfg.get("auto_check_host"):
+        return (f"the Beacon page schedules the rounds on this server (host "
+                f"{cfg.get('auto_check_host')}, {MODES.get(cfg.get('auto_check_mode') or 'nightly', '')}): "
+                "stop it there before running the CLI round, or disable this scheduled task "
+                "— one scheduler per server")
+    return ""
+
+
+def cli_last_run() -> str:
+    """The Task Scheduler CLI's last_status.txt first line (tools/
+    handsfree_server_run.py) when it is younger than a day, else "". The
+    server page shows it next to an enabled schedule: both running means
+    duplicate rounds and a Chrome profile opened twice. Local file only."""
+    try:
+        from configs.global_configs import app_config
+        base = getattr(app_config, "avatarfiles_dir", None)
+        if not base:
+            return ""
+        from pathlib import Path
+        p = Path(base) / "logs" / "handsfree_server" / "last_status.txt"
+        if time.time() - p.stat().st_mtime > _CLI_STATUS_MAX_AGE_S:
+            return ""
+        return (p.read_text(encoding="utf-8", errors="replace").splitlines() or [""])[0].strip()
+    except Exception:
+        return ""
+
+
+def _settings_updates(max_cases=None, source=None, list_view=None,
+                      list_views=None, owners=None, owners_file=None,
+                      email_watch=None, email_folder=None,
+                      email_lookback_days=None, email_max=None,
+                      email_reply_all=None) -> dict:
     updates: dict = {}
     if max_cases is not None:
         updates["auto_check_max_cases"] = max(1, min(50, int(max_cases)))
+    if owners is not None:
+        updates["auto_owners"] = _clean_owners(owners)
+    if owners_file is not None:
+        updates["auto_owners_file"] = str(owners_file or "").strip()
+    if email_watch is not None:
+        updates["email_watch_enabled"] = bool(email_watch)
+    if email_folder is not None:
+        updates["email_folder"] = str(email_folder).strip() or "Inbox"
+    if email_lookback_days is not None:
+        updates["email_lookback_days"] = max(1, min(60, _int(email_lookback_days, 7)))
+    if email_max is not None:
+        updates["email_max_per_round"] = max(1, min(20, _int(email_max, 3)))
+    if email_reply_all is not None:
+        updates["email_reply_all"] = bool(email_reply_all)
     if source is not None:
-        updates["auto_source"] = "list_view" if str(source) == "list_view" else "owner"
-    if list_view is not None:
-        updates["auto_list_view"] = str(list_view).strip()
+        updates["auto_source"] = str(source) if str(source) in SOURCES else "owner"
+    if list_views is not None:
+        views = _clean_views(list_views)
+    elif list_view is not None:
+        views = _clean_views(list_view)
+    else:
+        views = None
+    if views is not None:
+        updates["auto_list_views"] = views
+        updates["auto_list_view"] = views[0] if views else ""   # legacy readers
     return updates
 
 
-def save_settings(max_cases=None, source=None, list_view=None) -> dict:
+def save_settings(max_cases=None, source=None, list_view=None, list_views=None,
+                  owners=None, owners_file=None, **email) -> dict:
     """Persist the round settings without touching the schedule (UI 'Run
     now' with edited fields). Returns the config."""
-    return _store().save_config(_settings_updates(max_cases, source, list_view))
+    return _store().save_config(
+        _settings_updates(max_cases, source, list_view, list_views, owners, owners_file,
+                          **email))
+
+
+CLIENT_CANNOT_SCHEDULE = ("this PC runs Beacon as a client: scheduled rounds are started "
+                          "on the Handsfree server (start Beacon there with --server / "
+                          "app.py --handsfree-role server)")
 
 
 def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
-              source=None, list_view=None) -> dict:
+              source=None, list_view=None, list_views=None, owners=None,
+              owners_file=None, **email) -> dict:
     """Start / stop / re-cadence from the UI. Returns the new status.
-    Raises ValueError for an unknown mode or, when starting, an unconfigured
-    source (no owner name / no list view name)."""
+    Raises ValueError for an unknown mode, for Start on a client machine, or,
+    when starting, an unconfigured source (no owner name / no list view)."""
     store = _store()
     if mode not in MODES:
         raise ValueError(f"unknown mode: {mode}")
+    if enabled and not can_schedule_here():
+        raise ValueError(CLIENT_CANNOT_SCHEDULE)
+    if enabled:
+        recent = cli_last_run()
+        if recent:
+            raise ValueError(cli_running_message(recent))
     updates: dict = {"auto_check_enabled": bool(enabled), "auto_check_mode": mode}
-    updates.update(_settings_updates(max_cases, source, list_view))
+    updates.update(_settings_updates(max_cases, source, list_view, list_views, owners,
+                                     owners_file, **email))
     if enabled:
         target = scan_target({**store.load_config(), **updates})
         if target["error"]:
             raise ValueError(target["error"])
         updates["auto_next_run_at"] = next_run_after(
             mode, datetime.now().astimezone(), first=True).isoformat(timespec="seconds")
+        updates["auto_check_host"] = _this_host()
     else:
         updates["auto_next_run_at"] = ""
     cfg = store.save_config(updates)
@@ -132,19 +491,37 @@ def configure(enabled: bool, mode: str, max_cases: Optional[int] = None,
     return status(cfg)
 
 
-def run_once(trigger: str = "manual") -> dict:
-    """Run a round now (UI 'Run now'); reschedules the next automatic one."""
-    from .orchestrator import run_auto_scan
+def run_once(trigger: str = "manual", on_start=None) -> dict:
+    """Run a round now (UI 'Run now'); reschedules the next automatic one.
+    on_start() fires once the round holds the run lock (see run_auto_scan)."""
+    from .orchestrator import run_auto_scan, run_email_scan
     store = _store()
     cfg = store.load_config()
     target = scan_target(cfg)
     if target["error"]:
+        # A misconfigured source (owners file gone, no list view): say so in
+        # the status line and, for the schedule, move on to the next slot
+        # instead of retrying every tick.
+        updates = {"auto_last_result": f"failed: {target['error']}"}
+        if cfg.get("auto_check_enabled") and trigger == "scheduled":
+            updates["auto_next_run_at"] = next_run_after(
+                cfg.get("auto_check_mode") or "nightly",
+                datetime.now().astimezone()).isoformat(timespec="seconds")
+        store.save_config(updates)
         return {"ok": False, "error": target["error"]}
     _running.set()
     try:
         res = run_auto_scan(store, target["owner"],
                             int(cfg.get("auto_check_max_cases") or 10),
-                            trigger=trigger, list_view=target["list_view"])
+                            trigger=trigger, list_views=target["list_views"],
+                            owners=target["owners"], on_start=on_start)
+        # The Outlook folder is an ADDITIONAL source of the same round.
+        if res.get("ok") and cfg.get("email_watch_enabled"):
+            res["email"] = run_email_scan(store, trigger=trigger, **email_settings(cfg))
+        # Like the CLI after its owners round: retention housekeeping, but
+        # only for the schedule's own rounds (Run now leaves the queue alone).
+        if res.get("ok") and trigger == "scheduled":
+            res["cleanup"] = _cleanup_after_round(store)
     finally:
         _running.clear()
     busy = not res.get("ok") and "already in progress" in str(res.get("error", ""))
@@ -157,6 +534,114 @@ def run_once(trigger: str = "manual") -> dict:
     return res
 
 
+def _cleanup_after_round(store) -> dict:
+    """orchestrator.cleanup_queue, never failing the round (same as the CLI)."""
+    from .orchestrator import cleanup_queue
+    try:
+        res = cleanup_queue(store)
+        print(f"[handsfree.scheduler] cleanup: {res.get('drafts_removed')} draft(s), "
+              f"{res.get('log_folders_removed')} log folder(s) removed")
+        return res
+    except Exception as e:
+        print(f"[handsfree.scheduler] cleanup skipped: {type(e).__name__}: {e}")
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
+_REQUEST_RUN_TIMEOUT_S = 60 * 60
+
+
+def run_requests() -> int:
+    """Server only: serve the case requests clients left on the share
+    (HandsfreeStore.request_case), oldest first, one at a time, through the
+    same single-case run the page's "Analyze this case" uses on the server —
+    so the live panel shows it here, and the draft (with its saved live
+    history) lands in the shared queue for the requester. Returns how many
+    ran. A request the run lock refuses (a round in progress) goes back to
+    pending for the next tick."""
+    if not can_schedule_here():
+        return 0
+    from . import orchestrator
+    store = _store()
+    ran = 0
+    for req in store.pending_requests():
+        case_nbr = req["case_nbr"]
+        claimed = store.claim_request(case_nbr, _this_host())
+        if not claimed:
+            continue                       # another server took it, or withdrawn
+        res = orchestrator.start_case_run(case_nbr)
+        if not res.get("ok"):
+            if "already in progress" in str(res.get("error", "")):
+                store.unclaim_request(case_nbr)
+                return ran                 # try again next tick, keep the order
+            store.finish_request(case_nbr, ok=False, error=str(res.get("error") or "could not start"))
+            continue
+        deadline = time.time() + _REQUEST_RUN_TIMEOUT_S
+        state = orchestrator.get_run_state()
+        while state.get("status") == "running" and time.time() < deadline:
+            time.sleep(1)
+            state = orchestrator.get_run_state()
+        details = (state.get("case_details") or {}).get(case_nbr) or {}
+        ok = state.get("status") == "done"
+        store.finish_request(case_nbr, ok=ok,
+                             error="" if ok else str(state.get("error") or
+                                                     ("still running after an hour"
+                                                      if state.get("status") == "running"
+                                                      else state.get("status") or "failed")),
+                             draft_id=str(details.get("draft_id") or ""))
+        print(f"[handsfree.scheduler] request {case_nbr} from {req.get('requested_by') or '?'}: "
+              + ("done" if ok else f"failed: {state.get('error')}"))
+        ran += 1
+    return ran
+
+
+def maybe_refresh_latest_driver(now: Optional[datetime] = None) -> bool:
+    """Server only: re-read the latest released driver from the PAE Wi-Fi
+    Dashboard when it is due (daily, after a failure, or when a page pressed
+    "Refresh now"). Runs in the scheduler thread between requests and the
+    round, holding the orchestrator's run lock: the fetch opens the same SSO
+    Chrome profile as a round, which cannot be open twice. "Run now" answers
+    "a run is already in progress" during the ~30-60 s fetch. Never raises;
+    on failure the stored value is kept (driver_release.refresh_latest_driver).
+    Returns True when a fetch was attempted."""
+    if not can_schedule_here():
+        return False
+    try:
+        from configs.global_configs import app_config
+        if getattr(app_config, "driver_manager", None) is None:
+            return False          # no Chrome in this process (CLI, tests)
+        store = _store()
+        if not is_refresh_due(store.load_config(), now):
+            return False
+        from .orchestrator import _run_lock
+        if not _run_lock.acquire(blocking=False):
+            return False          # a UI run is active: next tick
+        try:
+            refresh_latest_driver(store)
+        finally:
+            _run_lock.release()
+        return True
+    except Exception as e:
+        print(f"[handsfree.scheduler] latest driver refresh failed: {e}")
+        return False
+
+
+def _tick(now: Optional[datetime] = None) -> bool:
+    """One scheduler tick: serve clients' case requests, refresh the latest
+    released driver when due, then run the due round when this server owns
+    the schedule. Returns True when anything ran."""
+    ran = run_requests() > 0
+    maybe_refresh_latest_driver(now)       # housekeeping: not a "run"
+    cfg = _store().load_config()
+    if not (cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at")
+            and can_schedule_here() and _runs_here(cfg)):
+        return ran
+    due = datetime.fromisoformat(cfg["auto_next_run_at"])
+    if (now or datetime.now().astimezone()) < due:
+        return ran
+    run_once(trigger="scheduled")
+    return True
+
+
 def _loop() -> None:
     while True:
         try:
@@ -164,11 +649,7 @@ def _loop() -> None:
             if not getattr(app_config, "avatarfiles_dir", None):
                 time.sleep(_TICK_S)      # app still booting (set_up not run yet)
                 continue
-            cfg = _store().load_config()
-            if cfg.get("auto_check_enabled") and cfg.get("auto_next_run_at"):
-                due = datetime.fromisoformat(cfg["auto_next_run_at"])
-                if datetime.now().astimezone() >= due:
-                    run_once(trigger="scheduled")
+            _tick()
         except Exception:
             print(f"[handsfree.scheduler] tick failed:\n{traceback.format_exc()}")
         time.sleep(_TICK_S)

@@ -241,7 +241,10 @@ def find_assert_evidence(analysis, window=None) -> dict:
       1. the decoded WRT log (analysis.log_path) — the driver's own
          "uCode ASSERT(<CPU>, rtStatus = 0x…)" lines. Authoritative.
       2. fallback: assert codes mentioned in the agent's write-up
-         (6+ hex digits; Windows event IDs like 5002 rejected).
+         (6+ hex digits; Windows event IDs like 5002 rejected) — only when
+         the log held NO asserts at all. When the window excluded every log
+         assert, the write-up (made from the whole log) would just hand the
+         same excluded codes back.
 
     window: optional (start, end) datetimes in the log's clock frame — an
     assert outside it happened at another time and is not this issue's
@@ -275,7 +278,7 @@ def find_assert_evidence(analysis, window=None) -> dict:
     # agent's own write-up) supply assert codes.
 
     blob = _analysis_text_blob(analysis)
-    if not asserts:
+    if not asserts and not ignored:
         seen: set = set()
         for regex in (_ASSERT_CODE_RE, _LOOKUP_BLOCK_RE):
             for m in regex.finditer(blob):
@@ -326,6 +329,48 @@ def build_assert_question(code: str, lookup_text: str, context: str = "",
     return "\n".join(parts)
 
 
+def build_next_steps_question(*, subject: str = "", description: str = "",
+                              domain: str = "", subcategory: str = "",
+                              issue_times=None, missing_info=None,
+                              attachments=None, latest_customer_comment: str = "",
+                              reader_next_action: str = "") -> str:
+    """The advisory question asked right after the IPS thread is read: what
+    to ask the customer next and the recommended next debug steps for this
+    kind of issue (Charles, 2026-10-20). Grounded on the case summary, not
+    on logs — it runs in parallel with the log pipeline."""
+    parts = ["An Intel Wi-Fi support engineer is triaging an IPS customer case and "
+             "needs guidance on the NEXT STEPS before / alongside log analysis."]
+    if subject:
+        parts += ["", f"Case subject: {str(subject).strip()[:200]}"]
+    if domain:
+        parts.append(f"Issue category: {domain}"
+                     + (f" / {subcategory}" if subcategory and subcategory != domain else ""))
+    if description:
+        parts += ["", "Current issue as understood from the description and the comments:",
+                  str(description).strip()[:1200]]
+    times = [str(t) for t in (issue_times or []) if str(t).strip()]
+    parts += ["", "Issue time(s) stated: " + (", ".join(times[:3]) if times else "none stated")]
+    missing = [str(m.get("item") if isinstance(m, dict) else m) for m in (missing_info or [])]
+    if missing:
+        parts.append("Information still missing from the case: " + ", ".join(missing))
+    names = [str(a[0]) for a in (attachments or []) if a][:8]
+    parts.append("Attachments on the case: " + (", ".join(names) if names else "none"))
+    if latest_customer_comment:
+        parts += ["", "Latest customer comment:", str(latest_customer_comment).strip()[:600]]
+    if reader_next_action:
+        parts += ["", f"Tentative next action already identified: {str(reader_next_action).strip()[:300]}"]
+    parts += ["",
+              "From the Wi-Fi driver documentation and past cases, answer concisely in "
+              "bullet points:",
+              "1. Which clarifying questions, information or logs should we request "
+              "from the customer next, and why?",
+              "2. What are the recommended next debug / triage steps for this kind of "
+              "issue?",
+              "3. Any known similar issues, root causes or workarounds worth checking?",
+              "Cite the documents or cases you rely on where possible."]
+    return "\n".join(parts)
+
+
 def build_yellow_bang_question(context: str = "") -> str:
     parts = ["An Intel WiFi adapter hit a yellow bang (device error / device "
              "lost) in an IPS customer case."]
@@ -340,8 +385,12 @@ def build_yellow_bang_question(context: str = "") -> str:
 
 
 def collect_echo_insights(analysis,
-                          ask: Optional[Callable[[str], str]] = None) -> list[dict]:
+                          ask: Optional[Callable[[str], str]] = None,
+                          evidence: Optional[dict] = None) -> list[dict]:
     """Query Echo for every assert (and yellow bang) found in the analysis.
+
+    evidence: a find_assert_evidence() result to use as-is (the runner passes
+    its issue-time-windowed one); None recomputes without a window.
 
     Never raises: a per-question EchoUnavailable becomes an entry with
     "error" set and "answer" None, so one outage can't lose other answers
@@ -350,7 +399,8 @@ def collect_echo_insights(analysis,
     from utils.assert_code_utils import lookup_assert_code
 
     ask = ask or ask_echo_kb
-    evidence = find_assert_evidence(analysis)
+    if evidence is None:
+        evidence = find_assert_evidence(analysis)
     context = str(getattr(analysis, "clean_description", "") or "")
     insights: list[dict] = []
 

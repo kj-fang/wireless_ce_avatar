@@ -1,0 +1,376 @@
+"""
+An email thread as a case — stage 1 of Beacon's Outlook intake.
+
+Every mail that names an IPS case number forms the thread; the earliest one
+is the description, the later ones the comments, their files the uploads.
+The result is the same CaseContext the IPS fetch produces, so every later
+pipeline stage (triage, reader, checklist, archive pick, decode, analysis,
+Echo, draft) runs unchanged on it.
+
+Stage 2 (later): merge_contexts() joins the IPS thread and the email thread
+into one context — the reader sees both, the archives of both are
+candidates. Keep `source` on the context/analysis/draft so both stages can
+tell where a fact came from.
+
+No Outlook/COM here: the messages come from outlook_source (or a fake).
+"""
+
+from __future__ import annotations
+
+import copy
+import json
+import os
+import re
+import threading
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Callable, Optional
+
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
+INTEL_DOMAINS = ("intel.com",)
+MAX_IMAGE_BYTES = 5 * 1024 * 1024
+MAX_IMAGES_PER_THREAD = 8
+# A mail naming more cases than this is a digest / status report, not part
+# of any case's thread (the bi-weekly case status mail names dozens).
+MAX_CASES_PER_MAIL = 3
+# Automated senders / subjects: IPS notifications (they duplicate the IPS
+# thread, which stage 2 merges in properly), Jira, no-reply robots,
+# out-of-office replies. Matched case-insensitively against the sender
+# address, the sender name and the subject.
+AUTOMATED_SENDER_PATTERNS = ("intel.premier.support@", "noreply", "no-reply", "no_reply",
+                             "donotreply", "do-not-reply", "do_not_reply", "jira@",
+                             "_jira", "(jira)", "notification@", "notifications@",
+                             "mailer-daemon", "postmaster@")
+AUTOMATED_SUBJECT_RE = re.compile(
+    r"^\s*(automatic reply|auto(matic)?[\s-]*reply|out of office|undeliverable|"
+    r"delivery (status notification|has failed)|read:|ips (has|-) )", re.IGNORECASE)
+
+_REPLY_PREFIX_RE = re.compile(r"^\s*(?:(?:re|fw|fwd|aw|wg|sv|tr|答复|回复|转发)\s*:\s*)+", re.IGNORECASE)
+_BT_RE = re.compile(r"bluetooth|\bbt\b|a2dp|\bhfp\b|le audio|\bhid\b", re.IGNORECASE)
+_CACHE_LOCK = threading.Lock()
+
+
+@dataclass
+class EmailMessage:
+    entry_id: str
+    store_id: str
+    folder: str
+    subject: str
+    sender_name: str
+    sender_email: str
+    received: str                       # ISO, local clock
+    body: str = ""                      # plain text
+    is_own: bool = False                # sent by the Beacon user (Sent Items / own address)
+    conversation_id: str = ""
+    attachments: list = field(default_factory=list)   # [{name, path, size, is_image}]
+
+    @property
+    def received_dt(self) -> Optional[datetime]:
+        try:
+            return datetime.fromisoformat(self.received)
+        except Exception:
+            return None
+
+
+# ----------------------------------------------------------------- helpers
+
+def clean_subject(subject: str) -> str:
+    """'RE: FW: Case 01031658 drops' -> 'Case 01031658 drops'."""
+    return _REPLY_PREFIX_RE.sub("", str(subject or "")).strip()
+
+
+def author_type(msg: EmailMessage) -> str:
+    """The reader's author vocabulary: Intel-side rows are 'Agent', the
+    customer side 'Customer' (case_reader.customer_visible_history)."""
+    if msg.is_own:
+        return "Agent"
+    domain = (msg.sender_email or "").rsplit("@", 1)[-1].lower()
+    return "Agent" if any(domain == d or domain.endswith("." + d) for d in INTEL_DOMAINS) \
+        else "Customer"
+
+
+def _stamp(msg: EmailMessage) -> str:
+    """Upload-time metadata in the IPS attachment format (_pick_latest_archive
+    parses '%m/%d/%Y %H:%M')."""
+    dt = msg.received_dt
+    return dt.strftime("%m/%d/%Y %H:%M") if dt else ""
+
+
+def _header(msg: EmailMessage) -> str:
+    who = msg.sender_name or msg.sender_email or "?"
+    if msg.sender_email and msg.sender_name:
+        who += f" <{msg.sender_email}>"
+    return f"[Email from {who} on {msg.received[:16].replace('T', ' ')} — subject: {msg.subject}]"
+
+
+def sort_messages(messages) -> list[EmailMessage]:
+    return sorted(messages or [], key=lambda m: m.received or "")
+
+
+def is_automated(sender_email: str = "", sender_name: str = "", subject: str = "") -> bool:
+    """IPS / Jira / robot notifications and out-of-office replies: never
+    part of a case's email thread, never a trigger."""
+    hay = f"{sender_email} {sender_name}".lower()
+    if any(p in hay for p in AUTOMATED_SENDER_PATTERNS):
+        return True
+    return bool(AUTOMATED_SUBJECT_RE.match(str(subject or "")))
+
+
+_TRIGGER_WORD_RE = re.compile(r"(?i)\bIPS\b")
+_EIGHT_DIGITS_RE = re.compile(r"(?<!\d)\d{8}(?!\d)")
+
+
+def trigger_cases(subject: str) -> list[str]:
+    """The cases a mail may START a run for (Charles, 2026-10-22): the
+    SUBJECT must name the case as 'IPS' plus an eight-digit number, e.g.
+    'IPS 01234567'. Numbers only in the body, or subjects without 'IPS', do
+    not trigger (they still make the mail part of the case's thread)."""
+    text = str(subject or "")
+    if not _TRIGGER_WORD_RE.search(text):
+        return []
+    out: list[str] = []
+    for n in _EIGHT_DIGITS_RE.findall(text):
+        # Eight digits are not yet a case number: "IPS 01031658 update
+        # 20261110" carries a date. Thread collection uses the canonical form
+        # (leading zero), so a date scheduled here could never find its mail:
+        # it stayed pending and took a slot of the case limit on every scan.
+        if _is_case_number(n) and n not in out:
+            out.append(n)
+    return out
+
+
+def _is_case_number(eight_digits: str) -> bool:
+    """The repository's one definition of an IPS case number
+    (utils.check_ips_utils.normalise_ips), applied to an eight-digit run."""
+    try:
+        from utils.check_ips_utils import normalise_ips
+        return normalise_ips(eight_digits) == eight_digits
+    except Exception:
+        return str(eight_digits).startswith("0")
+
+
+def is_digest(case_nbrs) -> bool:
+    """A mail naming more than MAX_CASES_PER_MAIL cases is a status digest."""
+    return len(set(case_nbrs or [])) > MAX_CASES_PER_MAIL
+
+
+def reply_target(messages, trigger_entry_id: str = "") -> Optional[EmailMessage]:
+    """The mail the reply draft answers. The mail that triggered the run;
+    when that one is ours, the newest mail not written by us in the same
+    conversation, else the trigger itself (a reply-all on our own mail goes
+    to its recipients). Without a trigger: the newest mail not written by
+    us, else the newest."""
+    msgs = sort_messages(messages)
+    if not msgs:
+        return None
+    trigger = next((m for m in msgs if m.entry_id == trigger_entry_id), None) if trigger_entry_id else None
+    if trigger is not None:
+        if not trigger.is_own:
+            return trigger
+        if trigger.conversation_id:
+            for m in reversed(msgs):
+                if not m.is_own and m.conversation_id == trigger.conversation_id:
+                    return m
+        return trigger
+    for m in reversed(msgs):
+        if not m.is_own:
+            return m
+    return msgs[-1]
+
+
+# ------------------------------------------------------------- the context
+
+def build_case_context(case_nbr: str, messages, download_dir: str):
+    """CaseContext (models.models) for the thread. Extra attributes carried
+    on the instance: source='email', local_paths {attachment name: path},
+    messages, image_files [(message, attachment)]."""
+    from models.models import CaseContext
+
+    msgs = sort_messages(messages)
+    if not msgs:
+        raise ValueError(f"no mail names case {case_nbr}")
+    first = msgs[0]
+    subject = clean_subject(first.subject) or f"Email thread for case {case_nbr}"
+    description = _header(first) + "\n\n" + (first.body or "").strip()
+    comments = [[m.received, author_type(m), _header(m) + " " + (m.body or "").strip()]
+                for m in msgs[1:]]
+
+    from .outlook_source import unique_name
+
+    attachment_list: list = []
+    local_paths: dict = {}
+    image_files: list = []
+    used: set = set()                # context names handed out (case-insensitive)
+    sizes: dict = {}                 # file name -> sizes already listed under it
+    for m in msgs:
+        for a in m.attachments or []:
+            name = str(a.get("name") or "")
+            if not name:
+                continue
+            if a.get("is_image"):
+                image_files.append((m, a))
+                continue
+            # A name used again later in the thread is usually a NEWER capture
+            # (a second WRT.zip after our request): it is its own candidate,
+            # under a name of its own, with its own mail's timestamp, so the
+            # runner can pick it and reads ITS bytes. Only the very same file
+            # sent again (same name, same size: a forward) is listed once.
+            size = int(a.get("size") or 0)
+            seen_sizes = sizes.setdefault(name.casefold(), [])
+            if size and size in seen_sizes:
+                continue
+            seen_sizes.append(size)
+            ctx_name = unique_name(name, used)
+            attachment_list.append([ctx_name, "", [_stamp(m), f"email from {m.sender_name or m.sender_email}"]])
+            local_paths[ctx_name] = str(a.get("path") or "")
+
+    text = subject + " " + (first.body or "")[:4000]
+    wifi_or_bt = "bt" if _BT_RE.search(text) else "wifi"
+
+    ctx = CaseContext(case_nbr=str(case_nbr), id="", subject=subject, description=description,
+                      env_detail={}, subcategory="Email thread", comments=comments,
+                      attachment_list=attachment_list, case_download_dir=str(download_dir),
+                      wifi_or_bt=wifi_or_bt, case_ref_source="email")
+    ctx.source = "email"
+    ctx.local_paths = local_paths
+    ctx.messages = msgs
+    ctx.image_files = image_files
+    return ctx
+
+
+def merge_contexts(ips_ctx, email_ctx):
+    """Stage 2 entry point: one context from the IPS case and its email
+    thread. Comments interleave by time (email rows tagged), the archives of
+    both are candidates (IPS names win on a clash), the mail's files stay
+    local. Not wired to a trigger yet."""
+    merged = copy.copy(ips_ctx)
+    email_rows = [[r[0], r[1], "[email] " + str(r[2])] for r in (email_ctx.comments or [])]
+    merged.comments = sorted(list(ips_ctx.comments or []) + email_rows, key=lambda r: str(r[0]))
+    merged.description = ((ips_ctx.description or "").rstrip()
+                          + "\n\n[Email thread]\n" + (email_ctx.description or ""))
+    names = {str(it[0]) for it in (ips_ctx.attachment_list or []) if it}
+    merged.attachment_list = list(ips_ctx.attachment_list or []) + [
+        it for it in (email_ctx.attachment_list or []) if str(it[0]) not in names]
+    merged.source = "ips+email"
+    merged.local_paths = dict(getattr(email_ctx, "local_paths", {}) or {})
+    merged.messages = list(getattr(email_ctx, "messages", []) or [])
+    merged.image_files = list(getattr(email_ctx, "image_files", []) or [])
+    return merged
+
+
+# ------------------------------------------------------------- images
+
+def _load_cache(path: Optional[Path]) -> dict:
+    if not path:
+        return {}
+    try:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_cache(path: Optional[Path], data: dict) -> None:
+    if not path:
+        return
+    with _CACHE_LOCK:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        os.replace(tmp, p)
+
+
+def read_image_file(path, limit: int = MAX_IMAGE_BYTES) -> Optional[bytes]:
+    """The bytes of an image attachment, or None when the file is larger
+    than `limit`. A mail attachment is an image here by its extension alone
+    and can be any size, so the size is checked before anything is read and
+    the read itself stops at the limit: a 2 GB file named .png never reaches
+    memory. An oversized image is skipped, not cut — a truncated image is
+    of no use to the vision model. Raises OSError when it cannot be read."""
+    p = Path(path)
+    if p.stat().st_size > limit:
+        return None
+    with open(p, "rb") as f:
+        data = f.read(limit + 1)
+    return data if len(data) <= limit else None
+
+
+def annotate_email_images(llm, ctx, *, cache_path: Optional[Path] = None,
+                          progress: Optional[Callable[[str], None]] = None) -> tuple[list, list[dict]]:
+    """Describe the image attachments of the thread (vision), one call per
+    mail, cached per mail under email:<entry id> (same cache file as the
+    IPS comment images). -> (comment rows incl. the synthetic image rows,
+    details) in the shape annotate_case_comments returns."""
+    from .comment_images import describe_images, sniff_media_type, _ALLOWED_MEDIA
+    say = progress or (lambda m: None)
+    rows = list(ctx.comments or [])
+    details: list[dict] = []
+    groups: dict = {}
+    for m, a in getattr(ctx, "image_files", []) or []:
+        groups.setdefault(m.entry_id, (m, []))[1].append(a)
+    if not groups:
+        return rows, details
+    cached = _load_cache(cache_path)
+    budget = MAX_IMAGES_PER_THREAD
+    changed = False
+    first_id = ctx.messages[0].entry_id if getattr(ctx, "messages", None) else ""
+    for entry_id, (m, files) in groups.items():
+        key = f"email:{entry_id}"
+        author = f"{author_type(m)} ({m.sender_name or m.sender_email})"
+        entry = cached.get(key)
+        if entry and entry.get("url_count") == len(files):
+            descs = entry["descriptions"]
+            say(f"{len(files)} image(s) in the mail of {m.received[:10]} from {m.sender_name}: cached")
+        else:
+            if budget <= 0:
+                say(f"image budget ({MAX_IMAGES_PER_THREAD}) exhausted — skipping the mail of {m.received[:10]}")
+                continue
+            images: list[tuple[str, bytes]] = []
+            oversized = 0
+            for a in files[:budget]:
+                try:
+                    data = read_image_file(a["path"])
+                except Exception:
+                    continue
+                if data is None:
+                    oversized += 1
+                    continue
+                media = sniff_media_type(data, "")
+                if media in _ALLOWED_MEDIA:
+                    images.append((media, data))
+            budget -= len(images)
+            if oversized:
+                say(f"{oversized} image(s) of the mail of {m.received[:10]} are larger than "
+                    f"{MAX_IMAGE_BYTES // (1024 * 1024)} MB — not read")
+            if not images:
+                if not oversized:
+                    say(f"the image(s) attached to the mail of {m.received[:10]} could not be read")
+                continue
+            say(f"describing {len(images)} image(s) attached to the mail of {m.received[:10]} from {m.sender_name}")
+            descs = describe_images(llm, images, author=author, date=m.received[:16],
+                                    comment_text=(m.body or "")[:2000])
+            if any(descs):
+                cached[key] = {"descriptions": descs, "url_count": len(files),
+                               "date": m.received, "author": author}
+                changed = True
+        descs = [d for d in descs if d]
+        if not descs:
+            continue
+        text = (f"[Images attached to the mail of {m.received[:10]} from {m.sender_name or m.sender_email}] "
+                + " ".join(f"{i}) {d}" for i, d in enumerate(descs, 1)))
+        row = [m.received, author_type(m), text]
+        if entry_id == first_id:
+            rows.insert(0, row)
+        else:
+            rows.append(row)
+        details.append({"comment_id": entry_id, "date": m.received, "author": author,
+                        "count": len(files), "descriptions": descs})
+    if changed:
+        _save_cache(cache_path, cached)
+    if details:
+        head = rows[0] if rows and rows[0][0] == (ctx.messages[0].received if ctx.messages else None) else None
+        rest = rows[1:] if head else rows
+        rows = ([head] if head else []) + sorted(rest, key=lambda r: str(r[0]))
+    return rows, details

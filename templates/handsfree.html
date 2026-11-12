@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Handsfree Replyer</title>
+  <title>Avatar Beacon</title>
   <style>
     :root {
       --bg: #0a0d12;
@@ -106,6 +106,8 @@
     tbody tr:last-child td { border-bottom: none; }
     #queue-table tbody tr { transition: background 200ms var(--ease); }
     #queue-table tbody tr:hover { background: rgba(69,184,240,0.06); cursor: pointer; }
+    #queue-table tbody tr.skipped-row { opacity: 0.55; }
+    #queue-table tbody tr.skipped-row:hover { background: none; cursor: default; }
     td.case-nbr { font-family: var(--mono); font-size: 12.5px; }
     a.case-link { color: var(--accent, #4ea1ff); text-decoration: none; border-bottom: 1px dotted currentColor; }
     a.case-link:hover { text-decoration: none; border-bottom-style: solid; }
@@ -128,7 +130,7 @@
     #run-log { max-height: 34vh; min-height: 60px; overflow: auto; background: var(--field);
                border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px;
                font-family: var(--mono); font-size: 12px; line-height: 1.65; }
-    #run-log:empty::before { content: 'run output appears here'; color: var(--faint); }
+    #run-log:empty::before { content: 'raw run log appears here'; color: var(--faint); }
     .log-line { white-space: pre-wrap; word-break: break-word; color: var(--muted); }
     .log-line .ts { color: var(--faint); margin-right: 10px; }
     .log-line.err { color: var(--bad); }
@@ -197,6 +199,148 @@
           font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word;
           color: var(--muted); }
 
+    /* ---------- page grid: main column + live analysis panel ---------- */
+    /* The analysis text is read in the live panel, so it takes ~44% of the
+       window (min 520 px) and the main column gives way; narrower than
+       1480 px the panel moves under Step 1 instead. */
+    .page-grid { display: grid; grid-template-columns: minmax(0, 1160px) minmax(520px, 44%);
+                 justify-content: center; align-items: start; }
+    .page-grid > header { grid-column: 1 / -1; max-width: none; width: 100%; margin: 0; }
+    .page-grid > main { margin: 0; max-width: none; min-width: 0; }
+    @media (max-width: 1480px) {
+      .page-grid { grid-template-columns: minmax(0, 1160px); }
+    }
+
+    /* ---------- live analysis panel ---------- */
+    #live-panel { position: sticky; top: 16px; margin: 28px 28px 28px 0;
+                  max-height: calc(100vh - 32px); overflow: auto;
+                  background: linear-gradient(180deg, #131a24, #0f141c);
+                  border: 1px solid #2b3a4f; border-top: 3px solid var(--accent);
+                  border-radius: var(--r); padding: 18px 20px 20px;
+                  color: #f4f7fb; font-size: 14px; line-height: 1.55;
+                  box-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 18px 40px -22px rgba(0,0,0,0.75); }
+    #live-panel.inline { position: static; margin: 0 0 20px; max-height: none; }
+    .lp-top { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+    .lp-title { font-size: 16px; font-weight: 650; color: #fff; letter-spacing: -0.01em;
+                font-family: 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif; }
+    .lp-meta { margin-top: 4px; font-size: 12.5px; color: #a9bbcf; }
+    .lp-sec { margin-top: 16px; }
+    .lp-h { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #9fb3c8;
+            font-weight: 650; margin-bottom: 8px; }
+    .lp-box { background: #0c1118; border: 1px solid #263243; border-radius: 8px; padding: 12px 14px; }
+    .lp-subj { font-weight: 600; color: #fff; margin-top: 2px; }
+    .lp-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .lp-chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: #1b2532;
+               color: #dbe6f3; border: 1px solid #2a3749; }
+    .lp-chip.warn { color: var(--warn); border-color: rgba(229,176,72,0.4); }
+    .lp-chip.good { color: var(--good); border-color: rgba(62,207,142,0.4); }
+    .lp-chip.bad  { color: var(--bad);  border-color: rgba(240,113,120,0.4); }
+    .lp-next { margin-top: 8px; font-size: 13px; color: #dbe6f3; }
+    .lp-big { font-size: 22px; font-weight: 650; color: #fff; font-family: var(--mono); }
+    ol.lp-steps { list-style: none; margin: 0; padding: 0; }
+    .lp-step { display: grid; grid-template-columns: 22px 1fr auto; column-gap: 10px;
+               padding: 6px 0; position: relative; }
+    .lp-step:not(:last-child)::before { content: ''; position: absolute; left: 10px; top: 30px;
+               bottom: -6px; width: 2px; background: #253142; }
+    .lp-step.done:not(:last-child)::before { background: rgba(62,207,142,0.35); }
+    .lp-ico { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
+              font-size: 12px; font-weight: 700; position: relative; z-index: 1;
+              border: 1px solid #3a475a; color: #6f7f93; background: #0f141c; }
+    .lp-step.done .lp-ico { background: rgba(62,207,142,0.16); color: var(--good);
+                            border-color: rgba(62,207,142,0.55); }
+    .lp-step.failed .lp-ico { background: rgba(240,113,120,0.16); color: var(--bad);
+                              border-color: rgba(240,113,120,0.6); }
+    .lp-step.running .lp-ico { border-color: var(--accent); background: rgba(69,184,240,0.12); }
+    .lp-step.skipped .lp-ico { border-style: dashed; opacity: 0.6; }
+    .lp-lab { color: #f4f7fb; font-weight: 550; align-self: center; }
+    .lp-step.pending .lp-lab, .lp-step.skipped .lp-lab { color: #8a98ab; font-weight: 450; }
+    .lp-step.running .lp-lab { color: #fff; font-weight: 650; }
+    .lp-dur { font-family: var(--mono); font-size: 12px; color: #9fb3c8; align-self: center; }
+    .lp-det { grid-column: 2 / 4; font-size: 12.5px; color: #b8c6d6; word-break: break-word; }
+    .lp-step.failed .lp-det { color: var(--bad); }
+    .lp-spin { width: 11px; height: 11px; border: 2px solid rgba(69,184,240,0.3);
+               border-top-color: var(--accent); border-radius: 50%; animation: lpspin 0.8s linear infinite; }
+    @keyframes lpspin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .lp-spin { animation: none; } }
+    .lp-sent { border: 1px solid rgba(126,208,255,0.5); background: rgba(69,184,240,0.07);
+               border-radius: 8px; padding: 12px 14px; }
+    .lp-sent + .lp-sent { margin-top: 10px; }
+    .lp-sent.pending { border-style: dashed; background: transparent; }
+    .lp-sent .lp-cap { font-size: 12px; color: #a9bbcf; margin-bottom: 8px; }
+    .lp-time { font-family: var(--mono); font-size: 15px; color: #fff; }
+    .lp-time-sub { font-size: 12.5px; color: #b8c6d6; margin-top: 2px; }
+    .lp-desc { white-space: pre-wrap; word-break: break-word; background: #0b1017;
+               border: 1px solid #223042; border-radius: 6px; padding: 10px 12px; margin-top: 8px;
+               max-height: 240px; overflow: auto; color: #eef3f8; font-size: 13.5px; }
+    .lp-kv { display: grid; grid-template-columns: 96px 1fr; gap: 3px 10px; font-size: 13px;
+             margin-top: 8px; }
+    .lp-kv dt { color: #9fb3c8; }
+    .lp-kv dd { margin: 0; color: #fff; word-break: break-word; }
+    .lp-kv dd.mono { font-family: var(--mono); font-size: 12.5px; }
+    .lp-empty { color: #a9bbcf; font-size: 13.5px; }
+    ul.lp-cases { list-style: none; margin: 0; padding: 0; }
+    .lp-cases li { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 6px;
+                   cursor: pointer; font-size: 13px; color: #dbe6f3; }
+    .lp-cases li:hover { background: #18202b; }
+    .lp-cases li.sel { background: #1b2532; color: #fff; }
+    .lp-cases .nbr { font-family: var(--mono); font-size: 12.5px; }
+    .lp-cases .sub { color: #a9bbcf; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .lp-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #4a586b; }
+    .lp-dot.running { background: var(--accent); animation: breathe 1.8s var(--ease) infinite; }
+    .lp-dot.done { background: var(--good); }
+    .lp-dot.warn { background: var(--warn); }
+    .lp-dot.bad { background: var(--bad); }
+    .lp-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .lp-live { grid-column: 2 / 4; margin-top: 6px; background: #0b1017; border: 1px solid #223042;
+               border-radius: 6px; padding: 10px 12px; font-size: 13.5px; color: #dbe6f3; line-height: 1.55; }
+    .lp-live .lp-cap { margin-bottom: 6px; }
+    .lp-agent-steps { max-height: 260px; overflow: auto; }
+    .lp-trace { margin-top: 8px; }
+    .lp-trace summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-trace .lp-as { padding: 3px 0; }
+    .lp-as.tool, .lp-as.fetch { color: #fff; font-weight: 550; }
+    .lp-as .skill { font-family: var(--mono); font-size: 12.5px; color: var(--accent-strong); }
+    .lp-as { display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; padding: 2px 0;
+             color: #c7d3e0; }
+    .lp-as .k { color: #9fb3c8; }
+    .lp-as.conclusion { color: var(--good); } .lp-as.error, .lp-as.warning { color: var(--warn); }
+    .lp-as.error { color: var(--bad); }
+    .lp-res { margin-top: 8px; border-top: 1px solid #223042; padding-top: 8px; }
+    .lp-res .rc { color: #fff; font-size: 14px; }
+    .lp-res ul { margin: 6px 0 0; padding-left: 18px; color: #dbe6f3; }
+    .lp-echo-q { color: #9fb3c8; }
+    .lp-echo-a { color: #eef3f8; white-space: pre-wrap; margin: 2px 0 8px; max-height: 160px; overflow: auto; }
+    .lp-btn-sm { height: 24px; padding: 0 9px; font-size: 12px; }
+    /* Echo next-step suggestions: its own window, visually apart from the pipeline */
+    .lp-advice { border: 1px solid rgba(190,140,255,0.55); border-left: 4px solid #b98cff;
+                 background: rgba(150,110,230,0.08); border-radius: 8px; padding: 12px 14px; }
+    .lp-advice .lp-cap { color: #cdb8ff; }
+    .lp-advice-a { white-space: pre-wrap; word-break: break-word; color: #f4f7fb; font-size: 14px;
+                   line-height: 1.6; max-height: 420px; overflow: auto; margin-top: 6px; }
+    .lp-advice details { margin-top: 8px; }
+    .lp-advice summary { color: #9fb3c8; cursor: pointer; font-size: 12.5px; }
+    .lp-advice .q { white-space: pre-wrap; color: #b8c6d6; font-size: 12.5px; max-height: 220px; overflow: auto;
+                    background: #0b1017; border: 1px solid #223042; border-radius: 6px; padding: 8px 10px; margin-top: 6px; }
+    .lp-rows { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; font-size: 13px; }
+    .lp-rows .k { color: #9fb3c8; white-space: nowrap; }
+    .lp-cand { display: flex; gap: 8px; align-items: baseline; padding: 2px 0; color: #b8c6d6; }
+    .lp-cand.win { color: #fff; font-weight: 600; }
+    .lp-cand .src { color: #9fb3c8; font-weight: 400; font-size: 12.5px; }
+    .lp-cand.win .src { color: var(--accent-strong); }
+    .lp-req { padding: 2px 0; display: grid; grid-template-columns: 18px 1fr; column-gap: 6px; }
+    .lp-req.ok { color: #dbe6f3; } .lp-req.ok .m { color: var(--good); }
+    .lp-req.miss { color: #fff; } .lp-req.miss .m { color: var(--warn); }
+    .lp-req .how { color: #9fb3c8; font-size: 12.5px; }
+    .lp-ask { margin-top: 8px; padding: 8px 10px; border-left: 3px solid var(--warn); background: rgba(229,176,72,0.08); color: #fff; }
+    .lp-vague { color: #8a98ab; text-decoration: line-through; }
+    table.lp-tbl { border-collapse: collapse; width: 100%; font-size: 12.5px; margin-top: 4px; }
+    table.lp-tbl th { text-align: left; color: #9fb3c8; font-weight: 600; padding: 3px 6px 3px 0; border-bottom: 1px solid #223042; }
+    table.lp-tbl td { padding: 3px 6px 3px 0; color: #dbe6f3; vertical-align: top; font-family: var(--mono); font-size: 12px; }
+    table.lp-tbl tr.win td { color: #fff; }
+    table.lp-tbl td.t { font-family: inherit; font-size: 12.5px; }
+    #draft-sent { margin: 0 0 10px; }
+    #draft-sent summary { color: var(--muted); cursor: pointer; }
+
     @media (max-width: 880px) {
       main { padding: 18px; }
       #progress-row { flex-direction: column; }
@@ -205,6 +349,7 @@
   </style>
 </head>
 <body>
+<div class="page-grid">
 <header>
   <span class="mark" aria-hidden="true">
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
@@ -214,11 +359,17 @@
       <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
     </svg>
   </span>
-  <h1>Handsfree Replyer</h1>
-  <div class="sub">Detect newly assigned IPS cases → analyze → review → post Private-to-Intel</div>
+  <h1>Avatar Beacon</h1>
+  <div class="sub">Hands-free IPS case replies — detect newly assigned cases → analyze → review → post Private-to-Intel</div>
 </header>
 
 <main>
+  {% if share_error %}
+  <div class="panel" style="border-color: var(--bad, #c33);">
+    <b>Shared Handsfree folder unavailable</b> — the review queue cannot be read or written.
+    <div class="status-line error">{{ share_error }}</div>
+  </div>
+  {% endif %}
   <div class="panel" id="settings-panel">
     <h3 role="button" tabindex="0" onclick="toggleSettings()" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleSettings();}">
       <span class="caret" aria-hidden="true">
@@ -239,6 +390,9 @@
         <label title="Kill-switch: when checked, nothing is ever posted to IPS">
           <input type="checkbox" id="cfg-dry-run"> dry run (posting disabled)
         </label>
+        <label title="A case's first reply that asks the customer for missing items (request logs / request info / first response) posts PUBLICLY without review, under the IPS account of the machine running the analysis. Dry run still blocks it.">
+          <input type="checkbox" id="cfg-auto-post-fr"> auto-post first response (missing items)
+        </label>
         <label>Post backend:
           <select id="cfg-backend">
             <option value="rest">rest</option>
@@ -246,12 +400,17 @@
             <option value="auto">auto</option>
           </select>
         </label>
+        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Beacon server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
+          <input type="text" id="cfg-latest-driver" style="width: 120px;" placeholder="empty = use the report">
+        </label>
+        <span class="status-line" id="cfg-latest-driver-auto" title="What the Beacon server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
+        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Beacon server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
         <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
       <div class="controls divider">
         <label title="Tuning on historical IPS cases: closed cases of the automatic-analysis list view are included, and every run's drafts are flagged TRIAL and can never be posted">
-          <input type="checkbox" id="cfg-trial" onchange="applyTrialUi()"> trial mode (include closed cases, posting disabled)
+          <input type="checkbox" id="cfg-trial" onchange="toggleTrial()"> trial mode (include closed cases, posting disabled)
         </label>
       </div>
       <div style="margin-top: 12px;">
@@ -267,7 +426,7 @@
     </div>
   </div>
 
-  <div class="panel">
+  <div class="panel" id="step1-panel">
     <div class="eyebrow">Step 1 · Detect &amp; analyze</div>
     <div class="tabs" role="tablist">
       <button class="tab active" id="tab-btn-new" role="tab" onclick="showTab('new')">Check for new cases</button>
@@ -284,12 +443,17 @@
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           Check for new cases</button>
         <span class="status-line" id="run-status">idle</span>
+        <span class="status-line" id="request-status"></span>
         <span class="status-line" style="margin-left:auto;">
           posting backend: <b id="backend-name">{{ config.post_backend }}</b>
           <span id="dry-run-badge" class="pill warn"
                 {% if not config.dry_run %}style="display:none;"{% endif %}>DRY RUN — posting disabled</span>
+          <span id="auto-post-fr-badge" class="pill warn" title="First replies asking for missing items post without review"
+                {% if not config.auto_post_first_response %}style="display:none;"{% endif %}>AUTO-POST first response</span>
           <span id="trial-badge" class="pill warn" title="Tuning on historical cases: drafts are flagged TRIAL and cannot be posted"
                 {% if not config.trial_mode %}style="display:none;"{% endif %}>TRIAL MODE</span>
+          {% if role == 'server' %}<span id="role-badge" class="pill good"
+                title="This app runs as the Handsfree server: the scheduled analysis rounds run here and show in the live panel">SERVER</span>{% endif %}
         </span>
       </div>
       <div class="controls divider">
@@ -299,21 +463,28 @@
                  onkeydown="if(event.key==='Enter')runCase()">
         </label>
         <button class="primary" id="run-case-btn" onclick="runCase()"
-                title="Runs the full pipeline for this one case regardless of owner/date">
+                title="{% if role == 'server' %}Runs the full pipeline for this one case regardless of owner/date{% else %}Sends this case to the Handsfree server, which runs the full pipeline for it; the draft then appears in the review queue below{% endif %}">
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           Analyze this case</button>
       </div>
     </div>
     <div id="tab-auto" style="display:none;">
-      <div class="hint">Each round scans one source: the open IPS cases of the case owner (from Settings) for
-        either new cases OR new customer comments since the previous round (one of the two is enough), or the cases of an
-        IPS list view that were not analyzed yet or have new customer comments. The handsfree pipeline runs for each and the
-        drafts queue below for review. Nothing is posted automatically — Approve still decides. Closed cases of a list view
-        run only in trial mode (Settings).</div>
+      <div class="hint">{% if role == 'server' %}This PC is the <b>Handsfree server</b>: <b>Start automatic analysis</b> runs the rounds below on
+        the chosen frequency inside this app, and the live panel shows each round as it runs. While it is ON, disable the Task Scheduler
+        job that runs <code>tools/handsfree_server_run.py</code> (same sign-in profile, duplicate rounds).{% else %}Scheduled rounds run on
+        the Handsfree server (the schedule below is read-only on this PC).{% endif %} <b>Run now</b> runs one round
+        right away on this PC with the settings below. Each round scans the ONE source chosen below — the open IPS cases of up to ten case
+        owners for either new cases OR new customer comments since the previous round, the cases of up to three IPS
+        list views (their union) that were not analyzed yet or have new customer comments, or the open cases of every owner
+        listed in an owners file on the server (the same file as the CLI's <code>--owners-file</code>) — and runs the handsfree pipeline
+        for each; the drafts queue below for review. Max cases per round applies to either source. Nothing is
+        posted automatically — Approve still decides. Closed cases of a list view run only in trial mode (Settings).
+        With "Also watch Outlook", a round run on this PC also reads your Outlook folder: a mail whose subject names a case as
+        "IPS 01234567" runs that case on its email thread (every human mail naming the case, Inbox + Sent Items), and
+        Approve on its draft saves a reply in your Outlook Drafts (nothing is sent).</div>
       <div class="controls">
-        <label>Case owner: <b id="auto-owner" style="color: var(--fg);">{{ config.owner_name or '—' }}</b></label>
-        <label>Frequency:
+        <label {% if role != 'server' %}style="display: none;"{% endif %}>Frequency:
           <select id="auto-mode">
             <option value="4h">Every 4 hours</option>
             <option value="8h">Every 8 hours</option>
@@ -323,7 +494,7 @@
         <label>Max cases per round:
           <input type="number" id="auto-max" min="1" max="50" step="1" value="10" style="width: 64px;">
         </label>
-        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()">
+        <button class="primary" id="auto-toggle-btn" onclick="toggleAuto()" {% if role != 'server' %}style="display: none;"{% endif %}>
           <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
             <path d="M6 4.5l14 7.5-14 7.5z" /></svg>
           <span id="auto-toggle-text">Start automatic analysis</span></button>
@@ -331,27 +502,79 @@
                 title="Run one round right now with the settings above">Run now</button>
         <span class="status-line" id="auto-status"></span>
       </div>
-      <div class="controls">
-        <label>Source:
-          <select id="auto-source" onchange="applyAutoSourceUi()">
-            <option value="owner">Open cases of the case owner</option>
-            <option value="list_view">IPS list view</option>
-          </select>
+      <div class="controls" id="auto-source-row">
+        <span style="color: var(--muted);">Source:</span>
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="owner" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'owner'})">
+          Open cases of case owner(s) <span style="color: var(--faint);">(up to 10; empty = the Settings owner
+          <b id="auto-owner" style="color: var(--muted);">{{ config.owner_name or '—' }}</b>)</span>
         </label>
-        <label>IPS list view:
-          <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
-                  title="Case list views visible to the current IPS login">
-            <option value="">loading…</option>
-            <option value="__other__">other…</option>
-          </select>
-          <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
-                 placeholder="developer name, e.g. Handsfree_replier_test_case">
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="list_view" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'list_view'})">
+          IPS list views <span style="color: var(--faint);">(up to 3, their cases are combined)</span>
         </label>
+        <label class="auto-src-opt" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="radio" name="auto-source" value="owners_file" onchange="applyAutoSourceUi(); saveAutoSettings({source: 'owners_file'})">
+          Owners file on the server <span style="color: var(--faint);">(the CLI's --owners-file: every owner in it)</span>
+        </label>
+      </div>
+      <div class="controls" id="auto-owners-file-row" style="display: none; padding-left: 58px;">
+        <input type="text" id="auto-owners-file" style="width: 420px; font-family: var(--mono); font-size: 12.5px;"
+               placeholder="C:\path\owners.txt — one IPS Owner.Name per line, # comments"
+               title="Path on the machine that runs the round (the Handsfree server); UTF-8 text, one Owner.Name per line, blank lines and # comments ignored"
+               onchange="refreshOwnersFileNote()">
+        <span class="status-line" id="auto-owners-file-note"></span>
+      </div>
+      <div class="controls" id="auto-owner-row" style="display: none; padding-left: 58px;">
+        <span id="auto-owner-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
+        <input type="text" id="auto-owner-new" style="width: 240px; font-family: var(--mono); font-size: 12.5px;"
+               placeholder="IPS Owner.Name, e.g. Charles P Chu"
+               onkeydown="if(event.key==='Enter')addAutoOwner()">
+        <button class="ghost" id="auto-owner-add" onclick="addAutoOwner()"
+                title="Add a case owner (max 10)">Add</button>
+        <span class="status-line" id="auto-owner-note"></span>
+      </div>
+      <div class="controls" id="auto-lv-row" style="display: none; padding-left: 58px;">
+        <span id="auto-lv-chips" style="display: inline-flex; gap: 6px; flex-wrap: wrap;"></span>
+        <select id="auto-list-view" style="max-width: 320px;" onchange="applyAutoListViewUi()"
+                title="Case list views visible to the current IPS login">
+          <option value="">loading…</option>
+          <option value="__other__">other…</option>
+        </select>
+        <input type="text" id="auto-list-view-other" style="width: 240px; font-family: var(--mono); font-size: 12.5px; display: none;"
+               placeholder="developer name, e.g. Handsfree_replier_test_case"
+               onkeydown="if(event.key==='Enter')addAutoListView()">
+        <button class="ghost" id="auto-lv-add" onclick="addAutoListView()"
+                title="Add the selected list view (max 3)">Add</button>
         <span class="status-line" id="auto-source-note"></span>
+      </div>
+      <div class="controls" id="auto-email-row">
+        <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="checkbox" id="auto-email-watch"> Also watch Outlook
+        </label>
+        <label>folder
+          <input type="text" id="auto-email-folder" value="Inbox" style="width: 150px; font-family: var(--mono); font-size: 12.5px;"
+                 title="Inbox, or a subfolder of it such as Inbox/Beacon"></label>
+        <label>mail from the last
+          <input type="number" id="auto-email-days" min="1" max="60" step="1" value="7" style="width: 54px;"> days</label>
+        <label>max
+          <input type="number" id="auto-email-max" min="1" max="20" step="1" value="3" style="width: 54px;"> cases</label>
+        <button class="ghost" id="email-check-btn" onclick="emailCheckNow()"
+                title="Read the Outlook folder now: a mail whose subject says 'IPS <case number>' runs that case on its email thread; the reply waits as a draft for review">Check Outlook now</button>
+        <span class="status-line" id="auto-email-status"></span>
+      </div>
+      <div class="controls" id="auto-email-case-row" style="padding-left: 24px;">
+        <span style="color: var(--muted);">…or analyze the email thread of one case:</span>
+        <input type="text" id="email-case-nbr" placeholder="IPS case number, e.g. 01009610"
+               style="width: 220px; font-family: var(--mono); font-size: 12.5px;"
+               onkeydown="if(event.key==='Enter')emailRunCase()">
+        <button class="ghost" id="email-case-btn" onclick="emailRunCase()"
+                title="Collect every human mail naming this case (Inbox + Sent Items) and run the pipeline on that thread; the reply answers the newest customer mail">Analyze the email thread</button>
       </div>
     </div>
     <div class="row" id="progress-row">
       <div class="col log-col">
+        <div class="status-line" style="margin-bottom: 4px;">Raw run log</div>
         <div id="run-log"></div>
       </div>
       <div class="col stage-col">
@@ -379,16 +602,26 @@
       <label style="font-size: 12px; margin-left: 4px; font-weight: 400;">
         <input type="checkbox" id="show-closed" onchange="loadQueue()"> show posted/rejected
       </label>
-      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;">
+      <label style="font-size: 12px; margin-left: 8px; font-weight: 400;"
+             title="The queue opens on the cases of the IPS user signed in on this PC; tick to see every owner's">
+        <input type="checkbox" id="show-everyone" onchange="applyEveryoneUi(); loadQueue()"
+               {% if role == 'server' %}checked{% endif %}> everyone's cases
+      </label>
+      <label id="owner-filter-wrap" style="font-size: 12px; margin-left: 4px; font-weight: 400; display: none;">
         owner:
         <input type="text" id="owner-filter" placeholder="Filter by case owner"
                style="width: 190px;" onkeydown="if(event.key==='Enter')loadQueue()">
       </label>
+      <span id="login-badge" class="pill" style="margin-left: 8px; font-weight: 400;"
+            title="The IPS (Salesforce) user of this PC's session: the queue opens on this user's cases and Approve posts under this name">IPS: signing in…</span>
+      <button class="ghost" id="login-btn" onclick="signIn(true)"
+              style="display: none; height: 28px; padding: 0 11px; font-size: 12px;"
+              title="Opens a Chrome window for Intel SSO; the sign-in is kept on this PC">Sign in to IPS</button>
     </h3>
     <table id="queue-table">
       <thead><tr>
   <th>Case</th><th>Owner</th><th>Subject</th><th>Mode</th><th>Confidence</th>
-  <th>Status</th><th>Action owner</th><th>Created</th><th>Decoded log</th>
+  <th>Status</th><th>Action owner</th><th>Created</th><th>Actions</th>
       </tr></thead>
       <tbody></tbody>
     </table>
@@ -401,16 +634,35 @@
       <span class="status-line" id="draft-status"></span>
     </div>
     <div id="draft-chips"></div>
+    <div id="draft-sent"></div>
     <textarea id="draft-text" rows="18"></textarea>
+    <div class="controls" id="draft-visibility-row" style="margin-top:8px;">
+      <span style="color: var(--muted);">Post as:</span>
+      <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;"
+             title="The comment is Private to Intel: the customer never sees it (the default on every draft)">
+        <input type="radio" name="draft-visibility" value="internal" checked onchange="applyVisibilityUi()">
+        Internal to Intel
+      </label>
+      <label style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;"
+             title="The comment is visible to the customer in IPS (posted over REST with the team's verified field map)">
+        <input type="radio" name="draft-visibility" value="external" onchange="applyVisibilityUi()">
+        External to customer
+      </label>
+      <span class="status-line" id="draft-visibility-note"></span>
+    </div>
     <div class="controls" style="margin-top:8px;">
       <button class="good" id="approve-btn" onclick="approveDraft()"
               title="Posts this text to IPS as a Private-to-Intel comment">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <path d="M4.5 12.5l5 5 10-11" /></svg>
-        Approve &amp; post to IPS</button>
+        <span id="approve-btn-text">Approve &amp; post to IPS</span></button>
       <button class="ghost" onclick="saveDraft()">Save edits</button>
       <button class="danger" onclick="rejectDraft()">Reject</button>
+      <button class="ghost" id="draft-avatar-btn" onclick="openInAvatar(currentDraftCase, currentDraftId, this)"
+              title="Opens this case in Avatar to continue by hand">Open in Avatar analysis</button>
+      <button class="ghost" onclick="resetCase(currentDraftCase)"
+              title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -419,6 +671,11 @@
     </details>
   </div>
 </main>
+<aside id="live-panel" aria-live="polite" aria-label="Live analysis">
+  <div class="lp-top"><span class="lp-title">Live analysis</span></div>
+  <div class="lp-empty" style="margin-top: 10px;">No run yet — start one in Step 1{% if role == 'server' %}, or wait for the next scheduled round;{% else %} and{% endif %} its progress shows here.</div>
+</aside>
+</div>
 
 <script>
   let currentDraftId = null;
@@ -449,6 +706,8 @@
   function applyConfigBadge(cfg) {
     document.getElementById('backend-name').textContent = cfg.post_backend || 'auto';
     document.getElementById('dry-run-badge').style.display = cfg.dry_run ? '' : 'none';
+    document.getElementById('auto-post-fr-badge').style.display =
+      cfg.auto_post_first_response ? '' : 'none';
     document.getElementById('trial-badge').style.display = cfg.trial_mode ? '' : 'none';
     if (cfg.owner_name) document.getElementById('owner-name').value = cfg.owner_name;
   }
@@ -458,8 +717,12 @@
     document.getElementById('auto-owner').textContent = cfg.owner_name || '—';
     document.getElementById('cfg-max-cases').value = cfg.max_cases_per_run ?? 3;
     document.getElementById('cfg-dry-run').checked = !!cfg.dry_run;
+    document.getElementById('cfg-auto-post-fr').checked = !!cfg.auto_post_first_response;
     document.getElementById('cfg-backend').value = cfg.post_backend || 'auto';
     document.getElementById('cfg-trial').checked = !!cfg.trial_mode;
+    const ldEl = document.getElementById('cfg-latest-driver');
+    if (document.activeElement !== ldEl) ldEl.value = cfg.latest_driver_manual || '';
+    document.getElementById('cfg-latest-driver-auto').textContent = latestDriverAutoText(cfg);
     applyTrialUi();
     document.getElementById('cfg-field-map').textContent =
       JSON.stringify(cfg.rest_field_map || {}, null, 2);
@@ -469,7 +732,12 @@
   async function loadConfig() {
     try {
       const r = await fetch('/handsfree/config');
-      fillConfigForm(await r.json());
+      const cfg = await r.json();
+      if (cfg.error) {
+        document.getElementById('cfg-status').textContent = 'config load failed: ' + cfg.error;
+        return;
+      }
+      fillConfigForm(cfg);
     } catch (e) {
       document.getElementById('cfg-status').textContent = 'config load failed: ' + e;
     }
@@ -482,14 +750,182 @@
     applyAutoSourceUi();
   }
 
+  // Trial mode is a safety property of the next run, so the toggle is saved
+  // the moment it is flipped and the badge follows the server's answer: the
+  // page never claims TRIAL while the server would create postable drafts.
+  async function toggleTrial() {
+    const box = document.getElementById('cfg-trial');
+    const want = box.checked;
+    const status = document.getElementById('cfg-status');
+    box.disabled = true;
+    try {
+      const r = await fetch('/handsfree/config', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({trial_mode: want}),
+      });
+      const cfg = await r.json();
+      box.checked = !!cfg.trial_mode;
+      status.textContent = 'trial mode ' + (cfg.trial_mode ? 'on' : 'off') + ' (saved)';
+      status.className = 'status-line done';
+    } catch (e) {
+      box.checked = !want;
+      status.textContent = 'trial mode not saved: ' + e;
+      status.className = 'status-line error';
+    } finally {
+      box.disabled = false;
+      applyTrialUi();
+    }
+  }
+
+  const MAX_AUTO_LIST_VIEWS = 3;
+  let autoListViews = [];          // developer names chosen for the list-view source
+  const MAX_AUTO_OWNERS = 10;
+  let autoOwners = [];             // IPS Owner.Name values chosen for the owner source
+
+  function getAutoSource() {
+    const r = document.querySelector('input[name="auto-source"]:checked');
+    return r ? r.value : 'owner';
+  }
+  function setAutoSource(v) {
+    const r = document.querySelector('input[name="auto-source"][value="' + (v || 'owner') + '"]');
+    if (r) r.checked = true;
+  }
+
+  // Only the chosen source's details are shown, so what will run is never
+  // ambiguous: owner -> its name in the radio label; list views -> the chips.
   function applyAutoSourceUi() {
-    const lv = document.getElementById('auto-source').value === 'list_view';
-    document.getElementById('auto-list-view').disabled = !lv;
-    document.getElementById('auto-list-view-other').disabled = !lv;
+    const src = getAutoSource();
+    const lv = src === 'list_view';
+    document.getElementById('auto-lv-row').style.display = lv ? '' : 'none';
+    document.getElementById('auto-owner-row').style.display = src === 'owner' ? '' : 'none';
+    document.getElementById('auto-owners-file-row').style.display = src === 'owners_file' ? '' : 'none';
+    document.querySelectorAll('.auto-src-opt').forEach(l => {
+      l.style.color = l.querySelector('input').checked ? 'var(--fg)' : 'var(--muted)';
+    });
+    renderAutoListViewChips();
+    renderAutoOwnerChips();
+  }
+
+  // ---------- owner chips (the owner source scans each of these) ----------
+
+  function renderAutoOwnerChips() {
+    const box = document.getElementById('auto-owner-chips');
+    box.innerHTML = autoOwners.map(name =>
+      `<span class="pill" title="${esc(name)}">${esc(name)} ` +
+      `<a href="#" onclick="removeAutoOwner(${JSON.stringify(name).replace(/"/g, '&quot;')});return false;" ` +
+      `style="color: var(--muted); text-decoration: none; margin-left: 2px;" title="Remove">✕</a></span>`
+    ).join('');
+    const full = autoOwners.length >= MAX_AUTO_OWNERS;
+    document.getElementById('auto-owner-add').disabled = full;
+    document.getElementById('auto-owner-new').disabled = full;
+    const note = document.getElementById('auto-owner-note');
+    if (getAutoSource() === 'list_view') { note.textContent = ''; return; }
+    const settingsOwner = document.getElementById('auto-owner').textContent;
+    note.textContent = autoOwners.length
+      ? (full ? 'maximum of ' + MAX_AUTO_OWNERS + ' owners' : '')
+      : 'no owner added — the round scans the Settings owner' + (settingsOwner && settingsOwner !== '—' ? ' ' + settingsOwner : '');
+  }
+
+  function addAutoOwner() {
+    const input = document.getElementById('auto-owner-new');
+    const name = input.value.trim();
+    if (!name) { alert('Type an IPS Owner.Name first (as shown on the case, e.g. "Charles P Chu").'); return; }
+    if (autoOwners.some(o => o.toLowerCase() === name.toLowerCase())) { alert(name + ' is already in the list.'); return; }
+    if (autoOwners.length >= MAX_AUTO_OWNERS) { alert('At most ' + MAX_AUTO_OWNERS + ' owners.'); return; }
+    autoOwners.push(name);
+    input.value = '';
+    renderAutoOwnerChips();
+    saveAutoSettings({owners: autoOwners.slice(0, MAX_AUTO_OWNERS)});
+  }
+
+  function removeAutoOwner(name) {
+    autoOwners = autoOwners.filter(n => n !== name);
+    renderAutoOwnerChips();
+    saveAutoSettings({owners: autoOwners.slice(0, MAX_AUTO_OWNERS)});
+  }
+
+  function autoOwnerEditing() {
+    const row = document.getElementById('auto-owner-row');
+    return row && row.contains(document.activeElement);
+  }
+
+  // ---------- owners file (the CLI's --owners-file, read by the server) ----------
+
+  let ownersFileInfo = {owners: [], error: ''};   // from the last status answer
+
+  function renderOwnersFileNote() {
+    const note = document.getElementById('auto-owners-file-note');
+    const path = document.getElementById('auto-owners-file').value.trim();
+    if (!path) { note.textContent = 'no owners file set'; note.className = 'status-line'; return; }
+    if (ownersFileInfo.error) { note.textContent = ownersFileInfo.error; note.className = 'status-line error'; return; }
+    const o = ownersFileInfo.owners || [];
+    note.textContent = o.length + ' owner' + (o.length === 1 ? '' : 's') + ': '
+      + o.slice(0, 6).join(', ') + (o.length > 6 ? ', …' : '');
+    note.className = 'status-line';
+  }
+
+  // Round settings are saved the moment they change (source radio, owner /
+  // list-view chips, the owners file path): the schedule is left alone (no
+  // "enabled" in the body), the page re-renders from the server's answer, so
+  // the status polls never undo an edit and the server validates at once.
+  async function saveAutoSettings(partial) {
+    try {
+      const j = await postJson('/handsfree/auto', Object.assign({source: getAutoSource()}, partial));
+      if (j.error) { alert('Settings not saved: ' + j.error); return; }
+      renderAuto(j);
+    } catch (e) {
+      serverUnreachable(e);
+    }
+  }
+
+  // The path box was edited: save it so the server re-reads the file and
+  // the note shows what it found.
+  async function refreshOwnersFileNote() {
+    const note = document.getElementById('auto-owners-file-note');
+    note.textContent = 'checking…'; note.className = 'status-line';
+    await saveAutoSettings({owners_file: document.getElementById('auto-owners-file').value.trim()});
+  }
+
+  function renderAutoListViewChips() {
+    const box = document.getElementById('auto-lv-chips');
+    box.innerHTML = autoListViews.map(name =>
+      `<span class="pill" title="${esc(name)}">${esc(name)} ` +
+      `<a href="#" onclick="removeAutoListView(${JSON.stringify(name).replace(/"/g, '&quot;')});return false;" ` +
+      `style="color: var(--muted); text-decoration: none; margin-left: 2px;" title="Remove">✕</a></span>`
+    ).join('');
+    const full = autoListViews.length >= MAX_AUTO_LIST_VIEWS;
+    document.getElementById('auto-lv-add').disabled = full;
+    document.getElementById('auto-list-view').disabled = full;
+    document.getElementById('auto-list-view-other').disabled = full;
     const trial = document.getElementById('cfg-trial').checked;
-    document.getElementById('auto-source-note').textContent = !lv ? '' : trial
-      ? 'trial mode: closed cases included, drafts cannot be posted'
-      : 'open cases only — enable trial mode in Settings to include closed cases';
+    const note = document.getElementById('auto-source-note');
+    if (getAutoSource() !== 'list_view') { note.textContent = ''; return; }
+    note.textContent = (autoListViews.length ? '' : 'no list view chosen yet — ')
+      + (full ? 'maximum of 3 list views · ' : '')
+      + (trial ? 'trial mode: closed cases included, drafts cannot be posted'
+               : 'open cases only — enable trial mode in Settings to include closed cases');
+  }
+
+  function addAutoListView() {
+    const name = currentAutoListView();
+    if (!name) { alert('Pick a list view first (or type its developer name under "other…").'); return; }
+    if (autoListViews.includes(name)) { alert(name + ' is already in the list.'); return; }
+    if (autoListViews.length >= MAX_AUTO_LIST_VIEWS) { alert('At most ' + MAX_AUTO_LIST_VIEWS + ' list views.'); return; }
+    autoListViews.push(name);
+    document.getElementById('auto-list-view-other').value = '';
+    renderAutoListViewChips();
+    saveAutoSettings({list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS)});
+  }
+
+  function removeAutoListView(name) {
+    autoListViews = autoListViews.filter(n => n !== name);
+    renderAutoListViewChips();
+    saveAutoSettings({list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS)});
+  }
+
+  function autoListViewEditing() {
+    const row = document.getElementById('auto-lv-row');
+    return row && row.contains(document.activeElement);
   }
 
   function configBody() {
@@ -498,9 +934,55 @@
       owner_name: document.getElementById('cfg-owner').value.trim(),
       max_cases_per_run: Math.min(15, Math.max(1, isNaN(maxRaw) ? 3 : maxRaw)),
       dry_run: document.getElementById('cfg-dry-run').checked,
+      auto_post_first_response: document.getElementById('cfg-auto-post-fr').checked,
       post_backend: document.getElementById('cfg-backend').value,
       trial_mode: document.getElementById('cfg-trial').checked,
+      latest_driver_manual: document.getElementById('cfg-latest-driver').value.trim(),
     };
+  }
+
+  // The report side of the latest-driver setting, for the Settings line.
+  function latestDriverAutoText(cfg) {
+    const bits = [];
+    if (cfg.latest_driver) {
+      bits.push('report: ' + cfg.latest_driver
+        + (cfg.latest_driver_checked_at ? ' · checked ' + cfg.latest_driver_checked_at.slice(0, 16).replace('T', ' ') : '')
+        + (cfg.latest_driver_rows_count ? ' · ' + cfg.latest_driver_rows_count + ' rows' : ''));
+    } else {
+      bits.push('report: not read yet');
+    }
+    if (cfg.latest_driver_error) bits.push('last fetch failed: ' + cfg.latest_driver_error);
+    if (cfg.latest_driver_manual) bits.push('override ' + cfg.latest_driver_manual + ' is in effect');
+    return bits.join(' · ');
+  }
+
+  // "Refresh now": ask the Beacon server to re-read the PAE Wi-Fi Dashboard,
+  // then follow the shared config until the server has fetched (<= 2 min).
+  async function refreshLatestDriver() {
+    const btn = document.getElementById('latest-driver-refresh-btn');
+    const out = document.getElementById('cfg-latest-driver-auto');
+    btn.disabled = true;
+    try {
+      const before = await (await fetch('/handsfree/config')).json();
+      const r = await fetch('/handsfree/latest_driver/refresh', {method: 'POST'});
+      const res = await r.json();
+      if (!r.ok || res.ok === false) throw new Error(res.error || ('HTTP ' + r.status));
+      out.textContent = 'refresh requested — the Beacon server reads the dashboard on its next tick…';
+      const t0 = Date.now();
+      while (Date.now() - t0 < 120000) {
+        await new Promise(res => setTimeout(res, 5000));
+        const cfg = await (await fetch('/handsfree/config')).json();
+        if ((cfg.latest_driver_last_attempt_at || '') !== (before.latest_driver_last_attempt_at || '')) {
+          fillConfigForm(cfg);
+          return;
+        }
+      }
+      out.textContent = 'no fetch yet — is the Beacon server running? ' + latestDriverAutoText(before);
+    } catch (e) {
+      out.textContent = 'refresh failed: ' + e;
+    } finally {
+      btn.disabled = false;
+    }
   }
 
   async function saveConfig() {
@@ -513,6 +995,7 @@
         body: JSON.stringify(body),
       });
       const cfg = await r.json();
+      if (!r.ok || cfg.ok === false) throw new Error(cfg.error || ('HTTP ' + r.status));
       fillConfigForm(cfg);
       status.textContent = 'saved';
       status.className = 'status-line done';
@@ -568,29 +1051,68 @@
     if (document.activeElement !== modeSel) modeSel.value = a.mode || 'nightly';
     const maxEl = document.getElementById('auto-max');
     if (document.activeElement !== maxEl) maxEl.value = a.max_cases || 10;
-    const srcEl = document.getElementById('auto-source');
-    if (document.activeElement !== srcEl) srcEl.value = a.source || 'owner';
-    setAutoListView(a.list_view || '');
+    setAutoSource(a.source || 'owner');
+    if (!autoListViewEditing()) {
+      autoListViews = (a.list_views || (a.list_view ? [a.list_view] : [])).slice(0, MAX_AUTO_LIST_VIEWS);
+    }
+    if (!autoOwnerEditing()) {
+      autoOwners = (a.owners || []).slice(0, MAX_AUTO_OWNERS);
+    }
+    const ofEl = document.getElementById('auto-owners-file');
+    if (document.activeElement !== ofEl) ofEl.value = a.owners_file || '';
+    ownersFileInfo = {owners: a.owners_file_owners || [], error: a.owners_file_error || ''};
     applyAutoSourceUi();
+    renderOwnersFileNote();
+    const emWatch = document.getElementById('auto-email-watch');
+    if (document.activeElement !== emWatch) emWatch.checked = !!a.email_watch_enabled;
+    const emFolder = document.getElementById('auto-email-folder');
+    if (document.activeElement !== emFolder) emFolder.value = a.email_folder || 'Inbox';
+    const emDays = document.getElementById('auto-email-days');
+    if (document.activeElement !== emDays) emDays.value = a.email_lookback_days || 7;
+    const emMax = document.getElementById('auto-email-max');
+    if (document.activeElement !== emMax) emMax.value = a.email_max || 3;
+    const emBits = [];
+    if (a.email_last_scan_at) emBits.push('last Outlook check ' + a.email_last_scan_at.slice(0, 16).replace('T', ' '));
+    if (a.email_last_result) emBits.push(a.email_last_result);
+    document.getElementById('auto-email-status').textContent = emBits.join(' · ');
     document.getElementById('auto-toggle-text').textContent =
       autoEnabled ? 'Stop automatic analysis' : 'Start automatic analysis';
     document.getElementById('auto-toggle-btn').className = autoEnabled ? 'danger' : 'primary';
     const bits = [];
-    bits.push(autoEnabled ? 'ON · ' + (a.mode_label || a.mode)
-      + (a.source === 'list_view' ? ' · list view ' + (a.list_view || '?') : '') : 'off');
+    if (a.latest_driver) bits.push('latest driver ' + a.latest_driver + ' (' + (a.latest_driver_source || 'report') + ')');
+    else if (a.latest_driver_error) bits.push('latest driver unknown (' + a.latest_driver_error + ')');
+    const owners = a.owners || [];
+    const fileOwners = a.owners_file_owners || [];
+    const srcText = a.source === 'list_view'
+      ? 'list view' + ((a.list_views || []).length > 1 ? 's ' : ' ') + ((a.list_views || [a.list_view]).join(', ') || '?')
+      : a.source === 'owners_file'
+      ? 'owners file ' + (a.owners_file || '?') + (a.owners_file_error ? ' (' + a.owners_file_error + ')' : ' (' + fileOwners.length + ' owners)')
+      : 'open cases of ' + (owners.length > 1 ? owners.length + ' owners (' + owners.join(', ') + ')'
+                                               : (owners[0] ? "'" + owners[0] + "'" : 'the owner'));
+    bits.push((a.can_schedule ? '' : 'schedule (read-only here): ')
+      + (autoEnabled ? 'ON · ' + (a.mode_label || a.mode) + ' · ' + srcText
+         + (a.email_watch_enabled ? ' + Outlook ' + (a.email_folder || 'Inbox') : '') : 'off'));
+    if (autoEnabled && a.host) bits.push(a.runs_here && a.can_schedule ? 'runs in this app' : 'runs on ' + a.host);
     if (autoEnabled && a.next_run_at) bits.push('next round ' + a.next_run_at.slice(0, 16).replace('T', ' '));
     if (a.last_scan_at) bits.push('last round ' + a.last_scan_at.slice(0, 16).replace('T', ' ') + ' UTC');
     if (a.last_result) bits.push(a.last_result);
     if (a.running) bits.push('running now');
+    if (autoEnabled && a.runs_here && a.cli_last_run) {
+      bits.push('⚠ the Task Scheduler CLI also ran: ' + a.cli_last_run + ' — run only one of them');
+    }
     const el = document.getElementById('auto-status');
     el.textContent = bits.join(' · ');
-    el.className = 'status-line ' + (a.running ? 'running' : autoEnabled ? 'done' : '');
+    el.className = 'status-line ' + (a.running ? 'running'
+                   : (autoEnabled && a.runs_here && a.cli_last_run) ? 'error'
+                   : autoEnabled ? 'done' : '');
   }
 
   async function loadAuto() {
     try {
       const r = await fetch('/handsfree/auto');
-      renderAuto(await r.json());
+      const a = await r.json();
+      renderAuto(a);
+      ensureIdlePolling(a);
     } catch (e) {
       document.getElementById('auto-status').textContent = 'status unavailable: ' + e;
     }
@@ -608,23 +1130,6 @@
       : sel.value;
   }
 
-  // Select `name` in the dropdown; a name the listing does not know (or an
-  // unloaded listing) goes to the "other…" text input so it is never lost.
-  function setAutoListView(name) {
-    const sel = document.getElementById('auto-list-view');
-    const other = document.getElementById('auto-list-view-other');
-    if (document.activeElement === sel || document.activeElement === other) return;
-    const known = Array.from(sel.options).some(o => o.value === name && o.value !== '__other__');
-    if (name && !known) {
-      sel.value = '__other__';
-      other.value = name;
-    } else {
-      sel.value = name;
-      if (sel.value !== name) sel.value = sel.options.length ? sel.options[0].value : '';
-    }
-    applyAutoListViewUi();
-  }
-
   function applyAutoListViewUi() {
     const sel = document.getElementById('auto-list-view');
     document.getElementById('auto-list-view-other').style.display =
@@ -633,7 +1138,6 @@
 
   function fillListViews(items, errorText) {
     const sel = document.getElementById('auto-list-view');
-    const keep = currentAutoListView();
     sel.innerHTML = '';
     const add = (value, text) => {
       const o = document.createElement('option');
@@ -641,9 +1145,11 @@
     };
     if (errorText) add('', 'list views unavailable: ' + errorText);
     else if (!items.length) add('', 'no Case list views visible to this login');
+    else add('', 'choose a list view to add…');
     items.forEach(v => add(v.developer_name, v.label + ' (' + v.developer_name + ')'));
     add('__other__', 'other…');
-    setAutoListView(keep);
+    sel.value = '';
+    applyAutoListViewUi();
   }
 
   async function loadListViews() {
@@ -659,12 +1165,34 @@
     }
   }
 
-  function autoRoundSettings() {
+  function emailRoundSettings() {
     return {
-      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
-      source: document.getElementById('auto-source').value,
-      list_view: currentAutoListView(),
+      email_watch: document.getElementById('auto-email-watch').checked,
+      email_folder: document.getElementById('auto-email-folder').value.trim() || 'Inbox',
+      email_lookback_days: parseInt(document.getElementById('auto-email-days').value, 10) || 7,
+      email_max: parseInt(document.getElementById('auto-email-max').value, 10) || 3,
     };
+  }
+
+  function autoRoundSettings() {
+    return Object.assign({
+      max_cases: parseInt(document.getElementById('auto-max').value, 10) || 10,
+      source: getAutoSource(),
+      list_views: autoListViews.slice(0, MAX_AUTO_LIST_VIEWS),
+      owners: autoOwners.slice(0, MAX_AUTO_OWNERS),
+      owners_file: document.getElementById('auto-owners-file').value.trim(),
+    }, emailRoundSettings());
+  }
+
+  async function emailCheckNow() {
+    await startRun('/handsfree/email/check_now', emailRoundSettings());
+    loadAuto();
+  }
+
+  async function emailRunCase() {
+    const caseNbr = document.getElementById('email-case-nbr').value.trim();
+    if (!caseNbr) { alert('Type an IPS case number first.'); return; }
+    await startRun('/handsfree/email/run_case', {case_nbr: caseNbr});
   }
 
   async function toggleAuto() {
@@ -680,6 +1208,7 @@
     if (j.error) { alert('Failed: ' + j.error); return; }
     renderAuto(j);
     if (j.enabled && j.mode !== 'nightly') startPolling();   // interval modes run right away
+    else ensureIdlePolling(j);                                // nightly: watch for it at a slow pace
   }
 
   // A request that never gets an answer (the app was restarted and this tab
@@ -701,6 +1230,7 @@
   }
 
   async function startRun(url, body) {
+    liveHistory = null;   // a new run takes the panel back
     setRunButtons(true);
     let j;
     try {
@@ -737,13 +1267,81 @@
   async function runCase() {
     const caseNbr = document.getElementById('case-nbr').value.trim();
     if (!caseNbr) { alert('Enter an IPS case number.'); return; }
-    await startRun('/handsfree/run_case', {case_nbr: caseNbr});
+    const isServer = {{ 'true' if role == 'server' else 'false' }};
+    if (isServer) { await startRun('/handsfree/run_case', {case_nbr: caseNbr}); return; }
+    // Client: the server runs it. Hand the request over and follow it.
+    let j;
+    try {
+      j = await postJson('/handsfree/run_case', {case_nbr: caseNbr});
+    } catch (e) { serverUnreachable(e); return; }
+    if (!j.ok) { alert('Failed: ' + (j.error || 'unknown')); return; }
+    document.getElementById('case-nbr').value = '';
+    watchRequests(j.request && j.request.case_nbr);
+  }
+
+  // ---------- case requests served by the server (client role) ----------
+  // The server picks a request up on its next tick (within 30 s), runs the
+  // case, and the draft lands in the shared queue; this line follows it.
+  let requestTimer = null;
+  let requestWatchCase = null;
+
+  function renderRequests(items) {
+    const el = document.getElementById('request-status');
+    const live = (items || []).filter(r => r.status === 'pending' || r.status === 'running');
+    const mine = requestWatchCase ? (items || []).find(r => r.case_nbr === requestWatchCase) : null;
+    const bits = [];
+    if (mine && mine.status === 'done') {
+      bits.push('case ' + mine.case_nbr + (mine.ok ? ' analyzed on the server — see the queue below'
+                                                   : ' failed on the server: ' + (mine.error || 'unknown')));
+    }
+    live.forEach(r => bits.push('case ' + r.case_nbr + (r.status === 'running'
+      ? ' running on the server' + (r.host ? ' (' + r.host + ')' : '')
+      : ' waiting for the server') + (r.requested_by ? ' · asked by ' + r.requested_by : '')));
+    el.textContent = bits.join(' · ');
+    el.className = 'status-line ' + (live.some(r => r.status === 'running') ? 'running'
+                   : (mine && mine.status === 'done') ? (mine.ok ? 'done' : 'error') : '');
+    return {live: live.length, mine};
+  }
+
+  async function refreshRequests() {
+    let j;
+    try {
+      j = await (await fetch('/handsfree/requests')).json();
+    } catch (e) { return; }
+    const r = renderRequests(j.items);
+    if (r.mine && r.mine.status === 'done') {
+      requestWatchCase = null;
+      loadQueue();
+    }
+    if (!r.live && !requestWatchCase && requestTimer) { clearInterval(requestTimer); requestTimer = null; }
+  }
+
+  function watchRequests(caseNbr) {
+    if (caseNbr) requestWatchCase = caseNbr;
+    if (!requestTimer) requestTimer = setInterval(refreshRequests, 5000);
+    refreshRequests();
+  }
+
+  let pollIntervalMs = 0;
+  const POLL_FAST_MS = 2000;     // a run is in progress
+  const POLL_IDLE_MS = 5000;     // server: between scheduled rounds
+
+  function setPollInterval(ms) {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(refreshStatus, ms);
+    pollIntervalMs = ms;
   }
 
   function startPolling() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(refreshStatus, 2000);
+    setPollInterval(POLL_FAST_MS);
     refreshStatus();
+  }
+
+  // The scheduled rounds run inside THIS app when it is the server that
+  // owns the schedule: keep a slow poll going while idle, so a round that
+  // starts on its own shows up in the live panel without a click.
+  function ensureIdlePolling(a) {
+    if (a && a.enabled && a.can_schedule && a.runs_here && !pollTimer) setPollInterval(POLL_IDLE_MS);
   }
 
   // ---------- per-case stage table ----------
@@ -751,7 +1349,7 @@
   const STAGES = ['fetch_case', 'triage', 'read_images', 'read_case_history', 'check_case_info',
                   'pick_zip', 'download', 'decompose', 'check_wrt_log', 'check_bt_log',
                   'issue_time', 'pick_etl', 'decode_etl', 'decode_bt', 'agent_analysis',
-                  'echo_kb'];
+                  'echo_kb', 'bsod_dumps', 'bsod_download', 'bsod_submit', 'bsod_result'];
   let stageCasePinned = null;   // user-selected case; null = follow the running one
 
   function pinStageCase(caseNbr) {
@@ -851,13 +1449,19 @@
     }).join('');
     log.scrollTop = log.scrollHeight;
     renderStageTable(s.events);
+    renderLivePanel(s);
     if (s.auto) renderAuto(s.auto);
     if (s.status !== 'running') {
       setRunButtons(false);
       if (pollTimer && s.status !== 'idle') { clearInterval(pollTimer); pollTimer = null; }
-      if (s.status === 'done') loadQueue();
+      if (s.status === 'done' && lastSeenStatus !== 'done') loadQueue();
+      ensureIdlePolling(s.auto);
+    } else if (pollTimer && pollIntervalMs !== POLL_FAST_MS) {
+      setPollInterval(POLL_FAST_MS);        // a scheduled round began: follow it closely
     }
+    lastSeenStatus = s.status;
   }
+  let lastSeenStatus = null;
 
   const ACTION_OWNER_TEXT = {intel: 'Intel (case owner)', customer: 'Customer'};
 
@@ -865,14 +1469,50 @@
     const showClosed = document.getElementById('show-closed').checked;
     const params = new URLSearchParams();
     if (showClosed) params.set('all', '1');
-    const owner = document.getElementById('owner-filter').value.trim();
-    if (owner) params.set('owner', owner);
+    if (document.getElementById('show-everyone').checked) {
+      params.set('everyone', '1');
+      const owner = document.getElementById('owner-filter').value.trim();
+      if (owner) params.set('owner', owner);
+    }
     const query = params.toString();
     const r = await fetch('/handsfree/queue' + (query ? '?' + query : ''));
     const j = await r.json();
     const tbody = document.querySelector('#queue-table tbody');
     tbody.innerHTML = '';
+    const firstOfCase = new Set();   // the Reset button shows once per case
+    if (j.error) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--bad, #c33);">could not load the queue: '
+        + esc(j.error) + '</td></tr>';
+      return;
+    }
+    if (j.signed_out) {
+      tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">' + (
+        ipsLogin.status === 'signing_in'
+          ? 'signing in to IPS — your cases appear in a moment'
+          : 'not signed in to IPS: use "Sign in to IPS" to see your cases, or tick "everyone\'s cases"'
+      ) + '</td></tr>';
+      // The drafts of this PC's Outlook intake need no IPS sign-in (their
+      // reply is saved in Outlook): they are listed under the hint.
+      if (!(j.items || []).length) return;
+    }
     (j.items || []).forEach(it => {
+      if (it.status === 'skipped') {
+        // Looked at by the server but not analyzed: no draft to open.
+        const tr = document.createElement('tr');
+        tr.className = 'skipped-row';
+        tr.innerHTML =
+          `<td class="case-nbr">${caseLink(it.case_nbr, it.case_id)}</td>` +
+          `<td>${esc(it.owner_name || '—')}</td>` +
+          `<td title="${esc(it.subject || '')}">${esc(it.skip_reason || 'skipped')}</td>` +
+          `<td><span class="pill">${esc(it.mode || '')}</span></td>` +
+          `<td>—</td>` +
+          `<td><span class="pill">skipped</span></td>` +
+          `<td>—</td>` +
+          `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
+          `<td>—</td>`;
+        tbody.appendChild(tr);
+        return;
+      }
       const statusCls = it.status === 'posted' ? 'good'
                       : it.status === 'post_failed' ? 'bad'
                       : it.status === 'rejected' ? 'bad'
@@ -884,9 +1524,12 @@
         `<td>${esc((it.subject || '').slice(0, 70))}</td>` +
         `<td><span class="pill">${esc(it.mode || '')}</span>` +
         (it.trial ? ` <span class="pill warn" title="tuning run on a historical case — cannot be posted">TRIAL</span>` : '') +
+        (it.email ? ` <span class="pill" title="${esc('from ' + (it.email.sender_name || it.email.sender_email || '?') + ' · ' + (it.email.subject || ''))}">${it.source === 'email' ? 'email thread' : 'email'}</span>` : '') +
         `</td>` +
         `<td>${it.confidence != null ? it.confidence + '/100' : '—'}</td>` +
-        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span></td>` +
+        `<td><span class="pill dot ${statusCls}">${esc(it.status)}</span>` +
+        (it.auto_posted ? ` <span class="pill" title="Posted automatically (auto-post first response)">AUTO</span>` : '') +
+        `</td>` +
         // Who acts next, as read from the comment thread (hover = the step).
         (it.action_owner
           ? `<td><span class="pill ${it.action_owner === 'intel' ? 'warn' : ''}" ` +
@@ -894,23 +1537,86 @@
           : `<td style="color:var(--faint);">—</td>`) +
         `<td>${esc((it.created_at || '').slice(0, 16))}</td>` +
         // Only cases whose WRT log was decoded (decode_etl reached) have one.
+        `<td style="white-space: nowrap;">` +
         (it.log_dir
-          ? `<td><button class="ghost log-folder-btn" title="${esc(it.log_dir)}">` +
+          ? `<button class="ghost log-folder-btn lp-btn-sm" title="${esc(it.log_dir)}">` +
             `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
             `stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">` +
             `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>` +
-            `Open folder</button></td>`
-          : `<td style="color:var(--faint);">—</td>`);
+            `Folder</button> `
+          : '') +
+        `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}"${it.log_dir ? '' : ' disabled'}>Avatar</button> ` +
+        (firstOfCase.has(it.case_nbr) ? '' :
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
+        `</td>`;
+      firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
       const logBtn = tr.querySelector('.log-folder-btn');
       if (logBtn) {
         logBtn.onclick = (ev) => { ev.stopPropagation(); openLogFolder(it.draft_id); };
       }
+      const avBtn = tr.querySelector('.avatar-btn');
+      if (avBtn) avBtn.onclick = (ev) => { ev.stopPropagation(); openInAvatar(it.case_nbr, it.draft_id, avBtn); };
+      const rsBtn = tr.querySelector('.reset-btn');
+      if (rsBtn) rsBtn.onclick = (ev) => { ev.stopPropagation(); resetCase(it.case_nbr); };
       tbody.appendChild(tr);
     });
     if (!(j.items || []).length) {
       tbody.innerHTML = '<tr><td colspan="9" style="color:var(--muted);">queue is empty — run a check above</td></tr>';
     }
+  }
+
+  let currentDraftCase = '';
+
+  let currentDraftEmail = null;   // the mail a mail-triggered draft replies to
+
+  // Hand-off to Avatar for a manual deep dive. With a decoded log the server
+  // seeds this browser session (case, log, issue time in the log's clock) and
+  // the Log Chatbot opens on it; without one (run stopped before a log, e.g.
+  // waiting on the customer) it seeds the case as Avatar's start page does
+  // and the attachment picker opens, to choose the logs by hand. The tab is
+  // opened synchronously, from the click, so pop-up blockers let it through;
+  // the server's answer then points it.
+  function avatarHandoffTitle(hasLog) {
+    return hasLog
+      ? "Opens Avatar's Log Chatbot on this case's decoded log, with the issue filled in the chat, to continue by hand"
+      : "no log to analysis";
+  }
+  async function openInAvatar(caseNbr, draftId, btn) {
+    if (!caseNbr) { alert('No case to open.'); return; }
+    const w = window.open('about:blank', '_blank');
+    if (!w) { alert('The browser blocked the new tab — allow pop-ups for this page, then try again.'); return; }
+    try { w.document.title = 'Opening case ' + caseNbr + ' in Avatar…';
+          w.document.body.innerHTML = '<p style="font-family:sans-serif;color:#888;padding:20px;">Opening case ' + caseNbr + ' in Avatar…</p>'; } catch (e) {}
+    const label = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = 'Opening in Avatar…'; }
+    let j;
+    try {
+      j = await postJson('/handsfree/chatbot_handoff', {case_nbr: caseNbr, draft_id: draftId || ''});
+    } catch (e) { j = {ok: false, error: String(e)}; }
+    if (btn) { btn.disabled = false; btn.textContent = label; }
+    if (!j.ok) { w.close(); alert('Could not open in Avatar: ' + (j.error || 'unknown')); return; }
+    w.location.href = j.url;
+  }
+
+  async function resetCase(caseNbr) {
+    if (!caseNbr) return;
+    const purge = confirm('Reset Beacon history of case ' + caseNbr + '?\n\n' +
+      'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
+      'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
+      'OK = reset (keep downloaded files)\nCancel = do nothing');
+    if (!purge) return;
+    let j;
+    try {
+      j = await postJson('/handsfree/case/' + encodeURIComponent(caseNbr) + '/reset', {purge_downloads: false});
+    } catch (e) { alert('Reset failed: ' + e); return; }
+    if (!j.ok) { alert('Reset failed: ' + (j.error || 'unknown')); return; }
+    const n = (j.archived || []).length;
+    document.getElementById('run-status').textContent =
+      'case ' + caseNbr + ' reset — ' + n + ' draft' + (n === 1 ? '' : 's') + ' archived'
+      + ((j.kept_posted || []).length ? ', ' + j.kept_posted.length + ' posted kept' : '');
+    if (currentDraftCase === caseNbr) document.getElementById('draft-panel').style.display = 'none';
+    loadQueue();
   }
 
   async function openLogFolder(draftId) {
@@ -941,8 +1647,9 @@
     const chips = [];
     const cr = analysis.case_reader || {};
     if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
-      chips.push({label: 'visibility', text: 'public reply to customer', cls: 'warn',
-                  title: 'Approving posts this as a customer-visible comment (not Private to Intel)'});
+      chips.push({label: 'written for', text: 'the customer (reply asking for items)', cls: 'warn',
+                  title: 'A request / first-response draft. It is still posted Private to Intel unless '
+                       + 'you pick "External to customer" under the text before approving.'});
     }
     if (analysis.next_action) {
       chips.push({label: 'next action',
@@ -975,7 +1682,18 @@
       chips.push({label: 'time check', text: 'log does NOT cover issue time', cls: 'bad',
                   title: 'reported: ' + (tm.issue_times || []).join(' · ')
                        + ' — log covers ' + tm.log_first + ' – ' + tm.log_last
-                       + ' (±' + (tm.grace_minutes || 10) + ' min grace)'});
+                       + ' (±' + (tm.grace_minutes || 10) + ' min grace)'
+                       + (tm.log_first_customer ? ' = ' + tm.log_first_customer + ' – ' + tm.log_last_customer
+                                                  + ' in the customer clock' : '')});
+    }
+    // How the customer's issue time was placed in the log's clock (decoder
+    // host, GMT+8) — shown only when the two clocks differ.
+    const ta = analysis.time_alignment || {};
+    if (ta.offset && ta.offset !== '+00:00' && ta.offset !== '-00:00') {
+      const how = {tz_helper: 'time zone', folder_stamp: 'folder stamp'}[ta.anchor] || ta.anchor || '?';
+      chips.push({label: 'clock', text: ta.customer_time + ' customer = ' + ta.log_time + ' log ('
+                                        + ta.offset + ' via ' + how + ')',
+                  title: ta.customer_tz ? 'customer time zone: ' + ta.customer_tz : ''});
     }
     const times = (cr.issue_times && cr.issue_times.length)
       ? cr.issue_times : (analysis.issue_times || []);
@@ -1001,6 +1719,11 @@
       chips.push({label: 'stages', text: okN + '/' + stages.length + ' OK',
                   cls: okN === stages.length ? 'good' : 'warn'});
     }
+    const adv = analysis.echo_advice || {};
+    if (adv.status === 'answered' && adv.answer) {
+      chips.push({label: 'Echo next steps', text: 'in the INTERNAL Echo section at the end of the draft', cls: 'good',
+                  title: String(adv.answer).slice(0, 600)});
+    }
     const echo = (analysis.echo_insights || []).filter(i => i && i.answer);
     if (echo.length) {
       chips.push({label: 'echo kb', text: echo.length + ' root-cause insight' + (echo.length > 1 ? 's' : ''),
@@ -1016,23 +1739,80 @@
 
   async function openDraft(draftId) {
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
-    if (!r.ok) { alert('draft not found'); return; }
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({}));
+      alert('Could not open the draft: ' + (err.error || 'draft not found'));
+      return;
+    }
     const d = await r.json();
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
+    currentDraftCase = d.case_nbr || '';
+    currentDraftEmail = d.email || null;
+    document.getElementById('approve-btn-text').textContent =
+      d.email ? 'Save reply draft in Outlook' : 'Approve & post to IPS';
+    // Who sees the post is the reviewer's choice on each draft, never carried
+    // over from the previous one and never taken from the draft's mode.
+    setDraftVisibility('internal');
+    document.getElementById('draft-visibility-row').style.display = d.email ? 'none' : '';
+    applyVisibilityUi();
+    const draftHasLog = !!(d.shared_log_path || (d.analysis && d.analysis.log_path));
+    document.getElementById('draft-avatar-btn').title = avatarHandoffTitle(draftHasLog);
+    document.getElementById('draft-avatar-btn').disabled = !draftHasLog;
     document.getElementById('draft-panel').style.display = '';
     document.getElementById('draft-title').innerHTML =
       `case ${caseLink(d.case_nbr, d.case_id)} · ${esc(d.mode)} · ${esc(d.status)}`;
-    document.getElementById('draft-status').textContent =
-      d.post_result && d.post_result.error ? ('last post attempt: ' + d.post_result.error) : '';
+    const pr = d.post_result || {};
+    const postedAs = (pr.author && pr.author.name) || (pr.posted_by && pr.posted_by.name) || d.posted_by || '';
+    document.getElementById('draft-status').textContent = [
+      d.email ? 'Reply to: ' + (d.email.sender_name || d.email.sender_email || '?')
+        + (d.email.sender_email && d.email.sender_name ? ' <' + d.email.sender_email + '>' : '')
+        + ' · "' + (d.email.subject || '') + '" · received ' + (d.email.received || '').slice(0, 16).replace('T', ' ')
+        + (d.email.reply_all === false ? ' · reply to sender only' : ' · reply all') : '',
+      pr.backend === 'outlook' && pr.ok
+        ? 'saved in Outlook Drafts' + (pr.detail && pr.detail.to ? ' to ' + pr.detail.to : '') : '',
+      !d.email && d.status === 'posted' && postedAs
+        ? ('posted to IPS as ' + postedAs + visibilityText(pr.visibility, ' · ')) : '',
+      pr.error ? ('last post attempt: ' + pr.error) : '',
+    ].filter(Boolean).join(' · ');
     document.getElementById('draft-text').value = d.draft_plain || '';
     renderDraftChips(d.analysis || {});
+    renderDraftSent(d.analysis || {});
+    if (d.live) showLiveHistory(d);
     document.getElementById('draft-analysis').textContent =
       JSON.stringify(d.analysis || {}, null, 2);
     document.getElementById('approve-btn').disabled =
       (d.status === 'posted' || d.status === 'rejected');
     document.getElementById('post-status').textContent = '';
     document.getElementById('draft-panel').scrollIntoView({behavior: 'smooth'});
+  }
+
+  // ---- who sees the post: the reviewer's pick on the draft panel --------
+  function draftVisibility() {
+    const el = document.querySelector('input[name="draft-visibility"]:checked');
+    return el ? el.value : 'internal';
+  }
+  function setDraftVisibility(v) {
+    document.querySelectorAll('input[name="draft-visibility"]').forEach(r => { r.checked = (r.value === v); });
+  }
+  function visibilityText(v, sep) {
+    if (!v) return '';
+    return (sep || '') + (v === 'external' ? 'visible to the customer' : 'Private to Intel');
+  }
+  function applyVisibilityUi() {
+    const external = draftVisibility() === 'external';
+    const btn = document.getElementById('approve-btn');
+    if (!currentDraftEmail) {
+      btn.title = external
+        ? 'Posts this text to IPS as a comment the CUSTOMER can see'
+        : 'Posts this text to IPS as a Private-to-Intel comment';
+    } else {
+      btn.title = 'Saves this text as a reply to the mail in your Outlook Drafts folder — nothing is sent';
+    }
+    btn.classList.toggle('danger', external && !currentDraftEmail);
+    btn.classList.toggle('good', !(external && !currentDraftEmail));
+    document.getElementById('draft-visibility-note').textContent = external
+      ? '⚠ the customer will see this comment' : '';
   }
 
   async function saveDraft() {
@@ -1047,20 +1827,36 @@
 
   async function approveDraft() {
     if (!currentDraftId) return;
-    const msg = (['request_logs', 'request_info', 'first_response'].includes(currentDraftMode))
-      ? 'Post this reply to IPS as a PUBLIC comment visible to the customer?'
-      : 'Post this comment to IPS as Private to Intel?';
+    // An IPS comment goes out under this PC's IPS sign-in; an Outlook reply
+    // draft needs no IPS session at all.
+    if (!currentDraftEmail && !(ipsLogin.status === 'signed_in' && ipsLogin.identity)) {
+      alert('Not signed in to IPS on this PC. Use "Sign in to IPS" first — the comment is posted under that name.');
+      return;
+    }
+    const visibility = draftVisibility();
+    const asWho = currentDraftEmail ? '' : '\n\nIt will be posted as ' + ipsLogin.identity.name + '.';
+    const msg = currentDraftEmail
+      ? 'Save this text as a reply draft in your Outlook Drafts folder? Nothing is sent and nothing is posted to IPS.'
+      : (visibility === 'external'
+      ? 'Post this comment to IPS as EXTERNAL — visible to the customer?'
+      : 'Post this comment to IPS as Internal to Intel (the customer will not see it)?') + asWho;
     if (!confirm(msg)) return;
     const btn = document.getElementById('approve-btn');
     btn.disabled = true;
-    document.getElementById('post-status').textContent = 'posting…';
+    document.getElementById('post-status').textContent = currentDraftEmail ? 'saving the Outlook draft…' : 'posting…';
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/approve', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value}),
+      body: JSON.stringify({draft_plain: document.getElementById('draft-text').value,
+                            visibility: visibility}),
     });
     const j = await r.json();
+    const postedName = j.ok && ((j.result && j.result.author && j.result.author.name)
+      || (ipsLogin.identity && ipsLogin.identity.name));
     document.getElementById('post-status').textContent =
-      j.ok ? 'posted to IPS' : ('post failed: ' + (j.error || 'unknown'));
+      j.ok ? (currentDraftEmail ? 'reply draft saved in Outlook — open Outlook Drafts to send it'
+                                : 'posted to IPS' + (postedName ? ' as ' + postedName : '')
+                                  + visibilityText((j.result || {}).visibility || visibility, ' · '))
+           : ((currentDraftEmail ? 'Outlook draft failed: ' : 'post failed: ') + (j.error || 'unknown'));
     if (!j.ok) btn.disabled = false;
     loadQueue();
   }
@@ -1076,10 +1872,797 @@
     loadQueue();
   }
 
+  // ---------- live analysis side panel ----------
+  // Rendered from the same /handsfree/status poll: run header, the case,
+  // a plain-language pipeline timeline, what was sent to the AI analysis,
+  // the outcome and the cases of the round.
+
+  const LIVE_COMMON = [
+    ['fetch_case', 'Fetch the IPS case'],
+    ['triage', 'Triage the description'],
+    ['read_images', 'Read comment screenshots'],
+    ['read_case_history', 'Read the IPS comment thread'],
+    ['check_case_info', 'Check the case information'],
+    ['category', 'Identify the issue category & required logs'],
+    ['driver_check', 'Check the driver version vs the latest release'],
+  ];
+  const LIVE_WIFI = [
+    ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
+    ['decompose', 'Extract the archive'], ['check_wrt_log', 'Check for WRT logs'],
+    ['issue_time', 'Settle the issue time'], ['pick_etl', 'Pick the capture'],
+    ['decode_etl', 'Decode the ETL log'], ['agent_analysis', 'AI log analysis'],
+    ['echo_kb', 'Knowledge base (Echo)'],
+  ];
+  const LIVE_BT = [
+    ['pick_zip', 'Pick the log archive'], ['download', 'Download the archive'],
+    ['decompose', 'Extract the archive'], ['check_bt_log', 'Check for BT logs'],
+    ['issue_time', 'Settle the issue time'], ['pick_etl', 'Pick the capture'],
+    ['decode_bt', 'Decode the BT log'], ['agent_analysis', 'AI log analysis'],
+    ['echo_kb', 'Knowledge base (Echo)'],
+  ];
+  const LIVE_BSOD = [
+    ['bsod_dumps', 'Find the crash dumps'], ['bsod_download', 'Copy dumps to the BSOD share'],
+    ['bsod_submit', 'Submit to PotatoFarm'], ['bsod_result', 'PotatoFarm verdict'],
+  ];
+  const LIVE_MODE_TEXT = {
+    full: ['AI analysis report drafted', 'good'],
+    triage_only: ['Triage only — no usable log', 'warn'],
+    request_logs: ['Reply asks the customer for logs', 'warn'],
+    request_info: ['Reply asks the customer for information', 'warn'],
+    waiting_customer: ['Waiting on the customer', ''],
+    bsod_submitted: ['BSOD dump sent to PotatoFarm', 'good'],
+    bsod_pending: ['BSOD — already submitted to PotatoFarm', ''],
+    unsupported: ['Skipped — unsupported subcategory', ''],
+    error: ['Error', 'bad'],
+  };
+  const LIVE_ANCHOR_TEXT = {tz_helper: 'time zone from system_info', folder_stamp: 'capture folder stamp',
+                            as_is: 'same clock'};
+
+  function liveFmtMs(ms) {
+    if (ms == null) return '';
+    if (ms < 1000) return ms + ' ms';
+    const sec = ms / 1000;
+    if (sec < 60) return sec.toFixed(sec < 10 ? 1 : 0) + ' s';
+    return Math.floor(sec / 60) + ' m ' + Math.round(sec % 60) + ' s';
+  }
+  function liveFmtSec(sec) {
+    if (sec == null || sec < 0) return '';
+    sec = Math.round(sec);
+    return sec < 60 ? sec + ' s' : Math.floor(sec / 60) + ' m ' + (sec % 60) + ' s';
+  }
+  function liveNowTs() {
+    const n = new Date();
+    return n.getHours() * 3600 + n.getMinutes() * 60 + n.getSeconds();
+  }
+
+  function liveStepDetail(key, d, ev) {
+    const tm = d.time_mismatch || {}, ta = d.time_alignment || {}, b = d.bsod || {};
+    switch (key) {
+      case 'fetch_case':
+        return d.subcategory ? 'IPS subcategory: ' + d.subcategory : '';
+      case 'read_case_history': {
+        const bits = [];
+        if ((d.issue_times || []).length) bits.push('issue time ' + d.issue_times.join(' · ')
+          + (d.issue_time_source ? ' (from ' + d.issue_time_source + ')' : ''));
+        else if (ev.status === 'done') bits.push(d.bsod_case
+          ? 'no issue time needed — the crash dump carries it'
+          : 'no minute-precise issue time stated');
+        if (d.reader_attachment) bits.push('log: ' + d.reader_attachment);
+        return bits.join(' — ');
+      }
+      case 'check_case_info':
+        if (ev.status !== 'done') return ev.detail || '';
+        return (d.missing_info || []).length ? 'missing: ' + d.missing_info.join(', ') : 'all case information present';
+      case 'driver_check':
+        return (d.driver_decision || {}).summary || ev.detail || '';
+      case 'read_images': {
+        const imgs = d.comment_images || [];
+        const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+        if (n) return n + ' image' + (n === 1 ? '' : 's') + ' described across ' + imgs.length + ' comment' + (imgs.length === 1 ? '' : 's');
+        return ev.status === 'done' ? 'no images in the comments' : (ev.detail && ev.detail !== 'started' ? ev.detail : '');
+      }
+      case 'category': {
+        const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+        if (!dd.winner) return '';
+        let t = dd.winner + ' (from the ' + (dd.winner_label || dd.winner_source || '?') + ')';
+        if (cd.required_logs) t += ' · ' + cd.required_logs.length + ' required log' + (cd.required_logs.length === 1 ? '' : 's')
+          + (cd.missing_logs && cd.missing_logs.length ? ', ' + cd.missing_logs.length + ' missing' : ', all provided');
+        else if ((dd.required_logs || []).length) t += ' · ' + dd.required_logs.length + ' required log' + (dd.required_logs.length === 1 ? '' : 's');
+        return t;
+      }
+      case 'pick_zip': {
+        const pd = d.pick_decision || {};
+        if (!d.chosen_attachment) return '';
+        return d.chosen_attachment + ({reader: ' — nominated by the reader', newest_upload: ' — newest upload', only_archive: ' — the only archive'}[pd.chosen_rule] || '');
+      }
+      case 'decompose': {
+        const c = d.archive_contents || {};
+        const parts = [['wifi_wpp', 'WPP'], ['ddd', 'DDD'], ['event_logs', 'event logs'], ['bt', 'BT'], ['fw', 'FW']]
+          .filter(([k]) => c[k]).map(([k, l]) => c[k] + ' ' + l);
+        return parts.length ? 'found ' + parts.join(' · ') : (ev.status === 'done' ? 'no driver logs inside' : '');
+      }
+      case 'issue_time':
+        return ta.customer_time ? ta.customer_time + ' customer = ' + ta.log_time + ' in the log'
+          : ((d.issue_times || [])[0] ? 'anchoring on ' + d.issue_times[0] : '');
+      case 'pick_etl': {
+        const pd = d.pick_decision || {};
+        if (!d.etl_capture) return '';
+        return d.etl_capture + ({closest_at_or_after_issue: ' — closest capture at/after ' + (pd.issue_time_used || 'the issue time'),
+          yb_earliest: ' — earliest capture with an error code', newest_ddd: ' — newest DDD capture', newest_wifi: ' — newest WRT capture',
+          bt_newest: ' — newest BT capture'}[pd.etl_rule] || '');
+      }
+      case 'decode_etl': case 'decode_bt':
+        if (tm.log_first) return 'log ' + tm.log_first + ' – ' + tm.log_last + ' does NOT cover the issue time'
+          + (tm.yb_assert_override ? ' (continued on assert ' + tm.yb_assert_override.join(', ') + ')' : '');
+        return d.log_file ? d.log_file : '';
+      case 'bsod_dumps': return (b.dumps || []).join(', ');
+      case 'bsod_download': return b.dumps_path || '';
+      case 'bsod_submit': return b.submitted ? 'accepted' : (b.skipped || '');
+      case 'bsod_result': {
+        const r = b.results || [];
+        if (!r.length) return ev.status === 'done' ? 'no result in the folder yet' : '';
+        return r.map(x => '0x' + x.bugcheck_code + ' ' + (x.failure_bucket_id || '') + ' — Wi-Fi '
+          + (x.wifi_fault ? 'AT FAULT' : 'not at fault')).join(' · ');
+      }
+    }
+    return (ev.detail && ev.detail !== 'started') ? ev.detail : '';
+  }
+
+  function liveSteps(d, ev, finished) {
+    const path = LIVE_COMMON.concat(d.bsod_case ? LIVE_BSOD : (d.wifi_or_bt === 'bt' ? LIVE_BT : LIVE_WIFI));
+    const exact = {};
+    (d.stages || []).forEach(x => { exact[x.name] = x; });
+    const steps = path.map(([key, label0]) => {
+      const label = (key === 'fetch_case' && d.source === 'email') ? 'Collect the email thread' : label0;
+      const e = ev[key] || {};
+      let status = e.status || (exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'pending');
+      if (key === 'category') {
+        const dd = d.domain_decision || {};
+        status = dd.winner ? 'done' : (finished ? 'skipped' : 'pending');
+      }
+      if (status === 'pending' && finished) status = 'skipped';
+      if (status === 'running' && finished) status = exact[key] ? (exact[key].ok ? 'done' : 'failed') : 'done';
+      let dur = '';
+      if (exact[key] && status !== 'running') dur = liveFmtMs(exact[key].duration_ms);
+      else if (status === 'running' && e.startTs) {
+        let sec = liveNowTs() - tsToSeconds(e.startTs);
+        if (sec < 0) sec += 86400;
+        dur = liveFmtSec(sec);
+      }
+      let detail = liveStepDetail(key, d, e);
+      if (status === 'failed' && exact[key] && exact[key].detail) detail = exact[key].detail;
+      return {key, label, status, dur, detail};
+    });
+    // A step this path did not need (e.g. "Check for WRT logs" when the
+    // archive held them) stays untouched while later steps run: skipped.
+    for (let i = steps.length - 2; i >= 0; i--) {
+      if (steps[i].status === 'pending' && steps.slice(i + 1).some(x => x.status !== 'pending')) {
+        steps[i].status = 'skipped';
+      }
+    }
+    const queued = d.draft_id || d.fr_draft_id;
+    steps.push({key: 'draft', label: 'Draft queued for review',
+                status: queued ? 'done' : (finished ? (d.skipped ? 'skipped' : 'failed') : 'pending'),
+                dur: '', detail: queued ? (LIVE_MODE_TEXT[d.mode] || [d.mode])[0]
+                                        : (d.skipped ? 'skipped: ' + d.skipped : '')});
+    return steps;
+  }
+
+  function liveSentHtml(d, finished) {
+    const sent = d.sent_for_analysis || [];
+    if (sent.length) {
+      const sameDesc = sent.length > 1 && sent.every(x => (x.description || '') === (sent[0].description || ''));
+      return sent.map((x, i) => {
+        const differs = x.issue_time_log && x.issue_time_customer && x.issue_time_log !== x.issue_time_customer;
+        const timeHtml = x.issue_time_customer
+          ? `<div class="lp-time">${esc(x.issue_time_customer)}</div>` +
+            `<div class="lp-time-sub">${differs
+              ? '= ' + esc(x.issue_time_log) + ' in the log clock (' + esc(LIVE_ANCHOR_TEXT[x.time_anchor] || x.time_anchor || 'aligned') + ')'
+              : 'same clock in the log'}${x.customer_tz ? ' · customer tz ' + esc(x.customer_tz) : ''}</div>`
+          : `<div class="lp-time">no issue time</div><div class="lp-time-sub">the AI scans the whole log</div>`;
+        const range = (x.log_range || []).filter(Boolean).join(' – ');
+        return `<div class="lp-sent">` +
+          `<div class="lp-cap">Incident ${i + 1}${sent.length > 1 ? ' of ' + sent.length : ''} · sent to the AI log analysis</div>` +
+          timeHtml +
+          `<dl class="lp-kv"><dt>Log</dt><dd class="mono">${esc(x.log_file || '—')}</dd>` +
+          (range ? `<dt>Log covers</dt><dd class="mono">${esc(range)}</dd>` : '') + `</dl>` +
+          (sameDesc && i > 0 ? `<div class="lp-time-sub">same description as incident 1</div>`
+                             : `<div class="lp-desc">${esc(x.description || '')}</div>`) + `</div>`;
+      }).join('');
+    }
+    if (!finished) {
+      if (!d.clean_description && !(d.issue_times || []).length) {
+        return '<div class="lp-empty">Prepared once the IPS thread has been read.</div>';
+      }
+      return `<div class="lp-sent pending"><div class="lp-cap">Prepared — sent when the AI analysis starts</div>` +
+        `<div class="lp-time">${esc((d.issue_times || [])[0] || 'no issue time yet')}</div>` +
+        `<div class="lp-desc">${esc(d.clean_description || '')}</div></div>`;
+    }
+    const why = (LIVE_MODE_TEXT[d.mode] || [d.mode || 'stopped'])[0];
+    return `<div class="lp-empty">Not sent to the AI log analysis — ${esc(why)}` +
+      (d.error ? `<div class="lp-time-sub" style="margin-top: 4px;">${esc(d.error)}</div>` : '') + `</div>`;
+  }
+
+  const STEP_ICON = {thinking: '🧠', playbook: '📘', step: '💭', fetch: '🔍', tool: '🔧', prescan: '🔍',
+                     plan: '🧭', result: '📄', conclusion: '✅', warning: '⚠️', stopped: '⏹', time: '🕒',
+                     error: '✕', usage: '∑', agent: '·'};
+
+  function liveResultHtml(r) {
+    if (!r) return '';
+    const conf = r.confidence;
+    const confCls = conf == null ? '' : conf >= 80 ? 'good' : conf >= 50 ? 'warn' : 'bad';
+    let html = `<div class="lp-res">`;
+    if (r.result_type === 'report' || r.result_type === 'partial_report') {
+      html += `<div class="lp-chips" style="margin: 0 0 6px;">` +
+        (conf != null ? `<span class="lp-chip ${confCls}">confidence ${esc(conf)}/100</span>` : '') +
+        (r.result_type === 'partial_report' ? `<span class="lp-chip warn">partial report</span>` : '') +
+        (r.involved_skills || []).map(k => `<span class="lp-chip">${esc(k)}</span>`).join('') + `</div>` +
+        `<div class="rc">${esc(r.root_cause_summary || '(no root-cause summary)')}</div>` +
+        liveTraceHtml(r.trace || []);
+    } else if (r.result_type === 'error') {
+      html += `<div style="color: var(--bad);">AI analysis failed: ${esc(r.error || 'unknown error')}</div>`;
+    } else {
+      html += `<div>${esc(r.text || 'no report produced' + (r.result_type ? ' (' + r.result_type + ')' : ''))}</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // The analysis trace after the run: which skills / steps the agent went
+  // through, in order. Tool invocations are the headline (the skill name is
+  // pulled out of "Invoking `Roaming`" / "Fetching filtered logs for `X`"),
+  // results and reasoning stay as sub-lines; bookkeeping lines are dropped.
+  function liveTraceHtml(trace) {
+    const shown = (trace || []).filter(st => !['usage', 'playbook', 'plan', 'step'].includes(st.kind));
+    if (!shown.length) return '';
+    const line = st => {
+      let text = st.text || '';
+      const m = /`([^`]+)`/.exec(text);
+      if ((st.kind === 'tool' || st.kind === 'fetch') && m) {
+        text = (st.kind === 'fetch' ? 'Filtered the log for ' : 'Ran skill ') + `<span class="skill">${esc(m[1])}</span>`;
+        return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${text}</span></div>`;
+      }
+      if (st.kind === 'result' && m) text = text.replace(/^Result\s*\(`[^`]+`\):\s*/, '');
+      return `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(text)}</span></div>`;
+    };
+    const tools = shown.filter(st => st.kind === 'tool' || st.kind === 'fetch').length;
+    return `<details class="lp-trace" open><summary>Analysis steps — ${shown.length} step${shown.length === 1 ? '' : 's'}` +
+      (tools ? `, ${tools} skill call${tools === 1 ? '' : 's'}` : '') + `</summary>` +
+      `<div class="lp-agent-steps">${shown.map(line).join('')}</div></details>`;
+  }
+
+  // Inline live box under "AI log analysis": the agent's steps as they
+  // happen, then the result per incident.
+  function liveAgentHtml(d, status, caseNbr) {
+    const live = d.agent_live, results = d.agent_results || (d.incidents || []);
+    if (status === 'pending' || status === 'skipped') return '';
+    let html = `<div class="lp-live">`;
+    if (live && live.status === 'running') {
+      const n = (live.steps || []).length;
+      html += `<div class="lp-cap">Incident ${esc(live.index)}${live.total > 1 ? ' of ' + esc(live.total) : ''}` +
+        (live.incident ? ' · ' + esc(live.incident) : '') + ` · ${n} step${n === 1 ? '' : 's'} so far</div>` +
+        `<div class="lp-agent-steps" id="lp-agent-steps">` +
+        (live.steps || []).map(st => `<div class="lp-as ${esc(st.kind)}"><span class="k">${STEP_ICON[st.kind] || '·'}</span><span>${esc(st.text)}</span></div>`).join('') +
+        `</div>`;
+    }
+    results.forEach((r, i) => {
+      if (results.length > 1) html += `<div class="lp-cap" style="margin-top: 6px;">Incident ${i + 1} · ${esc(r.issue_time || 'no time')}</div>`;
+      html += liveResultHtml(r);
+    });
+    if (!results.length && !(live && live.status === 'running')) {
+      html += `<div class="lp-cap">${status === 'running' ? 'starting…' : 'no result'}</div>`;
+    }
+    if (d.log_path) {
+      html += `<div class="lp-actions" style="margin-top: 8px;"><button class="ghost lp-btn-sm" ` +
+        `onclick="event.stopPropagation(); openInAvatar(${JSON.stringify(caseNbr).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')})" ` +
+        `title="Opens Avatar's Log Chatbot on this decoded log, primed with the case and the issue time, to continue by hand">` +
+        `Open in Avatar analysis</button></div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Inline live box under "Knowledge base (Echo)".
+  function liveEchoHtml(d, status) {
+    if (status === 'pending' || status === 'skipped') return '';
+    const items = d.echo_live || d.echo_insights || [];
+    const summary = d.echo_live_summary || '';
+    if (!items.length && !summary) return status === 'running' ? `<div class="lp-live"><div class="lp-cap">looking for assert / yellow-bang evidence…</div></div>` : '';
+    let html = `<div class="lp-live">` + (summary ? `<div class="lp-cap">${esc(summary)}</div>` : '');
+    items.forEach(it => {
+      const head = it.kind === 'assert' ? 'Assert ' + esc(it.code || '') : it.kind === 'yellow_bang' ? 'Yellow bang' : 'Question';
+      html += `<div class="lp-echo-q">${head}${it.question && !it.kind ? ': ' + esc(it.question) : ''}</div>` +
+        (it.error ? `<div class="lp-echo-a" style="color: var(--warn);">Echo unavailable: ${esc(it.error)}</div>`
+         : it.answer ? `<div class="lp-echo-a">${esc(it.answer)}</div>`
+         : `<div class="lp-echo-a" style="color: #9fb3c8;">waiting for Echo…</div>`);
+    });
+    return html + `</div>`;
+  }
+
+  // ---- decision boxes: category + required logs, issue time, archive, capture ----
+
+  function fmtDelta(sec) {
+    if (sec == null) return '';
+    const a = Math.abs(sec), sign = sec < 0 ? '−' : '+';
+    if (a < 60) return sign + a + ' s';
+    if (a < 3600) return sign + Math.round(a / 60) + ' min';
+    return sign + Math.floor(a / 3600) + ' h ' + String(Math.round((a % 3600) / 60)).padStart(2, '0') + ' min';
+  }
+
+  // Under "Check the driver version vs the latest release": the candidates
+  // for the customer's driver in priority order, the latest release and the
+  // verdict the drafts act on.
+  function liveDriverHtml(d, status) {
+    const dd = d.driver_decision || {};
+    if (status === 'pending' || status === 'skipped' || !dd.result) return '';
+    if (dd.not_applicable) {
+      // A Bluetooth case: the latest-release table is the Wi-Fi driver's.
+      return `<div class="lp-live"><div class="lp-time-sub">not applied — ` +
+        esc(dd.summary || 'the latest-release check covers the Wi-Fi driver only') + `</div></div>`;
+    }
+    let html = `<div class="lp-live">`;
+    html += `<div class="lp-cap">Customer driver — candidates in priority order, the first known one wins</div>`;
+    (dd.candidates || []).forEach(c => {
+      const win = c.resolved && c.source === dd.winner_source;
+      html += `<div class="lp-cand ${win ? 'win' : ''}"><span>${win ? '➜' : '·'}</span>` +
+        `<span>${esc(c.resolved || '—')}</span><span class="src">${esc(c.label || c.source)}` +
+        (c.raw && c.raw !== c.resolved ? ': “' + esc(c.raw) + '”' : (c.raw ? '' : ': nothing')) + `</span></div>`;
+    });
+    const verdict = dd.result === 'ok' ? 'on the latest released branch — nothing to ask'
+      : dd.result === 'outdated' ? 'older branch — the draft asks for validation on ' + (dd.latest || '?')
+      : dd.result === 'unknown' ? 'unknown — the draft asks for the version and for validation on ' + (dd.latest || '?')
+      : 'no latest release known yet — check skipped (Settings → latest driver)';
+    html += `<div class="lp-time-sub" style="margin-top: 6px;">latest release: <b style="color:#fff;">${esc(dd.latest || '—')}</b>` +
+      (dd.latest_source ? ' (' + esc(dd.latest_source === 'manual' ? 'Settings override' : 'PAE Wi-Fi Dashboard') + ')' : '') + `</div>`;
+    html += `<div class="lp-time-sub">verdict: <b style="color:#fff;">${esc(dd.result)}</b> — ${esc(verdict)}</div>`;
+    if (dd.newer_mentioned) html += `<div class="lp-time-sub">the thread also mentions ${esc(dd.newer_mentioned)} — check whether a newer driver was already validated</div>`;
+    html += d.last_good_version
+      ? `<div class="lp-time-sub">last known good (regression test): <b style="color:#fff;">${esc(d.last_good_version)}</b> — the checklist's regression item is ticked</div>`
+      : `<div class="lp-time-sub">last known good (regression test): none stated — the reply asks for the last driver version on which the issue did NOT reproduce</div>`;
+    return html + `</div>`;
+  }
+
+  function liveCategoryHtml(d, status) {
+    const dd = d.domain_decision || {}, cd = d.checklist_decision || {};
+    if (status === 'pending' || status === 'skipped' || !dd.winner) return '';
+    let html = `<div class="lp-live">`;
+    html += `<div class="lp-cap">Candidates, in priority order — the first specific one wins</div>`;
+    (dd.candidates || []).forEach(c => {
+      const win = c.source === dd.winner_source;
+      html += `<div class="lp-cand ${win ? 'win' : ''}"><span>${win ? '➜' : '·'}</span>` +
+        `<span>${esc(c.resolved || '—')}</span><span class="src">${esc(c.label || c.source)}` +
+        (c.raw && c.raw !== c.resolved ? ': “' + esc(c.raw) + '”' : (c.raw ? '' : ': nothing')) +
+        (c.resolved && !c.specific ? ' (generic)' : '') + `</span></div>`;
+    });
+    if (dd.provisional && dd.provisional !== dd.winner) html += `<div class="lp-time-sub">before the thread was read: ${esc(dd.provisional)}</div>`;
+    const sub = cd.subcategory || dd.subcategory_raw;
+    if (sub || cd.subcategory_rule === 'ask') {
+      const rule = cd.subcategory_rule || '';
+      const how = rule === 'explicit' ? 'named in the case' : rule.startsWith('keyword:') ? 'keyword “' + rule.slice(8) + '” in the case text'
+                : rule === 'named_like_domain' ? 'default for the domain' : rule === 'ask' ? 'not identified — the reply asks which one' : rule === 'first' ? 'first sub-category' : '';
+      html += `<div class="lp-time-sub">sub-category: <b style="color:#fff;">${esc(sub || '?')}</b>${how ? ' — ' + esc(how) : ''}</div>`;
+    }
+    const reqs = cd.required_logs || (dd.required_logs || []).map(i => ({item: i, provided: null}));
+    if (reqs.length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Required logs for ${esc(dd.winner)}${cd.required_logs ? '' : ' (checked once the run completes)'}</div>`;
+      reqs.forEach(r => {
+        const st = r.provided === null ? '' : r.provided ? 'ok' : 'miss';
+        const mark = r.provided === null ? '·' : r.provided ? '✓' : '✗';
+        html += `<div class="lp-req ${st}"><span class="m">${mark}</span><span>${esc(r.item)}` +
+          (r.provided ? `<div class="how">${esc(r.value || '')}${r.source ? ' (' + esc(r.source) + ')' : ''}</div>` : (r.provided === false ? `<div class="how">not provided</div>` : '')) +
+          `</span></div>`;
+      });
+    } else if (cd.required_logs) {
+      html += `<div class="lp-time-sub">this category lists no required logs</div>`;
+    }
+    if (cd.required_info && cd.required_info.length) {
+      const miss = cd.required_info.filter(r => !r.provided).length;
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">required info: ${cd.required_info.length - miss}/${cd.required_info.length} provided</div>`;
+    }
+    if (cd.asks) {
+      html += cd.asks.length
+        ? `<div class="lp-ask">Will ask the customer for:<ul style="margin: 4px 0 0; padding-left: 18px;">${cd.asks.map(a => `<li>${esc(a)}</li>`).join('')}</ul></div>`
+        : `<div class="lp-time-sub" style="margin-top: 6px;">nothing to ask — all required logs and information are present</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  // Under "Read comment screenshots": what the vision model read from each
+  // image embedded in the IPS comments (this text is all the later steps see).
+  function liveImagesHtml(d, status) {
+    const imgs = d.comment_images || [];
+    if (status === 'pending' || status === 'skipped' || !imgs.length) return '';
+    const n = imgs.reduce((a, i) => a + (i.descriptions || []).length, 0);
+    let html = `<div class="lp-live"><div class="lp-cap">${n} image${n === 1 ? '' : 's'} read from ${imgs.length} comment${imgs.length === 1 ? '' : 's'} — the descriptions below are what the later steps see</div>`;
+    imgs.forEach(i => {
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">comment of <span class="mono" style="color:#fff;">${esc(i.date || '?')}</span> by ${esc(i.author || 'unknown')}` +
+        (i.count && i.count > (i.descriptions || []).length ? ` · ${i.count - i.descriptions.length} of ${i.count} image(s) not read` : '') + `</div>`;
+      (i.descriptions || []).forEach((desc, k) => {
+        html += `<div class="lp-as"><span class="k">🖼</span><span><b style="color:#fff;">Image ${k + 1}:</b> ${esc(desc)}</span></div>`;
+      });
+    });
+    return html + `</div>`;
+  }
+
+  function liveTimesFoundHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(td.found || td.ignored_vague || td.reasoning)) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Issue times in the case</div>`;
+    if ((td.found || []).length) {
+      td.found.forEach(f => {
+        html += `<div class="lp-cand ${f.used ? 'win' : ''}"><span>${f.used ? '➜' : '·'}</span><span class="mono">${esc(f.time)}</span>` +
+          `<span class="src">${f.source ? 'from ' + esc(f.source) : ''}${f.used ? '' : ' (beyond the per-case limit)'}</span></div>`;
+      });
+    } else {
+      html += `<div style="color: var(--warn);">no minute-precise time stated anywhere</div>`;
+    }
+    if ((td.ignored_vague || []).length) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">ignored as too vague: ${td.ignored_vague.map(v => `<span class="lp-vague">${esc(v)}</span>`).join(', ')}</div>`;
+    }
+    if (td.rule) html += `<div class="lp-time-sub">rule: ${esc(td.rule)}</div>`;
+    if (td.reasoning) html += `<details style="margin-top: 6px;"><summary class="lp-time-sub" style="cursor:pointer;">how the thread was read</summary><div class="lp-desc" style="max-height: 160px;">${esc(td.reasoning)}</div></details>`;
+    return html + `</div>`;
+  }
+
+  function liveTimePlacementHtml(d, status) {
+    const td = d.time_decision || {};
+    if (status === 'pending' || status === 'skipped') return '';
+    const gaps = (td.gaps || []).filter(g => g.action !== 'reader' || true);
+    let html = `<div class="lp-live">`;
+    if (gaps.length) {
+      html += `<div class="lp-cap">Case-information check</div>`;
+      gaps.forEach(g => {
+        const verb = g.action === 'retracted' ? 'no longer missing' : g.action === 'backstop' ? 'missing (pipeline check)' : 'missing (reader)';
+        html += `<div class="lp-time-sub" style="color: ${g.action === 'retracted' ? 'var(--good)' : 'var(--warn)'};">${esc(g.item)}: ${verb}${g.reason ? ' — ' + esc(g.reason) : ''}</div>`;
+      });
+    }
+    if (td.gate) {
+      const gateText = {ok: 'issue time usable — the log pipeline runs', request_info: 'no usable issue time — the customer is asked for it, no log is downloaded',
+        bsod_no_time_needed: 'BSOD with a crash dump — no issue time needed', bsod_no_dump: 'BSOD without a dump — the customer is asked for the dump'}[td.gate] || td.gate;
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">gate: ${esc(gateText)}</div>`;
+    }
+    if (td.organizer_used) html += `<div class="lp-time-sub">description cleaned by the organizer (the reader gave none)</div>`;
+    const cov = td.coverage || {};
+    if ((td.placements || []).length) {
+      html += `<div class="lp-cap" style="margin-top: 8px;">Placing the reported time in the log's clock` +
+        (cov.log_first ? ` — log ${esc(cov.log_file || '')} covers ${esc(cov.log_first)} – ${esc(cov.log_last)} (±${esc(cov.grace_min)} min)` : '') + `</div>`;
+      td.placements.forEach(pl => {
+        html += `<div class="lp-time-sub" style="margin-top: 4px;">reported <span class="mono" style="color:#fff;">${esc(pl.time)}</span>${pl.note ? ' — ' + esc(pl.note) : ''}</div>`;
+        if ((pl.candidates || []).length) {
+          html += `<table class="lp-tbl"><tr><th>anchor</th><th>customer clock</th><th>log clock</th><th>covered</th></tr>` +
+            pl.candidates.map(c => `<tr class="${c.inside ? 'win' : ''}"><td class="t">${esc(LIVE_ANCHOR_TEXT[c.anchor] || c.anchor)}</td><td>${esc(c.customer)}</td><td>${esc(c.log)}</td>` +
+              `<td class="t">${c.inside ? '✓ inside' : 'outside by ' + esc(fmtDelta(c.outside_s))}</td></tr>`).join('') + `</table>`;
+        }
+      });
+      if (cov.covered === false) html += `<div class="lp-ask">No placement falls inside the log — ${(d.time_mismatch || {}).yb_assert_override ? 'continued on the assert evidence (yellow bang)' : 'other captures are tried, else the customer is asked for a log taken at the issue time'}</div>`;
+    } else if (d.issue_times && d.issue_times.length && status === 'done' && !cov.log_first) {
+      html += `<div class="lp-time-sub" style="margin-top: 4px;">anchoring on ${esc(d.issue_times.join(' · '))} — placement in the log's clock happens after the decode</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  function liveArchiveHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.archives || []).length && !pd.chosen) return '';
+    let html = `<div class="lp-live"><div class="lp-cap">Uploads in the case</div><table class="lp-tbl"><tr><th></th><th>file</th><th>uploaded</th><th>note</th></tr>`;
+    (pd.archives || []).forEach(a => {
+      const chosen = a.name === pd.chosen;
+      html += `<tr class="${chosen ? 'win' : ''}"><td class="t">${chosen ? '➜' : (a.is_archive ? '·' : '')}</td><td>${esc(a.name)}</td><td>${esc(a.uploaded)}</td>` +
+        `<td class="t">${a.is_archive ? '' : 'not an archive'}${a.subtitle && a.subtitle !== a.name ? esc(a.subtitle) : ''}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.reader_pick) {
+      const m = {exact: 'matched exactly', case_insensitive: 'matched ignoring case', substring: 'matched by name fragment', not_found: 'not found among the uploads', non_archive: 'is not an archive'}[pd.match] || '';
+      html += `<div class="lp-time-sub" style="margin-top: 6px;">reader nominated <span class="mono" style="color:#fff;">${esc(pd.reader_pick)}</span>${m ? ' — ' + m : ''}` +
+        (pd.reader_reason ? `<div>why: ${esc(pd.reader_reason)}</div>` : '') + `</div>`;
+    }
+    if (pd.chosen) {
+      const rule = {reader: 'the reader\'s nomination', newest_upload: 'fallback: the newest upload', only_archive: 'the only archive in the case'}[pd.chosen_rule] || pd.chosen_rule || '';
+      html += `<div class="lp-time-sub">chosen: <span class="mono" style="color:#fff;">${esc(pd.chosen)}</span>${rule ? ' — ' + rule : ''}${pd.fallback_used ? ' (the nomination could not be used)' : ''}</div>`;
+    }
+    const bits = [];
+    if (pd.prefetch && pd.prefetch.name) bits.push('prefetched ' + pd.prefetch.name + (pd.prefetch.used ? ' and used' : ', not used'));
+    if (pd.download_attempts > 1) bits.push(pd.download_attempts + ' download attempts');
+    const c = pd.contents || {};
+    const parts = [['wifi_wpp', 'WPP driver log'], ['ddd', 'DDD'], ['event_logs', 'event log'], ['bt', 'BT'], ['fw', 'FW']].filter(([k]) => c[k]).map(([k, l]) => c[k] + ' ' + l);
+    if (parts.length) bits.push('extracted: ' + parts.join(', '));
+    if (bits.length) html += `<div class="lp-time-sub">${esc(bits.join(' · '))}</div>`;
+    return html + `</div>`;
+  }
+
+  function liveCaptureHtml(d, status) {
+    const pd = d.pick_decision || {};
+    if (status === 'pending' || status === 'skipped' || !(pd.captures || []).length) return '';
+    const ruleText = {closest_at_or_after_issue: 'the capture whose folder stamp is closest at/after the issue time' + (pd.issue_time_used ? ' ' + pd.issue_time_used : ''),
+      yb_earliest: 'yellow-bang / assert case: the earliest capture whose folder name carries a nonzero error code',
+      newest_ddd: 'newest DDD capture' + (pd.issue_time_used ? '' : ' — the issue time could not be used'),
+      newest_wifi: 'newest WRT capture' + (pd.issue_time_used ? ' (no capture at/after the issue time)' : ' — the issue time could not be used'),
+      bt_newest: 'newest BT capture', none: 'no capture found'}[pd.etl_rule] || '';
+    let html = `<div class="lp-live"><div class="lp-cap">${pd.captures.length} capture folder${pd.captures.length === 1 ? '' : 's'} in the archive${ruleText ? ' — rule: ' + esc(ruleText) : ''}</div>`;
+    html += `<table class="lp-tbl"><tr><th></th><th>capture folder</th><th>stamp (DUT clock)</th><th>vs issue</th><th>result</th></tr>`;
+    pd.captures.forEach(c => {
+      const res = c.role === 'chosen' ? (c.covered === true ? 'decoded, covers the issue time' : c.covered === false ? 'decoded, does NOT cover the issue time' : c.decode === 'failed' ? 'decode failed' : 'chosen')
+                : c.role === 'alternate' ? (c.decode === 'failed' ? 'tried, decode failed' : c.covered === true ? 'tried, covers' : c.covered === false ? 'tried, no coverage' : 'tried') : '';
+      html += `<tr class="${c.role === 'chosen' ? 'win' : ''}"><td class="t">${c.role === 'chosen' ? '➜' : c.role === 'alternate' ? '↻' : ''}</td>` +
+        `<td>${esc(c.folder)}${c.yb_code ? ' <span style="color:var(--warn);">' + esc(c.yb_code) + '</span>' : ''}</td><td>${esc(c.stamp || '?')}</td>` +
+        `<td>${c.delta_s == null ? '' : esc(fmtDelta(c.delta_s))}</td><td class="t">${res}</td></tr>`;
+    });
+    html += `</table>`;
+    if (pd.alternates_tried) html += `<div class="lp-time-sub">${pd.alternates_tried} other capture${pd.alternates_tried === 1 ? '' : 's'} tried after the first did not cover the issue time</div>`;
+    return html + `</div>`;
+  }
+
+  // Echo next-step suggestions: asked right after the IPS thread is read,
+  // answered in the background — rendered as its own window so it can be
+  // read and referenced apart from the log analysis.
+  // Minimal, safe markdown for Echo's answers: escape first, then headings,
+  // bold, inline code, links (https only) and bullet lists. Nothing else.
+  function mdLite(text) {
+    const lines = esc(String(text || '')).split('\n');
+    let html = '', inList = false;
+    const inline = t => t
+      .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+      .replace(/`([^`]+)`/g, '<code style="font-family: var(--mono); font-size: 12.5px;">$1</code>')
+      .replace(/\[([^\]]+)\]\((https:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener" class="case-link">$1</a>');
+    for (const raw of lines) {
+      const line = raw.replace(/\s+$/, '');
+      const h = /^(#{1,4})\s+(.*)$/.exec(line);
+      const li = /^\s*[-*]\s+(.*)$/.exec(line);
+      if (li) {
+        if (!inList) { html += '<ul style="margin: 4px 0; padding-left: 20px;">'; inList = true; }
+        html += '<li>' + inline(li[1]) + '</li>';
+        continue;
+      }
+      if (inList) { html += '</ul>'; inList = false; }
+      if (h) { html += '<div style="font-weight: 650; color: #fff; margin-top: 8px;">' + inline(h[2]) + '</div>'; continue; }
+      if (!line.trim()) { html += '<div style="height: 6px;"></div>'; continue; }
+      html += '<div>' + inline(line) + '</div>';
+    }
+    if (inList) html += '</ul>';
+    return html;
+  }
+
+  function liveAdviceHtml(d) {
+    const a = d.echo_advice || {};
+    if (!a.status) return '';
+    let body = '';
+    if (a.status === 'asking') {
+      body = `<div class="lp-time-sub"><span class="lp-spin" style="display:inline-block; vertical-align: middle; margin-right: 6px;"></span>asking the Echo knowledge base what to request from the customer next and the recommended next steps…` +
+        (a.note ? `<div style="margin-top: 4px; color: var(--warn);">${esc(a.note)}</div>` : '') + `</div>`;
+    } else if (a.status === 'answered') {
+      body = `<div class="lp-advice-a" style="white-space: normal;">${mdLite(a.answer || '')}</div>` +
+        `<div class="lp-time-sub" style="margin-top: 4px;">answered in ${esc(a.elapsed_s != null ? a.elapsed_s + ' s' : '?')} · knowledge-base guidance from the case summary, not from the logs — verify before acting</div>`;
+    } else if (a.status === 'empty') {
+      body = `<div class="lp-time-sub">Echo returned no suggestions for this case.</div>`;
+    } else {
+      body = `<div class="lp-time-sub" style="color: var(--warn);">Echo ${esc(a.status)}${a.error ? ': ' + esc(a.error) : ''}</div>`;
+    }
+    const q = a.question ? `<details><summary>the question sent to Echo</summary><div class="q">${esc(a.question)}</div></details>` : '';
+    return `<div class="lp-sec"><div class="lp-h">Next-step suggestions (Echo knowledge base)</div><div class="lp-advice">` +
+      `<div class="lp-cap">What to ask the customer next · recommended debug steps · known similar issues</div>` +
+      `<div style="color: var(--warn); font-size: 12.5px; margin-bottom: 6px;">⚠ May contain internal knowledge — check before sharing.</div>` +
+      body + q + `</div></div>`;
+  }
+
+  function liveCaseStatus(d, ev) {
+    if (!d) return '';
+    if (!d.finished) return 'running';
+    const m = LIVE_MODE_TEXT[d.mode];
+    return m ? (m[1] === 'good' ? 'done' : m[1] || '') : '';
+  }
+
+  // A draft opened from the review queue replays its saved run in the live
+  // panel until "Back to live" (or a new run) is pressed.
+  let liveHistory = null;
+  function showLiveHistory(d) {
+    const live = d.live;
+    if (!live || !live.case_details) return;
+    const cd = live.case_details[d.case_nbr] || Object.values(live.case_details)[0] || {};
+    liveHistory = {status: 'done', mode: live.run_mode || 'saved run', started_at: cd.started_at || live.run_started_at,
+                   finished_at: cd.updated_at || null, events: live.events || [],
+                   case_details: live.case_details, cases: [{case_nbr: d.case_nbr, subject: d.subject}],
+                   __history: {draft_id: d.draft_id, saved_at: live.saved_at || '', created_at: d.created_at || ''}};
+    stageCasePinned = d.case_nbr;
+    renderLivePanel(liveHistory);
+  }
+  function backToLive() { liveHistory = null; stageCasePinned = null; refreshStatus(); }
+
+  function renderLivePanel(s) {
+    const panel = document.getElementById('live-panel');
+    if (!panel) return;
+    if (liveHistory && s !== liveHistory) s = liveHistory;   // history stays until "Back to live"
+    const details = s.case_details || {};
+    const {byCase} = parseStageEvents(s.events || []);
+    const order = Object.keys(details).sort((a, b) => (details[a].started_at || 0) - (details[b].started_at || 0));
+    (s.cases || []).forEach(c => { if (c.case_nbr && !order.includes(c.case_nbr)) order.push(c.case_nbr); });
+    const hist = s.__history;
+    const head = `<div class="lp-top"><span class="lp-title">${hist ? 'Analysis history' : 'Live analysis'}</span>` +
+      (hist ? `<span class="pill" title="${esc(hist.draft_id)}">saved run · ${esc((hist.created_at || hist.saved_at || '').slice(0, 16).replace('T', ' '))}</span>` +
+              `<button class="ghost lp-btn-sm" onclick="backToLive()">Back to live</button>`
+            : `<span class="pill dot ${s.status === 'running' ? 'warn live' : s.status === 'done' ? 'good'
+        : s.status === 'error' ? 'bad' : ''}">${esc(s.status || 'idle')}</span>`) + `</div>`;
+    if (!order.length) {
+      panel.innerHTML = head + `<div class="lp-empty" style="margin-top: 10px;">` +
+        (s.status === 'running' ? 'Looking for cases to analyze…'
+                                : 'No run yet — start one in Step 1 and its progress shows here.') + `</div>`;
+      return;
+    }
+    const runningCase = [...order].reverse().find(c => details[c] && !details[c].finished);
+    const sel = (stageCasePinned && order.includes(stageCasePinned)) ? stageCasePinned
+              : (runningCase || [...order].reverse().find(c => details[c]) || order[0]);
+    const d = details[sel] || {case_nbr: sel};
+    const ev = byCase[sel] || {};
+    const finished = !!d.finished || (s.status !== 'running' && !!details[sel]);
+    const started = s.started_at ? (s.finished_at && s.status !== 'running' ? s.finished_at : Date.now() / 1000) - s.started_at : null;
+    const meta = [s.mode || '', String(s.mode || '').startsWith('email') ? (s.source || '') : '',
+                  s.owner ? 'owner ' + s.owner : '',
+                  'case ' + (order.indexOf(sel) + 1) + ' of ' + order.length,
+                  started != null ? 'elapsed ' + liveFmtSec(started) : ''].filter(Boolean).join(' · ');
+
+    // case card
+    const chips = [];
+    if (d.issue_domain) chips.push(['domain ' + d.issue_domain
+      + (d.issue_subcategory && d.issue_subcategory !== d.issue_domain ? ' · ' + d.issue_subcategory : ''), '']);
+    if (d.wifi_or_bt) chips.push([d.wifi_or_bt === 'bt' ? 'Bluetooth' : 'Wi-Fi', '']);
+    if (d.source === 'email') chips.push(['email thread' + (d.email && d.email.thread_size ? ' · ' + d.email.thread_size + ' mail(s)' : ''), 'warn']);
+    if (d.bsod_case) chips.push(['BSOD', 'warn']);
+    if (d.yb_case) chips.push(['yellow bang / assert', 'warn']);
+    if (d.action_owner) chips.push(['next: ' + (ACTION_OWNER_TEXT[d.action_owner] || d.action_owner),
+                                     d.action_owner === 'intel' ? 'warn' : '']);
+    const caseHtml = `<div class="lp-box">` +
+      `<div>${caseLink(d.case_nbr || sel, d.case_id)}${d.current_stage && !finished
+        ? ' <span class="lp-time-sub" style="display:inline;">· now: ' + esc(d.current_stage) + '</span>' : ''}</div>` +
+      `<div class="lp-subj">${esc(d.subject || '—')}</div>` +
+      (chips.length ? `<div class="lp-chips">${chips.map(([t, c]) => `<span class="lp-chip ${c}">${esc(t)}</span>`).join('')}</div>` : '') +
+      (d.next_action ? `<div class="lp-next">${esc(d.next_action)}</div>` : '') + `</div>`;
+
+    // timeline
+    const steps = liveSteps(d, ev, finished);
+    const icon = st => st === 'done' ? '✓' : st === 'failed' ? '✕' : st === 'running' ? '<span class="lp-spin"></span>'
+                     : st === 'skipped' ? '–' : '';
+    const stepsHtml = `<ol class="lp-steps">` + steps.map(x =>
+      `<li class="lp-step ${x.status}"><span class="lp-ico">${icon(x.status)}</span>` +
+      `<span class="lp-lab">${esc(x.label)}</span><span class="lp-dur">${esc(x.dur)}</span>` +
+      (x.detail && x.status !== 'pending' ? `<span class="lp-det">${esc(x.detail)}</span>` : '') +
+      (x.key === 'category' ? liveCategoryHtml(d, x.status) : '') +
+      (x.key === 'driver_check' ? liveDriverHtml(d, x.status) : '') +
+      (x.key === 'read_images' ? liveImagesHtml(d, x.status) : '') +
+      (x.key === 'read_case_history' ? liveTimesFoundHtml(d, x.status) : '') +
+      (x.key === 'issue_time' ? liveTimePlacementHtml(d, x.status) : '') +
+      (x.key === 'pick_zip' ? liveArchiveHtml(d, x.status) : '') +
+      (x.key === 'pick_etl' ? liveCaptureHtml(d, x.status) : '') +
+      (x.key === 'agent_analysis' ? liveAgentHtml(d, x.status, sel) : '') +
+      (x.key === 'echo_kb' ? liveEchoHtml(d, x.status) : '') +
+      `</li>`).join('') + `</ol>`;
+
+    // outcome
+    let outcomeHtml = '';
+    if (finished && details[sel]) {
+      const m = LIVE_MODE_TEXT[d.mode] || [d.mode || 'finished', ''];
+      outcomeHtml = `<div class="lp-sec"><div class="lp-h">Outcome</div><div class="lp-box">` +
+        `<div class="lp-chips" style="margin-top: 0;"><span class="lp-chip ${m[1]}">${esc(m[0])}</span>` +
+        (d.confidence != null ? `<span class="lp-chip ${d.confidence >= 80 ? 'good' : d.confidence >= 50 ? 'warn' : 'bad'}">confidence ${esc(d.confidence)}/100</span>` : '') +
+        `</div>` + (d.error && d.mode !== 'full' ? `<div class="lp-next">${esc(d.error)}</div>` : '') +
+        (d.email ? `<div class="lp-next">Reply goes to Outlook as a draft · to ${esc(d.email.sender_name || d.email.sender_email || '?')} · "${esc(d.email.subject || '')}"</div>` : '') +
+        `<div class="lp-actions">` +
+        (d.draft_id ? `<button class="primary" onclick="openDraft(${JSON.stringify(d.draft_id).replace(/"/g, '&quot;')})">Open draft</button>` : '') +
+        (d.fr_draft_id ? `<button class="ghost" onclick="openDraft(${JSON.stringify(d.fr_draft_id).replace(/"/g, '&quot;')})">Open first-response</button>` : '') +
+        ((d.case_nbr || sel) ? `<button class="ghost" onclick="openInAvatar(${JSON.stringify(d.case_nbr || sel).replace(/"/g, '&quot;')}, ${JSON.stringify(d.draft_id || '').replace(/"/g, '&quot;')}, this)" title="${esc(avatarHandoffTitle(!!d.log_path))}"${d.log_path ? '' : ' disabled'}>Open in Avatar analysis</button>` : '') +
+        `</div></div></div>`;
+    }
+
+    // cases of the round
+    const casesHtml = order.length > 1 ? `<div class="lp-sec"><div class="lp-h">Cases this round</div><ul class="lp-cases">` +
+      order.map(c => {
+        const cd = details[c];
+        const ref = (s.cases || []).find(r => r.case_nbr === c) || {};
+        return `<li class="${c === sel ? 'sel' : ''}" onclick="pinStageCase(${JSON.stringify(c).replace(/"/g, '&quot;')})">` +
+          `<span class="lp-dot ${liveCaseStatus(cd)}"></span><span class="nbr">${esc(c)}</span>` +
+          `<span class="sub">${esc((cd && cd.subject) || ref.subject || '')}</span></li>`;
+      }).join('') + `</ul></div>` : '';
+
+    const panelScroll = panel.scrollTop;
+    panel.innerHTML = head + `<div class="lp-meta">${esc(meta)}</div>` +
+      `<div class="lp-sec"><div class="lp-h">Case</div>${caseHtml}</div>` +
+      liveAdviceHtml(d) +
+      `<div class="lp-sec"><div class="lp-h">Sent for analysis</div>${liveSentHtml(d, finished)}</div>` +
+      `<div class="lp-sec"><div class="lp-h">Pipeline</div>${stepsHtml}</div>` +
+      outcomeHtml + casesHtml;
+    panel.scrollTop = panelScroll;
+    const agentSteps = document.getElementById('lp-agent-steps');
+    if (agentSteps) agentSteps.scrollTop = agentSteps.scrollHeight;
+  }
+
+  // Narrow windows: the panel moves under Step 1 as a full-width card.
+  const liveMq = window.matchMedia('(max-width: 1480px)');
+  function placeLivePanel() {
+    const panel = document.getElementById('live-panel');
+    const step1 = document.getElementById('step1-panel');
+    const grid = document.querySelector('.page-grid');
+    if (!panel || !step1 || !grid) return;
+    if (liveMq.matches) { if (step1.nextElementSibling !== panel) step1.after(panel); }
+    else if (panel.parentElement !== grid) grid.appendChild(panel);
+    panel.classList.toggle('inline', liveMq.matches);
+  }
+  if (liveMq.addEventListener) liveMq.addEventListener('change', placeLivePanel);
+  else liveMq.addListener(placeLivePanel);
+  placeLivePanel();
+
+  // Step 3: what the AI analysis received for this draft's case.
+  function renderDraftSent(analysis) {
+    const el = document.getElementById('draft-sent');
+    const sent = (analysis.incidents || []).map(i => i.sent_for_analysis).filter(x => x && Object.keys(x).length);
+    if (!sent.length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<details><summary>Sent for AI analysis — ` +
+      sent.map(x => esc(x.issue_time_customer || 'no issue time') +
+        (x.issue_time_log && x.issue_time_log !== x.issue_time_customer ? ' (= ' + esc(x.issue_time_log) + ' in the log)' : '')).join(' · ') +
+      `</summary>` + sent.map(x =>
+        `<pre style="white-space: pre-wrap; margin-top: 6px;">${esc('log: ' + (x.log_file || '—')
+          + ((x.log_range || []).filter(Boolean).length ? '  (' + x.log_range.join(' – ') + ')' : '')
+          + '\n\n' + (x.description || ''))}</pre>`).join('') + `</details>`;
+  }
+
+  // ---- IPS sign-in of this PC: whose cases the queue shows, whose name posts carry
+  let ipsLogin = {status: 'signed_out', identity: null, error: ''};
+
+  function applyEveryoneUi() {
+    const everyone = document.getElementById('show-everyone').checked;
+    document.getElementById('owner-filter-wrap').style.display = everyone ? '' : 'none';
+  }
+
+  function renderLogin() {
+    const badge = document.getElementById('login-badge');
+    const btn = document.getElementById('login-btn');
+    const id = ipsLogin.identity;
+    if (ipsLogin.status === 'signed_in' && id) {
+      badge.textContent = 'IPS: ' + id.name;
+      badge.className = 'pill good';
+      badge.title = 'Signed in to IPS as ' + id.name + (id.email ? ' <' + id.email + '>' : '')
+        + ' — the queue shows this user\'s cases and Approve posts under this name';
+      btn.style.display = 'none';
+    } else if (ipsLogin.status === 'signing_in') {
+      badge.textContent = ipsLogin.interactive ? 'IPS: sign in in the Chrome window…' : 'IPS: signing in…';
+      badge.className = 'pill';
+      badge.title = '';
+      btn.style.display = 'none';
+    } else {
+      badge.textContent = 'IPS: not signed in';
+      badge.className = 'pill warn';
+      badge.title = ipsLogin.error || 'no IPS session on this PC';
+      btn.style.display = '';
+    }
+  }
+
+  async function pollLogin() {
+    const r = await fetch('/handsfree/login');
+    const j = await r.json();
+    const before = ipsLogin.status;
+    ipsLogin = j;
+    renderLogin();
+    if (j.status === 'signing_in') { setTimeout(pollLogin, 2000); return; }
+    if (j.status === 'signed_in' && j.identity) {
+      // "Check now" defaults to the signed-in reviewer's own cases.
+      const ownerBox = document.getElementById('owner-name');
+      if (ownerBox && !ownerBox.value.trim()) ownerBox.value = j.identity.name;
+    }
+    if (before !== j.status) loadQueue();
+  }
+
+  async function signIn(interactive) {
+    const r = await fetch('/handsfree/login', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({interactive: !!interactive}),
+    });
+    ipsLogin = await r.json();
+    renderLogin();
+    loadQueue();
+    setTimeout(pollLogin, 1500);
+  }
+
   loadConfig();
-  loadQueue();
+  applyEveryoneUi();
+  signIn(false);
   refreshStatus();
   loadAuto();
+  watchRequests(null);      // requests already waiting on / running at the server
 </script>
 </body>
 </html>

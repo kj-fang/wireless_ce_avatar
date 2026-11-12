@@ -50,6 +50,11 @@ def _connect(passwd, use_privatelink):
         # connector's unbounded query-request retry loop).
         login_timeout=30,    # fresh connection attempt: fail after 30s
         network_timeout=180, # established-connection requests: fail after ~3 min
+        # Heartbeat the session while the process is alive: the Handsfree
+        # CLI keeps this connection cached between rounds hours apart, and
+        # Snowflake ends an idle session after 4 h (error 390114 on the
+        # next query). snowflake_query still reconnects once if it expires.
+        client_session_keep_alive=True,
     )
     if use_privatelink:
         kwargs["host"] = _PRIVATELINK_HOST
@@ -95,8 +100,37 @@ def _get_connection(passwd):
         return _snowflake_conn
 
 
-def snowflake_query(passwd, sql_query, schema, fetch_mode="all"):
-    conn = _get_connection(passwd)
+def _drop_connection(conn):
+    """Forget the cached connection (if it is still the one given) so the
+    next _get_connection opens a fresh session."""
+    global _snowflake_conn, _snowflake_conn_mode
+    with _snowflake_lock:
+        if _snowflake_conn is not None and _snowflake_conn is conn:
+            _snowflake_conn = None
+            _snowflake_conn_mode = None
+    try:
+        conn.close()
+    except Exception:
+        pass
+
+
+# Snowflake answers a query on a session it has ended with one of these;
+# the Python connection object is NOT closed by that, so is_closed() in
+# _get_connection cannot tell, and only a new login helps.
+_SESSION_EXPIRED_ERRNOS = {390111, 390112, 390114, 390115, 390195}
+_SESSION_EXPIRED_WORDS = ("token has expired", "token is invalid",
+                          "session no longer exists", "session does not exist",
+                          "authenticate again")
+
+
+def _session_expired(exc) -> bool:
+    if getattr(exc, "errno", None) in _SESSION_EXPIRED_ERRNOS:
+        return True
+    msg = str(getattr(exc, "msg", None) or exc).lower()
+    return any(w in msg for w in _SESSION_EXPIRED_WORDS)
+
+
+def _run_query(conn, sql_query, fetch_mode):
     cs = conn.cursor()
     try:
         t_exec = time.time()
@@ -112,3 +146,21 @@ def snowflake_query(passwd, sql_query, schema, fetch_mode="all"):
         return result
     finally:
         cs.close()
+
+
+def snowflake_query(passwd, sql_query, schema, fetch_mode="all"):
+    """Run a query on the cached connection. When Snowflake reports the
+    session as expired (a long-lived process reusing a connection hours
+    later), the cached connection is dropped and the query is run ONCE more
+    on a fresh login; any other error propagates unchanged."""
+    conn = _get_connection(passwd)
+    try:
+        return _run_query(conn, sql_query, fetch_mode)
+    except Exception as e:
+        if not _session_expired(e):
+            raise
+        print(f"  [Snowflake] session expired ({type(e).__name__}: {e}); "
+              "reconnecting and retrying the query once")
+        _drop_connection(conn)
+        conn = _get_connection(passwd)
+        return _run_query(conn, sql_query, fetch_mode)

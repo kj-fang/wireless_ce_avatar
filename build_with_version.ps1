@@ -12,7 +12,15 @@
 # Run from repo root:  .\build_with_version.ps1
 
 param(
-    [string]$Branch = "main"
+    [string]$Branch = "main",
+    # none (default): one IntelAvatar build, as CI makes it — the Beacon role
+    # is decided at start (--handsfree-role / INTELAVATAR_HANDSFREE_ROLE).
+    # client | server | both: one package per role, IntelAvatar_Client and/or
+    # IntelAvatar_Server, with the role baked in (handsfree_role.txt in
+    # _internal), the launcher .bat and README from tools/packaging/<role>
+    # copied in, and each folder zipped for hand-out.
+    [ValidateSet('none', 'client', 'server', 'both')]
+    [string]$HandsfreeRole = "none"
 )
 
 # ── Nightly version line ──────────────────────────────────────────────────────
@@ -178,38 +186,71 @@ VSVersionInfo(
 Set-Content -Path "version_info.txt" -Value $versionInfoContent -Encoding UTF8
 Write-Host "version_info.txt updated successfully!" -ForegroundColor Green
 
-# Build with PyInstaller
-Write-Host "`nBuilding with PyInstaller..." -ForegroundColor Yellow
+# Build with PyInstaller — one variant (CI-style) or one package per Beacon role
+Write-Host "`nBuilding with PyInstaller (HandsfreeRole: $HandsfreeRole)..." -ForegroundColor Yellow
+
+$variants = switch ($HandsfreeRole) {
+    'none'   { @(@{ Name = 'IntelAvatar';        Role = '' }) }
+    'client' { @(@{ Name = 'IntelAvatar_Client'; Role = 'client' }) }
+    'server' { @(@{ Name = 'IntelAvatar_Server'; Role = 'server' }) }
+    'both'   { @(@{ Name = 'IntelAvatar_Client'; Role = 'client' },
+                 @{ Name = 'IntelAvatar_Server'; Role = 'server' }) }
+}
 
 try {
     # Check if requirements are installed
     Write-Host "Installing/checking requirements..." -ForegroundColor Yellow
     pip install -r requirements.txt -q
-    
-    # Run PyInstaller
-    Write-Host "Running PyInstaller..." -ForegroundColor Yellow
-    pyinstaller IntelAvatar.spec
-    
-    # Rename exe with version
-    Write-Host "Renaming executable with version..." -ForegroundColor Yellow
-    $exePath = "dist/IntelAvatar/IntelAvatar.exe"
-    # For dev builds, $version already contains the SHA (e.g. 99.0.14-dev.b0530f21)
-    # For nightly builds on main, append the short git hash
-    # For release builds (release/X.Y), version is clean (e.g. 1.1.5) — no hash needed
-    $exeName = if ($buildType -eq "RELEASE") { "IntelAvatar_v${version}.exe" } elseif ($buildType -eq "NIGHTLY") { "IntelAvatar_v${version}_${gitHash}.exe" } else { "IntelAvatar_v${version}.exe" }
-    $newExePath = "dist/IntelAvatar/$exeName"
-    
-    if (Test-Path $exePath) {
-        Move-Item -Path $exePath -Destination $newExePath -Force
-        Write-Host "Renamed to: $exeName" -ForegroundColor Green
+
+    $built = @()
+    foreach ($v in $variants) {
+        $name = $v.Name
+        # Read by IntelAvatar.spec: the exe/folder name and the baked-in role.
+        $env:AVATAR_BUILD_NAME = $name
+        $env:AVATAR_HANDSFREE_ROLE = $v.Role
+        $roleNote = if ($v.Role) { " (Beacon role: $($v.Role))" } else { "" }
+        Write-Host "`nRunning PyInstaller for $name$roleNote..." -ForegroundColor Yellow
+        pyinstaller IntelAvatar.spec --noconfirm --workpath "build/$name"
+        if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $name (exit $LASTEXITCODE)" }
+
+        # Rename exe with version
+        # For dev builds, $version already contains the SHA (e.g. 99.0.14-dev.b0530f21)
+        # For nightly builds on main, append the short git hash
+        # For release builds (release/X.Y), version is clean (e.g. 1.1.5) — no hash needed
+        Write-Host "Renaming executable with version..." -ForegroundColor Yellow
+        $exePath = "dist/$name/$name.exe"
+        $exeName = if ($buildType -eq "RELEASE") { "${name}_v${version}.exe" } elseif ($buildType -eq "NIGHTLY") { "${name}_v${version}_${gitHash}.exe" } else { "${name}_v${version}.exe" }
+        if (Test-Path $exePath) {
+            Move-Item -Path $exePath -Destination "dist/$name/$exeName" -Force
+            Write-Host "Renamed to: $exeName" -ForegroundColor Green
+        }
+
+        $zip = ""
+        if ($v.Role) {
+            # Hand-out extras: the launcher .bat and the README of this role.
+            $extras = "tools/packaging/$($v.Role)"
+            if (Test-Path $extras) {
+                Copy-Item -Path "$extras/*" -Destination "dist/$name/" -Force
+                Write-Host "Added launcher and README from $extras" -ForegroundColor Green
+            }
+            # The zip holds the folder itself, so unzipping never spills files.
+            $zip = "dist/${name}_v${version}.zip"
+            Write-Host "Zipping dist/$name -> $zip ..." -ForegroundColor Yellow
+            if (Test-Path $zip) { Remove-Item $zip -Force }
+            Compress-Archive -Path "dist/$name" -DestinationPath $zip -CompressionLevel Optimal
+        }
+        $built += [pscustomobject]@{ Name = $name; Exe = $exeName; Zip = $zip }
     }
-    
+    Remove-Item Env:AVATAR_BUILD_NAME, Env:AVATAR_HANDSFREE_ROLE -ErrorAction SilentlyContinue
+
     Write-Host "`n===== Build Complete! =====" -ForegroundColor Green
     Write-Host "Version: $version" -ForegroundColor Cyan
     Write-Host "Git Hash: $gitHash" -ForegroundColor Cyan
-    Write-Host "Executable: $exeName" -ForegroundColor Cyan
-    Write-Host "Output location: dist/IntelAvatar/" -ForegroundColor Cyan
-    
+    foreach ($b in $built) {
+        Write-Host "Executable: dist/$($b.Name)/$($b.Exe)" -ForegroundColor Cyan
+        if ($b.Zip) { Write-Host "Package:    $($b.Zip)" -ForegroundColor Cyan }
+    }
+
 } catch {
     Write-Host "`nBuild failed: $_" -ForegroundColor Red
     exit 1

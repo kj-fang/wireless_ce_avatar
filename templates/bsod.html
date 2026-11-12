@@ -75,18 +75,18 @@
 </head>
 <body>
     <div class="form-container mb-4 p-0 overflow-hidden" 
-        style="position: relative; border-radius: 0; margin-top: 0;">
-        <img src="{{ url_for('static', filename='nav_bar.svg') }}" 
-            alt="Banner" 
-            class="w-100" 
-            style="border-radius: 0; display: block; margin-top: 0;">
+        style="position: relative; box-sizing: border-box; display: flex; align-items: center; height: 96px; padding: 0 32px; border-radius: 0; margin-top: 0; background: #1f4059;">
+        <img src="{{ url_for('static', filename='new_logo.svg') }}"
+            alt="Wireless CE"
+            style="display: block; width: auto; height: 80px; max-width: 240px; object-fit: contain;">
 
         <!-- clickable logo -->  
         <a href="{{ url_for('main.index') }}" 
             style="position: absolute; 
                     top: 0; 
                     left: 0; 
-                    width: 20%; 
+                    width: 272px;
+                    max-width: 100%;
                     height: 100%; 
                     cursor: pointer; 
                     z-index: 10;"

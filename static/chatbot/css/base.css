@@ -653,6 +653,51 @@
     .has-sleepstudy .ss-system-row + .ss-system-row { margin-top: 6px; }
     .has-sleepstudy .ss-system-row b { color: #34445a; }
 
+    /* A Sleep Study turn is several lines (issue description, issue time,
+       run); keep its line breaks in the user's bubble. */
+    .has-sleepstudy .msg-row.user .msg-bubble { white-space: pre-line; }
+
+    /* Report: driver-log causes ranked by share of checked sessions. */
+    .has-sleepstudy .ss-rank-row {
+        display: grid;
+        grid-template-columns: minmax(120px, 0.9fr) minmax(80px, 1.4fr) auto;
+        grid-template-areas: "name track value" "sessions sessions sessions";
+        align-items: center;
+        gap: 2px 10px;
+        padding: 6px 0;
+        font-size: 0.76rem;
+    }
+    .has-sleepstudy .ss-rank-row + .ss-rank-row { border-top: 1px solid #eef2f6; }
+    .has-sleepstudy .ss-rank-name { grid-area: name; color: #26374b; font-weight: 650; }
+    .has-sleepstudy .ss-rank-row .ss-drips-track { grid-area: track; background: #eef2f6; }
+    .has-sleepstudy .ss-rank-row .ss-drips-fill { background: linear-gradient(90deg, #3b8fd4, #0a6cb4); }
+    .has-sleepstudy .ss-rank-value { grid-area: value; color: #445468; white-space: nowrap; }
+    .has-sleepstudy .ss-rank-sessions { grid-area: sessions; color: #8090a3; font-size: 0.68rem; }
+
+    /* Report: compact matrices (factor x session, one row per session). */
+    .has-sleepstudy .ss-matrix {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.74rem;
+    }
+    .has-sleepstudy .ss-matrix th,
+    .has-sleepstudy .ss-matrix td {
+        padding: 5px 6px;
+        border-bottom: 1px solid #eef2f6;
+        text-align: center;
+    }
+    .has-sleepstudy .ss-matrix thead th { color: #7a889a; font-weight: 650; font-size: 0.68rem; }
+    .has-sleepstudy .ss-matrix tbody th { text-align: left; color: #34445a; font-weight: 600; }
+    .has-sleepstudy .ss-matrix td.hit { color: #0a6cb4; }
+    .has-sleepstudy .ss-matrix td.share { color: #445468; font-weight: 650; white-space: nowrap; }
+    .has-sleepstudy .ss-matrix small { color: #8090a3; font-weight: 400; }
+    .has-sleepstudy .ss-session-table td { text-align: left; }
+    .has-sleepstudy .ss-session-table .ss-cause-pill { margin-top: 0; }
+
+    /* Report: Sleep Study vs driver log. */
+    .has-sleepstudy .ss-compare-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+    .has-sleepstudy .ss-compare-line { margin: 4px 0 0; color: #445468; font-size: 0.75rem; }
+
     /* The initial HTML selection is a compact, clearly separated session table. */
     .has-sleepstudy .ss-plan-intro p { margin: 0 0 6px; line-height: 1.5; }
     .has-sleepstudy .ss-plan-intro p:first-child {

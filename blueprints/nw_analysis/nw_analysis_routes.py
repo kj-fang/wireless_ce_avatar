@@ -318,15 +318,47 @@ def set_log():
 # log chosen for each time point are kept on the snapshot.
 # ------------------------------------------------------------------
 def _point_request_text(point: dict, position: int, total: int) -> str:
-    """A readable user-facing summary of the question for this time point."""
+    """
+    The user turn of one time point, shaped like the other chatbots' turns:
+    an issue description and an issue time, then which run and driver log.
+    The description is a short form of what the agent is asked (the full
+    sleepstudy_point prompt carries all the evidence); it names the session,
+    what the Sleep Study suspects and the OS jobs that woke the device.
+    """
     drip = point.get("sw_drip_pct")
     drip_text = f"{drip:.1f}%" if isinstance(drip, (int, float)) else "N/A"
     log_path = str(point.get("driver_log_path") or "").replace("\\", "/")
     log_name = os.path.basename(log_path) if log_path else "(none selected)"
-    # One line: the report's verdict is on the plan card and under the finding,
-    # and the question itself is the same for every point.
-    return (f"Sleep Study {position}/{total} · Session {point['session_id']} · "
-            f"{point['device_label']} · SW DRIPS {drip_text} · driver log {log_name}")
+    device = point.get("device_label") or "wireless"
+
+    jobs = {}
+    for entry in (point.get("wake_evidence") or {}).get("device_entries") or []:
+        for wake in entry.get("wakes") or []:
+            for key, value in (wake.get("values") or {}).items():
+                if key.startswith("WiFiJob"):
+                    try:
+                        jobs[key[len("WiFiJob"):]] = jobs.get(key[len("WiFiJob"):], 0) + int(value)
+                    except ValueError:
+                        pass
+    top_jobs = ", ".join(f"{k} ×{v}" for k, v in sorted(jobs.items(), key=lambda kv: -kv[1])[:4])
+
+    description = (f"Session {point['session_id']} ({device}, SW DRIPS {drip_text}): why did the "
+                   f"{device} driver keep being brought back to D0 by the OS instead of staying in Dx, "
+                   f"and what delayed its return to low power?")
+    if point.get("html_verdict"):
+        description += f" Sleep Study suspects {point['html_verdict']}."
+    if top_jobs:
+        description += f" OS jobs that woke it: {top_jobs}."
+    window = ""
+    if point.get("window_start") and point.get("window_end"):
+        end = str(point["window_end"])
+        same_day = end[:10] == str(point["window_start"])[:10]
+        window = f" (window {point['window_start']} → {end[11:] if same_day else end})"
+    return "\n".join([
+        f"Issue description: {description}",
+        f"Issue time: {point.get('issue_time') or 'unknown'}{window}",
+        f"Sleep Study {position}/{total} · driver log {log_name}",
+    ])
 
 
 def _record_nw_turn(conversation_id: str, user_message: str, result: dict, steps: list,

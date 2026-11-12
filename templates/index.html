@@ -1190,14 +1190,20 @@
         .home-card .owner-check-inline #home-owner-check:disabled { color: #8793a0; background: #e7ebef; box-shadow: none; cursor: not-allowed; }
         .home-review-unframed .review-heading button, .home-review-unframed .review-toolbar button { border-radius: 999px; font-family: var(--font-body) !important; font-size: 12px; font-weight: 600; }
         @media (min-width: 881px) {
-            .home-workspace { width: 92%; max-width: none; height: calc(100dvh - 140px); grid-template-columns: minmax(0, 9fr) minmax(0, 11fr); gap: clamp(24px, 2.4vw, 48px); margin: 24px 2% 0 6%; padding: 0; }
+            .home-workspace { width: 92%; max-width: none; height: calc(100dvh - 140px); grid-template-columns: minmax(320px, 1fr) 12px minmax(360px, 1fr); gap: 12px; margin: 24px 2% 0 6%; padding: 0; }
             .home-workspace > .home-review-unframed { align-self: center; height: calc(100% - 48px); border-radius: 8px; box-shadow: 0 20px 48px rgba(31, 47, 63, .12), 0 3px 10px rgba(31, 47, 63, .05); }
             .home-review-unframed .review-heading h2 { font-size: 24px; line-height: 1.35; }
             .home-analysis-unframed { padding-left: clamp(16px, 2.4vw, 48px); padding-top: 40px; }
             .home-card.home-analysis-unframed .tabs-container, .home-card.home-analysis-unframed .chatbot-shortcut-section { width: 100%; max-width: clamp(480px, 38vw, 600px); }
             .home-analysis-heading { padding-left: 0; border-left: 0; }
             .home-analysis-heading h2 { font-size: 28px !important; }
+            .home-splitter { position: relative; z-index: 2; display: flex; width: 12px; min-height: 88px; align-self: stretch; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 999px; background: transparent; cursor: col-resize; touch-action: none; }
+            .home-splitter::before { content: ''; width: 4px; height: 48px; border: 1px solid #c7d2df; border-radius: 999px; background: #e8edf3; transition: background-color .16s ease, border-color .16s ease, height .16s ease; }
+            .home-splitter:hover::before, .home-splitter:focus-visible::before { height: 64px; border-color: #347fc4; background: #cfe2f5; }
+            .home-splitter[aria-disabled="true"] { cursor: not-allowed; opacity: .4; }
+            .home-splitter[aria-disabled="true"]::before { height: 40px; border-color: #c7d2df; background: #e8edf3; }
         }
+        @media (max-width: 880px) { .home-splitter { display: none; } }
         .home-workspace::after, .home-review-unframed::after, .home-analysis-unframed::after { display: none; }
         .home-review-unframed { border-color: rgba(150, 170, 190, .18); background: #fff; box-shadow: 0 14px 40px rgba(31, 47, 63, .045), 0 2px 10px rgba(31, 47, 63, .025); -webkit-backdrop-filter: none; backdrop-filter: none; }
         .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { display: inline-block; }
@@ -1211,6 +1217,10 @@
             .home-review-unframed .review-heading h2 > span, .home-analysis-heading h2 > span { transition: transform .24s cubic-bezier(.2, .8, .2, 1); }
         }
         #home-queue td:nth-child(2) { overflow-wrap: anywhere; }
+        #home-queue th:nth-child(2), #home-queue td:nth-child(2) { display: none; }
+        #home-queue.show-owner th:nth-child(2), #home-queue.show-owner td:nth-child(2) { display: table-cell; }
+        #home-queue.show-owner th:nth-child(2) { width: 84px; }
+        #home-queue.show-owner td:nth-child(2) { padding-left: 6px; padding-right: 6px; font-size: 11px; }
         .home-analysis-unframed #case-loading-box { width: 100%; max-width: 580px; margin-left: 0; margin-right: 0; }
         .home-review-unframed.is-locked { opacity: .5; pointer-events: none; }
         .home-analysis-unframed .shortcut-icon { width: 18px; height: 18px; flex: 0 0 18px; object-fit: contain; filter: brightness(0) saturate(100%) invert(42%) sepia(14%) saturate(1046%) hue-rotate(168deg) brightness(91%) contrast(87%); }
@@ -1311,12 +1321,13 @@
             <div class="review-scroll">
                 <table id="home-queue" aria-label="Review queue">
                     <thead><tr><th scope="col">Case</th><th scope="col">Owner</th><th scope="col">Subject</th><th scope="col">Status</th></tr></thead>
-                    <tbody><tr><td colspan="4">Loading cases...</td></tr></tbody>
+                    <tbody><tr><td colspan="3">Loading cases...</td></tr></tbody>
                 </table>
             </div>
         </div>
         </div>
     </section>
+        <div id="home-splitter" class="home-splitter" role="separator" aria-label="Resize review queue and analysis panels" aria-orientation="vertical" aria-valuemin="36" aria-valuemax="64" aria-valuenow="50" tabindex="0" title="Drag or use left and right arrow keys to resize panels"></div>
     <section class="home-card home-analysis-unframed" aria-label="Case and log analysis">
     <div class="home-analysis-heading">
         <h2><span>Case & Log analysis</span></h2>
@@ -1498,6 +1509,7 @@
     <script src="https://code.jquery.com/jquery-3.5.1.slim.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@4.5.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="{{ url_for('static', filename='js/home_review.js') }}" defer></script>
+    <script src="{{ url_for('static', filename='js/home_splitter.js') }}" defer></script>
     <script>
         // Auto-show the flash-message modal (e.g. unsupported SendTo path) on load
         document.addEventListener('DOMContentLoaded', function () {

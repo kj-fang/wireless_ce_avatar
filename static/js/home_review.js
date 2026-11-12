@@ -26,6 +26,8 @@
         dashboard.inert = locked;
         dashboard.setAttribute('aria-disabled', String(locked));
         dashboard.classList.toggle('is-locked', locked);
+        const splitter = element('splitter');
+        if (splitter) splitter.setAttribute('aria-disabled', String(locked));
         const scroll = element('queue').closest('.review-scroll');
         scroll.inert = locked;
         scroll.setAttribute('aria-disabled', String(locked));
@@ -175,8 +177,12 @@
         if (queueLocked) return;
         const sequence = ++queueRequest;
         const params = new URLSearchParams();
+        const everyone = element('everyone').checked;
         if (element('show-closed').checked) params.set('all', '1');
-        if (element('everyone').checked) {
+        element('queue').classList.toggle('show-owner', everyone);
+        const placeholder = element('queue').querySelector('tbody td[colspan]');
+        if (placeholder) placeholder.colSpan = everyone ? 4 : 3;
+        if (everyone) {
             params.set('everyone', '1');
             const owner = element('owner').value.trim();
             if (owner) params.set('owner', owner);
@@ -222,7 +228,7 @@
                 tbody.appendChild(row);
             }
             if (!tbody.children.length) {
-                tbody.innerHTML = '<tr><td colspan="4">' +
+                tbody.innerHTML = '<tr><td colspan="' + (everyone ? '4' : '3') + '">' +
                     (result.signed_out ? 'No cases loaded.' : 'Queue is empty.') + '</td></tr>';
             }
         } catch (error) {

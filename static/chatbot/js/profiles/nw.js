@@ -224,8 +224,9 @@
     //   - how many bad sessions there are, and how many are not wireless at
     //     all ("system": no driver log of ours can explain them)
     //   - per wireless time point, the scenario the report points to, and
-    //     whether to check it against a driver log (ticked by default unless
-    //     the report already pins the drain on an app's own traffic)
+    //     whether to check it against a driver log. Every wireless point is
+    //     ticked by default (analyse_default): the report's verdict is a
+    //     hypothesis for the driver agent, not a reason to skip the log.
     //   - the suggested driver log per point, editable; a point with none is
     //     flagged and focused
     // Analyse checks the ticked points one by one, then writes the report;

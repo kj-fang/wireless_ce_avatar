@@ -400,6 +400,36 @@
             transform: none;
             pointer-events: none;
         }
+        #back-to-top-btn {
+            position: fixed;
+            right: 28px;
+            bottom: 28px;
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            background: #005A9C;
+            color: #fff;
+            border: none;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+            font-size: 1.3rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(10px);
+            transition: opacity 0.25s ease, transform 0.25s ease, background-color 0.15s ease;
+            z-index: 1030;
+        }
+        #back-to-top-btn.show {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+        #back-to-top-btn:hover {
+            background: #0077c8;
+        }
     </style>
 </head>
 <body class="hide-excluded" data-latest-evt-path="{{ latest_evt_path | e if latest_evt_path else '' }}">
@@ -778,6 +808,19 @@
                 </div>
 
                 <div class="tab-pane fade {% if active_tab == 'bt' %}show active{% endif %}" id="bt-panel" role="tabpanel" aria-labelledby="bt-tab">
+                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
+                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
+                            AutoFolder
+                        </button>
+                        <button id="bt-action-chatbot" class="btn btn-info btn-sm" data-mode="CHATBOT" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'CHATBOT')">
+                            <i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent
+                        </button>
+                        <label id="bt-auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0 0 0 4px;"
+                               title="Auto-select the BT collection whose capture time best matches the issue time. The BT log isn't decoded yet, so this matches the capture-folder timestamp; with no issue time it picks the most recent collection.">
+                            <input type="checkbox" id="bt-auto-pick-log" onchange="onBtAutoPickLogToggle()">
+                            🪄 Auto-pick BT log by AI time{% if llm_issue_time %} <code style="font-size:0.85rem;">{{ llm_issue_time }}</code>{% endif %}
+                        </label>
+                    </div>
                     <div class="mb-3">
                         {% for name, bt_list in bt_dict.items() %}
                             {% for bt_path in bt_list %}
@@ -802,19 +845,6 @@
                                 </div>
                             {% endfor %}
                         {% endfor %}
-                    </div>
-                    <div class="d-flex flex-wrap justify-content-center align-items-center mt-3 p-3" style="background: #f8f9fa; border: 1px solid #ddd; border-radius: 8px; gap: 8px;">
-                        <button id="bt-action-autofolder" class="btn btn-primary btn-sm" data-mode="AutoFolder" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'AutoFolder')">
-                            AutoFolder
-                        </button>
-                        <button id="bt-action-chatbot" class="btn btn-info btn-sm" data-mode="CHATBOT" style="border-radius: 30px; color:white; font-size: 1.15rem; padding: 0.5rem 1rem;" disabled onclick="runSelectedBtAction(this, 'CHATBOT')">
-                            <i class="fab fa-bluetooth-b"></i> Bluetooth Analysis Agent
-                        </button>
-                        <label id="bt-auto-pick-log-label" style="display:inline-flex;align-items:center;gap:6px;font-size:0.95rem;color:#0b4a78;cursor:pointer;margin:0 0 0 4px;"
-                               title="Auto-select the BT collection whose capture time best matches the issue time. The BT log isn't decoded yet, so this matches the capture-folder timestamp; with no issue time it picks the most recent collection.">
-                            <input type="checkbox" id="bt-auto-pick-log" onchange="onBtAutoPickLogToggle()">
-                            🪄 Auto-pick BT log by AI time{% if llm_issue_time %} <code style="font-size:0.85rem;">{{ llm_issue_time }}</code>{% endif %}
-                        </label>
                     </div>
                 </div>
 
@@ -3553,6 +3583,18 @@
     window.__akeCheckPendingOnce = true;
 </script>
 {% include "_api_key_error_modal.html" %}
+
+<button id="back-to-top-btn" type="button" title="Back to top" aria-label="Back to top" onclick="window.scrollTo({top: 0, behavior: 'smooth'})">
+    <i class="fas fa-arrow-up"></i>
+</button>
+<script>
+    (function() {
+        const backToTopBtn = document.getElementById('back-to-top-btn');
+        window.addEventListener('scroll', function() {
+            backToTopBtn.classList.toggle('show', window.scrollY > 300);
+        });
+    })();
+</script>
 
 </body>
 </html>

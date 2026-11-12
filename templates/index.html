@@ -1163,7 +1163,7 @@
         .home-card .tab:not(.active):hover { color: #263e55; border-color: #a9bdcf; background: #eaf1f6 !important; }
         .home-card #case-log-messages, .home-card #upload-log-messages { color: #f8fafc !important; background: #000 !important; border-color: #252b33 !important; }
         .home-card .chatbot-shortcut-section { margin-top: 24px; padding-top: 12px; }
-        .workspace-masthead { box-sizing: border-box; width: 100%; max-width: none; height: 96px; margin: -28px 0 0; padding: 0 32px; background: #1f4059; }
+        .workspace-masthead { box-sizing: border-box; width: 100%; max-width: none; min-height: 96px; height: auto; margin: -28px 0 0; padding: 8px 32px; background: #1f4059; }
         .dashboard-list-tabs { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 3px; margin: 0; padding: 0 8px; border-bottom: 1px solid #d6dee6; }
         .dashboard-view-tab { flex: 0 1 auto; min-width: 88px; max-width: 160px; min-height: 30px; padding: 5px 9px; border: 1px solid #d6dee6; border-bottom: 0; border-radius: 5px 5px 0 0; color: #586777; background: #e8edf2; font: 600 12px/1.2 var(--font-body); cursor: pointer; transition: background .16s ease, color .16s ease; overflow-wrap: anywhere; }
         .dashboard-view-tab:hover:not(.active) { color: #263e55; background: #f0f3f6; }
@@ -1190,7 +1190,9 @@
         .home-card .owner-check-inline #home-owner-check:disabled { color: #8793a0; background: #e7ebef; box-shadow: none; cursor: not-allowed; }
         .home-review-unframed .review-heading button, .home-review-unframed .review-toolbar button { border-radius: 999px; font-family: var(--font-body) !important; font-size: 12px; font-weight: 600; }
         @media (min-width: 881px) {
-            .home-workspace { width: 92%; max-width: none; height: calc(100dvh - 140px); grid-template-columns: minmax(320px, 1fr) 12px minmax(360px, 1fr); gap: 12px; margin: 24px 2% 0 6%; padding: 0; }
+            body.home-dashboard-page { display: flex; flex-direction: column; height: 100dvh; min-height: 0; padding-top: 0; overflow: hidden; }
+            body.home-dashboard-page > .workspace-masthead { flex: 0 0 auto; min-height: 96px; height: auto; margin: 0; }
+            body.home-dashboard-page > .home-workspace { flex: 1 1 0; width: 92%; max-width: none; height: auto; min-height: 0; grid-template-columns: minmax(320px, 1fr) 12px minmax(360px, 1fr); align-items: stretch; gap: 12px; margin: 24px 2% 12px 6%; padding: 0; overflow: hidden; }
             .home-workspace > .home-review-unframed { align-self: center; height: calc(100% - 48px); border-radius: 8px; box-shadow: 0 20px 48px rgba(31, 47, 63, .12), 0 3px 10px rgba(31, 47, 63, .05); }
             .home-review-unframed .review-heading h2 { font-size: 24px; line-height: 1.35; }
             .home-analysis-unframed { padding-left: clamp(16px, 2.4vw, 48px); padding-top: 40px; }
@@ -1244,7 +1246,7 @@
         #home-post-status[data-state="error"] { color: #8d342e; }
     </style>
 </head>
-<body>
+<body class="home-dashboard-page">
 
 
     <!-- ✅ Flash messages (e.g. unsupported SendTo path) shown as a blocking modal -->

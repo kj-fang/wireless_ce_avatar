@@ -152,7 +152,9 @@
     // ➕ New Conversation: reset everything to the fresh, empty page state the
     // user sees when first entering the agent (no log, no issue time, no chat).
     async function startNewConversation() {
-        if (typeof _abortActiveStream === 'function') _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream && typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send (the
         // no-issue-time confirm prompt or the time-capture popup). A stuck
         // modal overlay would otherwise swallow clicks/typing in the fresh
@@ -270,7 +272,9 @@
         // SAVED conversation flips firstRoundSent true, but the unsent live
         // draft captured earlier must still be resumable.
         if (!snap) return;
-        if (typeof _abortActiveStream === 'function') _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream && typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send so it
         // can't swallow input in the restored session.
         if (typeof closeConfirmModal === 'function') closeConfirmModal(false);
@@ -827,7 +831,9 @@
     async function openHistoryConversation(id) {
         // Stop rendering whatever stream is currently on screen (its server
         // job, if any, keeps running and can be re-attached to later).
-        _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream) _abortActiveStream();
         // Preserve the chat-box draft of the conversation we're leaving so it
         // reappears when we switch back to it (kept per-conversation in memory).
         saveCurrentDraft();

@@ -9,6 +9,7 @@
     //      /analyze_sleepstudy_point analyses the points one after another,
     //      each in its own log, with a k/N progress line and Pause / Resume.
     let firstRoundSent = false;  // read by history.js: true once this conversation has a turn
+    window.__nwSleepstudyRuns = window.__nwSleepstudyRuns || {};
     // The report the page last loaded (or is loading). Enter and leaving the
     // box can both fire for one edit; the second must not load it again.
     let nwLoadedPath = '';
@@ -44,6 +45,11 @@
         window.__feedbackConversationId = result.conversation_id;
         firstRoundSent = true;
         if (typeof loadHistoryList === 'function') loadHistoryList();
+    }
+
+    function shouldKeepActiveStreamOnHistorySwitch() {
+        return Object.values(window.__nwSleepstudyRuns || {}).some(run =>
+            run && run.busy && run.controller && run.controller === window.__streamCtl);
     }
 
     function onHistoryNewConversation() {
@@ -238,21 +244,29 @@
         const bar = `${c.drip_metric === 'sw' ? 'SW DRIPS' : 'SW or HW DRIPS'} < ${Math.round(c.drip_threshold_pct || 0)}%`;
         const lines = [];
         if (sessions && sessions.bad_total) {
-            lines.push(`**${sessions.bad_total}** bad session(s) on battery (${bar}): ` +
-                       `**${sessions.wireless}** with a wireless RED top blocker, ` +
-                       `**${sessions.system}** without one (system).`);
+            lines.push(`**${sessions.bad_total}** bad session(s) on battery &nbsp;·&nbsp; ${bar}`);
+            lines.push(`- **${sessions.wireless}** with a wireless RED top blocker\n` +
+                       `- **${sessions.system}** without one (system)`);
         } else {
             lines.push(`**${plan.qualifying_count}** of ${plan.total_sessions} sessions are battery drains ` +
                        `with ${bar} and a wireless RED top blocker.`);
         }
+        // Every bad session is a platform problem: say so first, and do not
+        // ask for driver logs nobody needs.
+        const allSystem = !points.length && sessions && sessions.system > 0;
         if (points.length) {
-            lines.push(`The worst **${points.length}** wireless session(s) are listed ` +
-                       `(max ${c.max_points}, ${c.per_device_limit} per device). ` +
-                       `Tick the ones to check against their driver log.`);
+            lines.push(`The worst **${points.length}** wireless session(s) are listed below ` +
+                       `— max ${c.max_points}, ${c.per_device_limit} per device.`);
+            lines.push(`Tick the ones to check against their driver log.`);
+        } else if (allSystem) {
+            lines.unshift(`✅ **No driver log check needed.** None of the ${sessions.bad_total} bad ` +
+                          `session(s) has a wireless RED top blocker: this is a platform (system) issue, ` +
+                          `not a wireless driver one.`);
         } else {
             lines.push('No wireless session to check against a driver log.');
         }
-        (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
+        // The driver log search only matters when there is something to check.
+        if (points.length) (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
 
         const isSelected = (p) => locked
             ? (saved.selected ? saved.selected.includes(p.index) : true)
@@ -266,6 +280,9 @@
             let statusText = '', statusColor = '';
             if (locked) {
                 if (!picked) { statusText = 'report only'; statusColor = '#888'; }
+                else if (saved.done[p.index] === 'paused') {
+                    statusText = '⏸ paused · resume available'; statusColor = '#b45309';
+                }
                 else if (saved.done[p.index]) { statusText = '✔ ' + saved.done[p.index]; statusColor = '#15803d'; }
                 else { statusText = '⏸ not analysed yet'; statusColor = '#b45309'; }
             }
@@ -318,7 +335,7 @@
             <div class="avatar-icon">🛌</div>
             <div class="msg-body">
                 <div class="msg-bubble ss-plan">
-                    ${marked.parse(lines.join('\n'))}
+                    <div class="ss-plan-intro">${marked.parse(lines.join('\n\n'))}</div>
                     ${points.length ? `
                     <table class="ss-plan-table" style="width:100%;table-layout:fixed;border-collapse:collapse;font-size:0.8rem;">
                         <colgroup><col style="width:28px;"><col style="width:40%;"><col></colgroup>
@@ -339,15 +356,29 @@
             const k = checkedIndexes().length;
             runBtn.textContent = k
                 ? `Analyse ${k} ticked time point(s), then write the report`
+                : allSystem ? 'Write the platform (system) report'
                 : 'Write the report from the Sleep Study only';
         };
 
         if (locked) {
             const selected = points.filter(isSelected).map(p => p.index);
+            const activeRun = window.__nwSleepstudyRuns[window.__feedbackConversationId || ''];
+            if (activeRun && activeRun.busy) {
+                activeRun.bar = row.querySelector('.ss-progress');
+                ssRun = activeRun;
+                const activeIndex = activeRun.items[activeRun.next]?.index;
+                if (activeIndex != null) {
+                    markPointStatus(activeRun, activeIndex, '⏳ analysing in background…', '#0071c5');
+                }
+                renderRunBar('running');
+                return;
+            }
             ssRun = {
                 path: path, busy: false, bar: row.querySelector('.ss-progress'), next: 0,
                 items: selected.map(i => ({index: i, driverLog: saved.driverLogs[i] || ''})),
-                done: new Set(Object.keys(saved.done).map(Number)),
+                done: new Set(Object.keys(saved.done)
+                    .filter(i => saved.done[i] !== 'paused').map(Number)),
+                conversationId: window.__feedbackConversationId || '',
             };
             skipFinished(ssRun);
             renderRunBar(ssRun.next < ssRun.items.length ? 'paused' : 'done');
@@ -370,6 +401,14 @@
         if (missing) missing.focus();
 
         runBtn.addEventListener('click', async (ev) => {
+            if (shouldKeepActiveStreamOnHistorySwitch()) {
+                const statusEl = document.getElementById('sleepstudy-status');
+                showStatus(statusEl,
+                    'A Sleep Study run is already continuing in another History session. Wait for it to finish before starting another run.',
+                    'warn');
+                return;
+            }
+            const startViewId = window.__feedbackConversationId || '';
             const driverLogs = {};
             row.querySelectorAll('.ss-drv-input').forEach(inp => {
                 driverLogs[inp.dataset.index] = inp.value.trim();
@@ -383,7 +422,7 @@
                 if (!selected.includes(p.index)) markPointStatus({bar: row.querySelector('.ss-progress')},
                                                                 p.index, 'report only', '#888');
             });
-            ssRun = {
+            const run = ssRun = {
                 path: path,
                 items: selected.map(i => ({index: i, driverLog: driverLogs[i] || ''})),
                 next: 0,
@@ -400,11 +439,31 @@
                     body: JSON.stringify({log_path: path, plan: plan, driver_logs: driverLogs,
                                           selected: selected})
                 });
-                noteNwConversation(await res.json());
+                const savedRun = await res.json();
+                if (!savedRun.success || !savedRun.conversation_id) {
+                    throw new Error(savedRun.error || 'The run could not be saved to History.');
+                }
+                // The user may have switched History while the run-start
+                // request was in flight. Keep its ID, but never steal the
+                // visible conversation selection back.
+                if (!window.__viewingSavedConv
+                    && (window.__feedbackConversationId || '') === startViewId) {
+                    noteNwConversation(savedRun);
+                } else if (typeof loadHistoryList === 'function') {
+                    loadHistoryList();
+                }
+                run.conversationId = savedRun.conversation_id;
+                if (run.conversationId) window.__nwSleepstudyRuns[run.conversationId] = run;
             } catch (e) {
                 console.warn('[sleepstudy] run not saved to History:', e);
+                row.querySelectorAll('input, button').forEach(el => { el.disabled = false; });
+                ev.currentTarget.style.display = '';
+                labelRun();
+                showStatus(document.getElementById('sleepstudy-status'),
+                           '✘ ' + e.message, 'err');
+                return;
             }
-            continueSleepstudyRun();
+            continueSleepstudyRun(run);
         });
     }
 
@@ -440,6 +499,11 @@
         while (run.next < run.items.length && run.done.has(run.items[run.next].index)) run.next += 1;
     }
 
+    function isSleepstudyRunVisible(run) {
+        return !!(run && run.conversationId
+            && window.__feedbackConversationId === run.conversationId);
+    }
+
     // ── Step 2: analyse the time points one after another ────────────
     // Each point is its own request, its own agent run (with its own skill
     // choices and log cut) and its own History turn. Running them in turn
@@ -447,8 +511,8 @@
     // cancels the running one, and Resume starts that point again.
     let ssRun = null;
 
-    function renderRunBar(state) {
-        const run = ssRun;
+    function renderRunBar(state, runOverride) {
+        const run = runOverride || ssRun;
         if (!run || !run.bar) return;
         const total = run.items.length;
         const at = Math.min(run.next + 1, total);
@@ -456,8 +520,10 @@
             `<button class="btn-set-log" style="padding:3px 12px;margin-left:8px;width:auto;"
                      onclick="${handler}()">${label}</button>`;
         if (state === 'running') {
-            run.bar.innerHTML = `⏳ Analysing time point <b>${at}/${total}</b>…` +
-                                btn('⏸ Pause', 'pauseSleepstudyRun');
+            run.bar.innerHTML = run.summarizing
+                ? '📊 Writing the combined Sleep Study report…'
+                : `⏳ Analysing time point <b>${at}/${total}</b>…` +
+                  (run.controller ? btn('⏸ Pause', 'pauseSleepstudyRun') : '');
         } else if (state === 'paused') {
             run.bar.innerHTML = `⏸ Paused at time point <b>${at}/${total}</b>.` +
                                 btn('▶ Resume', 'continueSleepstudyRun');
@@ -471,70 +537,94 @@
     // core.js stopChat(): aborts the stream on screen and asks the server to
     // cancel the running agent (chat_stop knows the time point's agent).
     function pauseSleepstudyRun() {
-        if (typeof stopChat === 'function') stopChat();
+        const run = ssRun;
+        if (run && run.controller) run.controller.abort();
+        else if (typeof stopChat === 'function') stopChat();
     }
 
-    async function continueSleepstudyRun() {
-        const run = ssRun;
+    async function continueSleepstudyRun(runOverride) {
+        const run = runOverride || ssRun;
         if (!run || run.busy) return;
+        if (run.conversationId) window.__nwSleepstudyRuns[run.conversationId] = run;
         run.busy = true;
-        setSendBtnStopMode();
+        if (isSleepstudyRunVisible(run)) setSendBtnStopMode();
         skipFinished(run);
         while (run.next < run.items.length) {
-            renderRunBar('running');
+            renderRunBar('running', run);
             const item = run.items[run.next];
             markPointStatus(run, item.index, '⏳ analysing…', '#0071c5');
             const outcome = await analyseOnePoint(run, item, run.next + 1, run.items.length);
             if (outcome === 'paused') {
                 markPointStatus(run, item.index, '⏸ paused', '#b45309');
                 run.busy = false;
-                renderRunBar('paused');
-                setSendBtnSendMode();
+                if (run.conversationId) delete window.__nwSleepstudyRuns[run.conversationId];
+                renderRunBar('paused', run);
+                if (isSleepstudyRunVisible(run)) setSendBtnSendMode();
+                if (typeof loadHistoryList === 'function') loadHistoryList();
                 return;
             }
             run.done.add(item.index);
             skipFinished(run);
         }
         run.busy = false;
-        renderRunBar('done');
-        setSendBtnSendMode();
-        await summarizeSleepstudyRun();
+        renderRunBar('done', run);
+        if (isSleepstudyRunVisible(run)) setSendBtnSendMode();
+        await summarizeSleepstudyRun(run);
     }
 
     // The closing analysis: what keeps waking the driver across the points,
     // with counts from the report. Saved as the conversation's last turn.
-    async function summarizeSleepstudyRun() {
-        const run = ssRun;
+    async function summarizeSleepstudyRun(runOverride) {
+        const run = runOverride || ssRun;
         if (!run || run.busy) return;
         run.busy = true;
-        appendTyping();
+        run.summarizing = true;
+        renderRunBar('running', run);
+        const isVisible = () => isSleepstudyRunVisible(run);
+        if (isVisible()) appendTyping();
         try {
             const res = await fetch(`${CHATBOT_API}/sleepstudy_summary`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({log_path: run.path})
+                body: JSON.stringify({log_path: run.path, conversation_id: run.conversationId})
             });
             const data = await res.json();
-            removeTyping();
+            if (isVisible()) removeTyping();
             if (!data.success) {
-                appendAssistantText('❌ ' + (data.error || `Server error ${res.status}`));
+                if (isVisible()) appendAssistantText('❌ ' + (data.error || `Server error ${res.status}`));
                 return;
             }
-            appendUserMsg(data.user_message);
-            appendAssistantText(data.result.data);
-            noteNwConversation(data);
+            if (isVisible()) {
+                appendUserMsg(data.user_message);
+                appendAssistantText(data.result.data);
+                noteNwConversation(data);
+            }
+            // Re-open from the durable turns so a switched-away run gets its
+            // complete saved step traces and the follow-up context is rebuilt
+            // from this exact conversation, not another one in the UI.
+            run.needsHistoryRefresh = true;
         } catch (e) {
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (isVisible()) {
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            }
         } finally {
             run.busy = false;
+            run.summarizing = false;
+            if (run.conversationId) delete window.__nwSleepstudyRuns[run.conversationId];
+            if (typeof loadHistoryList === 'function') loadHistoryList();
+            if (run.needsHistoryRefresh && isVisible() && typeof openHistoryConversation === 'function') {
+                await openHistoryConversation(run.conversationId);
+            }
         }
     }
 
     // One time point over SSE. Returns 'paused' when the user stopped it.
     async function analyseOnePoint(run, item, position, total) {
         let card = null;
+        const isVisible = () => isSleepstudyRunVisible(run);
         const ctl = new AbortController();
+        run.controller = ctl;
         window.__streamCtl = ctl;
         try {
             const res = await fetch(`${CHATBOT_API}/analyze_sleepstudy_point`, {
@@ -542,7 +632,8 @@
                 headers: {'Content-Type': 'application/json'},
                 signal: ctl.signal,
                 body: JSON.stringify({log_path: run.path, index: item.index,
-                                      driver_log: item.driverLog, position: position, total: total})
+                                      driver_log: item.driverLog, position: position, total: total,
+                                      conversation_id: run.conversationId})
             });
             if (!res.ok) throw new Error(`Server error ${res.status}`);
 
@@ -558,21 +649,25 @@
                 try { evt = JSON.parse(jsonStr); } catch { return; }
 
                 if (evt.type === 'turn') {
-                    appendUserMsg(evt.user_message);
-                    appendTyping();
-                    card = createAgentStepRenderer({
-                        title: `Sleep Study ${position}/${total} · Steps`,
-                        avatar: '🛌',
-                    });
+                    if (isVisible()) {
+                        appendUserMsg(evt.user_message);
+                        appendTyping();
+                        card = createAgentStepRenderer({
+                            title: `Sleep Study ${position}/${total} · Steps`,
+                            avatar: '🛌',
+                        });
+                    } else run.needsHistoryRefresh = true;
                 } else if (evt.type === 'step') {
                     if (card) card.append(evt.step);
                 } else if (evt.type === 'done') {
-                    removeTyping();
+                    if (isVisible()) removeTyping();
                     if (card) card.collapse();
                     const r = evt.result || {};
-                    noteNwConversation(r);
+                    if (isVisible()) noteNwConversation(r);
+                    else run.needsHistoryRefresh = true;
                     markPointStatus(run, item.index, '✔ ' + ((r.point || {}).status || 'done'), '#15803d');
                     const title = `📊 ${position}/${total} · Session ${(r.point || {}).session_id || ''}`;
+                    if (!isVisible()) return;
                     if (r.type === 'report') {
                         appendReport(r.data || {}, title, r.issue_time || null);
                     } else if (r.type === 'partial_report' && r.data) {
@@ -581,8 +676,10 @@
                         appendAssistantText(r.data || '_No response._');
                     }
                 } else if (evt.type === 'error') {
-                    removeTyping();
-                    appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
+                    if (isVisible()) {
+                        removeTyping();
+                        appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
+                    }
                 }
             };
 
@@ -597,9 +694,18 @@
             if (buffer) processLine(buffer);
             return 'done';
         } catch (e) {
-            if (e.name === 'AbortError') return 'paused';
-            removeTyping();
-            appendAssistantText('❌ Network error: ' + e.message);
+            if (e.name === 'AbortError') {
+                if (isVisible()) removeTyping();
+                if (card) card.collapse();
+                return 'paused';
+            }
+            if (isVisible()) {
+                removeTyping();
+                appendAssistantText('❌ Network error: ' + e.message);
+            } else run.needsHistoryRefresh = true;
             return 'done';
+        } finally {
+            if (run.controller === ctl) run.controller = null;
+            if (window.__streamCtl === ctl) window.__streamCtl = null;
         }
     }

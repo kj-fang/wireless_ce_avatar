@@ -323,13 +323,10 @@ def _point_request_text(point: dict, position: int, total: int) -> str:
     drip_text = f"{drip:.1f}%" if isinstance(drip, (int, float)) else "N/A"
     log_path = str(point.get("driver_log_path") or "").replace("\\", "/")
     log_name = os.path.basename(log_path) if log_path else "(none selected)"
-    lines = [
-        f"Sleep Study {position}/{total} · Session {point['session_id']} · {point['device_label']} · SW DRIPS {drip_text}",
-        f"Report clue: {point.get('html_verdict') or 'no clear cause in the report'}.",
-        f"Driver log: {log_name}",
-        f"Question: What kept the {point['device_label']} device active? Use log timestamps to identify the trigger, explain the delayed return to low power, and choose the matching skill.",
-    ]
-    return "\n".join(lines)
+    # One line: the report's verdict is on the plan card and under the finding,
+    # and the question itself is the same for every point.
+    return (f"Sleep Study {position}/{total} · Session {point['session_id']} · "
+            f"{point['device_label']} · SW DRIPS {drip_text} · driver log {log_name}")
 
 
 def _record_nw_turn(conversation_id: str, user_message: str, result: dict, steps: list,
@@ -608,8 +605,14 @@ def sleepstudy_summary():
     sleep_path = (data.get("log_path") or "").strip()
     if not sleep_path or not os.path.exists(sleep_path):
         return jsonify({"success": False, "error": f"File not found: {sleep_path}"}), 400
-    conversation_id = _ensure_nw_conversation_id()
+    requested_id = (data.get("conversation_id") or "").strip()
+    conversation_id = requested_id or _ensure_nw_conversation_id()
     conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+    if requested_id and not any(
+            isinstance((turn.get("result") or {}), dict)
+            and (turn.get("result") or {}).get("type") == "sleepstudy_plan"
+            for turn in conv.get("turns") or []):
+        return jsonify({"success": False, "error": "Sleep Study run was not found in History."}), 404
     # A point counts as checked when its agent ran; its finding is what the
     # agent concluded, not the turn's text (which also quotes the report).
     findings = {}
@@ -646,9 +649,14 @@ def sleepstudy_summary():
             pass
 
     result = {"type": "text", "data": markdown}
-    request_text = (f"Report: {len(findings)} of {len(points)} time point(s) checked "
-                    f"against a driver log")
-    _remember_analysis(request_text, markdown)
+    if points:
+        request_text = (f"Report: {len(findings)} of {len(points)} time point(s) checked "
+                        f"against a driver log")
+    else:
+        # No wireless session: nothing was checked because nothing needed it.
+        request_text = "Report: platform (system) issue, no driver log check needed"
+    if not requested_id:
+        _remember_analysis(request_text, markdown)
     _record_nw_turn(conversation_id, request_text, result, [], sleep_path)
     return jsonify({"success": True, "conversation_id": conversation_id,
                     "user_message": request_text, "result": result})
@@ -706,7 +714,18 @@ def analyze_sleepstudy_point():
         if path and not os.path.exists(path):
             return Response(_err(f"File not found: {path}"), mimetype="text/event-stream")
 
-    conversation_id = _ensure_nw_conversation_id()
+    requested_id = str(data.get("conversation_id") or "").strip()
+    conversation_id = requested_id or _ensure_nw_conversation_id()
+    if requested_id:
+        conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+        has_plan = any(
+            isinstance((turn.get("result") or {}), dict)
+            and (turn.get("result") or {}).get("type") == "sleepstudy_plan"
+            for turn in conv.get("turns") or []
+        )
+        if not has_plan:
+            return Response(_err("Sleep Study run was not found in History."),
+                            mimetype="text/event-stream")
     sid = session.get("chatbot_session_id", "") or ""
     # The question for each point, as this conversation's prompt editor left
     # it: an edit here, else a kept copy, else the built-in text. Read before
@@ -727,12 +746,16 @@ def analyze_sleepstudy_point():
         started = datetime.now()
         status, error_code, usage = "success", "", {}
         steps, request_text = [], ""
+        point_meta = {}
+        turn_recorded = False
+        client_left = False
         try:
             for event in sleepstudy_pipeline.run_point(
                     sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent,
                     point_template=point_template):
                 kind = event["type"]
                 if kind == "start":
+                    point_meta = event["data"]
                     request_text = _point_request_text(event["data"], position, total)
                     sse = {"type": "turn", "user_message": request_text}
                 elif kind in ("step", "agent_step"):
@@ -745,7 +768,8 @@ def analyze_sleepstudy_point():
                     # A short finding per point; the comparison across points
                     # is the run summary (/sleepstudy_summary).
                     result = {"type": "text", "data": point["finding"]}
-                    _remember_analysis(request_text, point["markdown"])
+                    if not requested_id:
+                        _remember_analysis(request_text, point["markdown"])
                     # Which point this turn is, so the plan card reopened from
                     # History can tell the finished points from the rest.
                     result["point"] = {k: point[k] for k in ("index", "status", "message", "session_id")}
@@ -755,6 +779,7 @@ def analyze_sleepstudy_point():
                         else "") or str(point.get("agent_report") or "")[:3000]
                     _record_nw_turn(conversation_id, request_text, result, steps, sleep_path,
                                     {str(index): driver_log})
+                    turn_recorded = True
                     sse = {"type": "done", "result": {**result, "conversation_id": conversation_id}}
                 elif kind == "error":
                     sse = {"type": "error", "content": event["content"]}
@@ -762,11 +787,31 @@ def analyze_sleepstudy_point():
                 else:
                     continue
                 yield f"data: {json.dumps(sse, ensure_ascii=False, default=str)}\n\n"
+        except GeneratorExit:
+            # History navigation closes the browser's SSE reader. Keep the
+            # steps already emitted so reopening this conversation can show
+            # where the analysis stopped and offer a clean resume.
+            client_left = True
+            raise
         except Exception as exc:
             print(f"analyze_sleepstudy_point error:\n{traceback.format_exc()}")
             status, error_code = "failed", type(exc).__name__
             yield f"data: {json.dumps({'type': 'error', 'content': str(exc)}, ensure_ascii=False)}\n\n"
         finally:
+            if client_left and request_text and not turn_recorded:
+                partial = {
+                    "type": "text",
+                    "data": "Analysis was interrupted before completion. Resume this time point to continue.",
+                    "point": {
+                        "index": index,
+                        "status": "paused",
+                        "message": "The analysis stream ended before completion.",
+                        "session_id": point_meta.get("session_id", ""),
+                        "agent_summary": "",
+                    },
+                }
+                _record_nw_turn(conversation_id, request_text, partial, steps, sleep_path,
+                                {str(index): driver_log})
             # A page that stopped reading (Pause, closed tab) leaves the agent
             # on its worker thread; cancel it rather than let it spend on.
             agent = _point_agents.pop(sid, None)

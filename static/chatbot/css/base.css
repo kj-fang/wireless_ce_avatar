@@ -654,6 +654,27 @@
     .has-sleepstudy .ss-system-row b { color: #34445a; }
 
     /* The initial HTML selection is a compact, clearly separated session table. */
+    .has-sleepstudy .ss-plan-intro p { margin: 0 0 6px; line-height: 1.5; }
+    .has-sleepstudy .ss-plan-intro p:first-child {
+        padding-bottom: 6px;
+        border-bottom: 1px solid #e8edf2;
+        color: #34445a;
+    }
+    .has-sleepstudy .ss-plan-intro p:last-child { margin-bottom: 0; }
+    .has-sleepstudy .ss-plan-intro ul {
+        margin: 0 0 8px;
+        padding-left: 17px;
+        color: #526176;
+        font-size: 0.82rem;
+    }
+    .has-sleepstudy .ss-plan-intro ul li { margin: 2px 0; }
+    .has-sleepstudy .ss-plan-intro blockquote {
+        margin: 6px 0;
+        padding: 5px 9px;
+        border-left: 3px solid #f0b429;
+        background: #fffaf0;
+        font-size: 0.8rem;
+    }
     .has-sleepstudy .ss-plan-table {
         margin: 10px 0 0;
         border: 1px solid #e1e7ee;

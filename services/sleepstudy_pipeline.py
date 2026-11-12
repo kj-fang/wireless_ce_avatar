@@ -584,9 +584,13 @@ POINT_ANSWER_CONTRACT = """Classify the session into exactly ONE scenario:
 - Neither is clearly supported by the evidence: answer "Please contact Intel Wi-Fi team".
 
 Start root_cause_summary with exactly this line:
-Scenario: <A | B | Please contact Intel Wi-Fi team> | Sleep Study: <confirmed | refuted | partly> | Dominant wake cause: <NDIS / OS request | wake on packet | wake on key or user | timer | app traffic | other> -- <one concise sentence naming the trigger and why low power was delayed>
-"Sleep Study" judges the report's suspected cause ({html_verdict}): confirmed when the driver log shows that cause is what kept the device awake, refuted when it shows another cause, partly when both contributed.
-Then add at most three short bullets: decisive timestamped evidence, Sleep Study comparison, and selected skill (with a brief reason). Do not list every OS job, write a full timeline, repeat the conclusion, or add generic recommendations. Keep the whole response under 120 words. Use only evidence; do not invent numbers."""
+Scenario: <A | B | Please contact Intel Wi-Fi team> | Sleep Study: <confirmed | partly | refuted> | Dominant wake cause: <NDIS / OS request | wake on packet | wake on key or user | timer | app traffic | other> -- <one concise sentence naming the specific trigger (OS command and its GUID / opcode, roam reason, packet type) and what kept the device in D0>
+Keep apart what WOKE the device (the D0 Entry: wake reason, the OS request that brought it up) and what HELD it in D0 (traffic, repeated OS commands, scans or roams that kept it from going back to Dx). The report's "activity by app" is the app's traffic while the device was active: it is about what held the device in D0, not what woke it, so an app that raised no wakes is not ruled out by that alone.
+"Sleep Study" judges the report's suspected cause ({html_verdict}):
+- confirmed: the driver log shows that cause held the device in D0 and nothing else did;
+- partly: that cause may have held it, and the driver log shows other causes that did too (the usual case when traffic ran while OS commands also kept the device busy);
+- refuted: only when the driver log shows that cause could NOT have held the device in D0. For app traffic, that means the TX/RX counters (PROP_GET_STATISTICS) or the data-path lines show little or no data while the device was in D0, or the traffic fell outside the D0 window. Quote that evidence. Without it, answer partly, never refuted.
+Then add at most three short bullets: "Woke:" what brought the device to D0, with timestamps; "Held in D0:" what kept it there, with the cadence or counters; "Sleep Study:" why confirmed / partly / refuted, plus the skill you used in a few words. Do not list every OS job, write a full timeline, repeat the conclusion, or add generic recommendations. Keep the whole response under 140 words. Use only evidence; do not invent numbers."""
 
 
 # The dominant wake cause of a session, in the categories the per-session
@@ -754,9 +758,143 @@ CONTRIBUTING_FACTORS = (
 )
 
 
+# A factor named only to be ruled out ("no roam", "not a FW reload").
+_NEGATED = re.compile(r"(?i)\b(?:no|not|without|never|ruled out|excluded|rather than)\b[^.;:]{0,30}$")
+
+
+def _pieces(text: str) -> list[str]:
+    """A root-cause summary cut into its sentences and bullets, without the
+    contract line's labels, so a factor is matched to the claim naming it."""
+    t = html_unescape(re.sub(r"<[^>]+>", " ", str(text or ""))).replace("**", "").replace("`", "")
+    t = re.sub(r"(?is)^.*?Dominant\s+wake\s+cause\s*:[^\n]*?\s(?:--|—|–)\s", "", t, count=1)
+    out = []
+    for chunk in re.split(r"\n+|\s*•\s*|(?<=[.;])\s+(?=[A-Z(])", t):
+        chunk = re.sub(r"\s+", " ", chunk).strip(" -*\t")
+        if chunk:
+            out.append(chunk)
+    return out
+
+
+def _factor_match(piece: str, pattern: str):
+    for m in re.finditer(pattern, piece, re.I):
+        if not _NEGATED.search(piece[:m.start()]):
+            return m
+    return None
+
+
 def contributing_factors(text: str) -> list[str]:
-    t = str(text or "")
-    return [name for name, pattern in CONTRIBUTING_FACTORS if re.search(pattern, t, re.I)]
+    pieces = _pieces(text)
+    return [name for name, pattern in CONTRIBUTING_FACTORS
+            if any(_factor_match(p, pattern) for p in pieces)]
+
+
+def factor_evidence(text: str, name: str, limit: int = 240) -> str:
+    """The part of a summary that names the factor: the session's evidence
+    for it, timestamps and cadence included. A long sentence naming several
+    factors is cut around this one, so each factor shows its own words."""
+    pattern = dict(CONTRIBUTING_FACTORS).get(name, "")
+    for piece in _pieces(text):
+        m = _factor_match(piece, pattern) if pattern else None
+        if not m:
+            continue
+        if len(piece) <= limit:
+            return piece
+        lo = max(0, m.start() - limit // 3)
+        hi = min(len(piece), lo + limit)
+        lo = piece.rfind(" ", 0, lo) + 1 if lo else 0
+        hi = piece.find(" ", hi) if hi < len(piece) and piece.find(" ", hi) != -1 else len(piece)
+        return ("…" if lo else "") + piece[lo:hi].strip(" ,;") + ("…" if hi < len(piece) else "")
+    return ""
+
+
+def os_jobs(ev: dict) -> dict:
+    """WiFiCx OS jobs that joined the device's wakes, summed: {'GetBSSInfo': 8, ...}."""
+    jobs = {}
+    for entry in (ev or {}).get("device_entries") or []:
+        for wake in entry.get("wakes") or []:
+            for key, value in (wake.get("values") or {}).items():
+                if key.startswith("WiFiJob"):
+                    try:
+                        jobs[key[len("WiFiJob"):]] = jobs.get(key[len("WiFiJob"):], 0) + int(value)
+                    except (TypeError, ValueError):
+                        pass
+    return jobs
+
+
+# What pins a factor down, read from the sentence that names it: the
+# identifier that lets someone act on it, and how often it fired.
+FACTOR_IDS = {
+    "Device-service polling": r"GUID\b[^\n]{0,20}?(0x[0-9A-Fa-f]{8})",
+    "Background-scan roam": r"(ROAM_REASON_[A-Z_]+)",
+}
+_CADENCE = r"(?:every\s*)?[~≈]\s*(\d{1,3})(?:\s*[–-]\s*\d{1,3})?\s*s\b"
+
+# Driver-level facts the Sleep Study cannot show, read from the full analysis.
+DRIVER_FACTS = (
+    ("Woken by the OS, not by the device (non-wireless wake)",
+     r"WAKEUP_BY_NON_WIRELESS|non-wireless wake|did not self-wake|OS pulled it"),
+    ("Firmware intact on resume, no reload",
+     r"(?:FW|firmware)\s+(?:was\s+|image\s+)?intact|no (?:FW|firmware) reload"),
+)
+
+# The action each driver-level factor calls for; {id} is its identifier.
+FACTOR_ACTIONS = {
+    "Device-service polling": ("P0", "Find the service sending PROP_DEVICE_SERVICE_COMMAND{id} and stop its polling in standby"),
+    "Firmware reload on resume": ("P0", "Firmware reloaded on resume: send the driver log to the Intel Wi-Fi team"),
+    "Background-scan roam": ("P1", "Check why the OS runs background scans and roams in standby{id}: scan / roam policy, AP signal"),
+    "Wake on packet": ("P1", "Review the WoWLAN patterns and the remote traffic that matched them"),
+    "Disconnect / reconnect": ("P1", "Find why the link drops in standby (disconnect / deauth reason, AP side)"),
+    "Statistics / BSS queries": ("P2", "Find which client keeps querying statistics / BSS info in standby (WLAN API user, OEM service)"),
+    "Timer": ("P2", "Identify the timer that wakes the device"),
+}
+
+# Follow-ups the agents recommend that are not a root cause of the drain
+# but recur across sessions: (name, pattern, default priority, action).
+# An action row shows when two or more sessions recommend it.
+FOLLOW_UP_TOPICS = (
+    ("D0 entry / exit bounce", r"double D0|D0 Entry/Exit bounce|spurious double|back-to-back TASK_DOT11_RESET",
+     "P1", "Investigate the brief D0 Entry / Exit bounce right after suspend (back-to-back TASK_DOT11_RESET)"),
+)
+
+
+def _section_lines(report: str, title_re: str) -> list[str]:
+    """The lines under a heading of the agent's report, up to the next heading."""
+    out, inside = [], False
+    for line in str(report or "").splitlines():
+        bare = re.sub(r"^[#>*\s]+|[*\s:]+$", "", line).strip()
+        if not inside:
+            inside = bool(bare) and len(bare) < 60 and re.match(title_re, bare, re.I) is not None
+            continue
+        s = line.strip()
+        if re.match(r"^#{1,6}\s", s) or (re.match(r"^\*\*[^*]+\*\*:?$", s) and not re.match(r"^\*\*P\d", s)):
+            break
+        out.append(line)
+    return out
+
+
+def agent_recommendations(report: str) -> list[tuple[str, str]]:
+    """(priority, action) from the agent's Recommendations section."""
+    out, prio = [], "P1"
+    for line in _section_lines(report, r"recommendations?$"):
+        s = line.strip()
+        m = re.match(r"^[-*\s]*\**\s*(P[0-3])\b[^:]*:?\**\s*(.*)$", s)
+        if m:
+            prio, s = m.group(1), m.group(2).strip()
+        s = re.sub(r"^[-*\d.)\s]+", "", s).replace("**", "").replace("`", "")
+        s = re.split(r"\s+[—–-]+\s*evidence\s*:", s, maxsplit=1, flags=re.I)[0].strip()
+        if len(s) > 15:
+            out.append((prio, _short_detail(s, 220)))
+    return out
+
+
+def logs_needed(report: str) -> list[str]:
+    """The extra logs the agent asked for, without the stock 'none' line."""
+    out = []
+    for line in _section_lines(report, r"additional logs needed"):
+        s = re.sub(r"^[-*\d.)\s]+", "", line.strip()).replace("**", "").replace("`", "")
+        if len(s) > 10 and not re.match(r"(?i)\(?none\b", s):
+            out.append(_short_detail(re.split(r"\s+[—–]\s+", s, maxsplit=1)[0], 160))
+    return out
 
 
 def _hypothesis(verdict: str) -> str:
@@ -1521,7 +1659,7 @@ def _stats_tables(stats: dict, total: int) -> list[str]:
 
 # Appended to the editable sleepstudy_summary prompt: the report puts the
 # conclusion on top and folds the rest, so it has to know where one ends.
-SUMMARY_OUTPUT_CONTRACT = """Return only a **Conclusion:** of at most two short sentences. Identify the leading cause across checked sessions and whether driver logs confirm or change the Sleep Study interpretation. Do not add headings, tables, timelines, per-session restatements, or recommendations."""
+SUMMARY_OUTPUT_CONTRACT = """Return only a **Conclusion:** of at most two short sentences. Name the specific driver-level root cause shared across the checked sessions (the OS command and its GUID, the roam reason, the cadence), not just its category, and say what the driver logs add to the Sleep Study interpretation: confirmed, partly (other causes also held the device in D0), or refuted. Do not add headings, tables, timelines, per-session restatements, or recommendations."""
 _DETAILS_MARK = "---DETAILS---"
 
 
@@ -1553,50 +1691,136 @@ def cause_table(points: list[dict], findings: dict) -> tuple[list[str], list[str
     return table, per_session
 
 
+def _most_common(values) -> str:
+    counts = {}
+    for v in values:
+        if v:
+            counts[v] = counts.get(v, 0) + 1
+    return max(counts, key=counts.get) if counts else ""
+
+
 def summarize_run(source: str, points: list[dict], findings: dict,
                   llm_call: Optional[Callable[[str, str], str]] = None,
                   system_prompt: Optional[str] = None,
-                  sessions: Optional[dict] = None) -> str:
+                  sessions: Optional[dict] = None,
+                  reports: Optional[dict] = None) -> str:
     """
-    The run's report: one comparison across sessions, not a second copy of
-    the session cards above it.
-      - the conclusion (one LLM call)
-      - which wake causes the driver logs found, ranked by share of sessions
-      - which factors each session's driver conclusion names (a matrix)
-      - how the Sleep Study's suspected causes held up against the logs
+    The run's report: what the driver logs found across sessions, not a
+    second copy of the session cards above it.
+      - the conclusion (one LLM call), in full
+      - the driver-level root causes, ranked, with a session matrix and the
+        identifier that pins each one down (GUID, roam reason, cadence)
+      - Sleep Study vs driver log side by side: what the report could see,
+        and what the driver logs add
+      - the actions those causes call for, merged across sessions
       - one compact row per session, and the system sessions
+    The per-cause evidence and each session's own recommendations and log
+    requests fold below their section.
     `points` are all the wireless time points (TimePoint dicts), `findings`
     maps the index of each checked one to its agent's root-cause summary,
-    and `sessions` is system_sessions().
+    `reports` (optional) to its full driver analysis, and `sessions` is
+    system_sessions().
     """
     from services.chatbot.engine.speclet_defaults import default_speclet
 
     sessions = sessions or {"bad_total": 0, "wireless": 0, "system": 0, "groups": []}
+    reports = reports or {}
     checked = [p for p in points if p["index"] in findings]
+    n_checked = len(checked)
     esc = lambda value: html_escape(str(value if value is not None else ""), quote=True)
     all_system = not points and sessions["system"] > 0
     top_group = sessions["groups"][0] if sessions["groups"] else None
+    ids_of = lambda ps: ", ".join(str(p["session_id"]) for p in ps)
 
     # ── What the checked sessions add up to ──
-    cause_of, agree_of, factors_of = {}, {}, {}
+    cause_of, agree_of, factors_of, full = {}, {}, {}, {}
     for p in checked:
-        text = findings[p["index"]]
-        cause_of[p["index"]] = dominant_cause(text)[0]
-        agree_of[p["index"]] = sleepstudy_agreement(text) or "unclear"
-        factors_of[p["index"]] = contributing_factors(text)
+        i = p["index"]
+        cause_of[i] = dominant_cause(findings[i])[0]
+        agree_of[i] = sleepstudy_agreement(findings[i]) or "unclear"
+        factors_of[i] = contributing_factors(findings[i])
+        full[i] = reports.get(i) or findings[i]
     causes = {}
     for p in checked:
         causes.setdefault(cause_of[p["index"]], []).append(p)
     ranked = sorted(causes.items(), key=lambda kv: -len(kv[1]))
-    factor_hits = {name: [p for p in checked if name in factors_of[p["index"]]]
-                   for name, _ in CONTRIBUTING_FACTORS}
-    factor_hits = {k: v for k, v in factor_hits.items() if v}
+
+    order = [name for name, _ in CONTRIBUTING_FACTORS]
+    factor_hits = {name: [p for p in checked if name in factors_of[p["index"]]] for name in order}
+    factor_rank = sorted(((k, v) for k, v in factor_hits.items() if v),
+                         key=lambda kv: (-len(kv[1]), order.index(kv[0])))
+    evidence = {name: {p["index"]: factor_evidence(findings[p["index"]], name) for p in ps}
+                for name, ps in factor_rank}
+    ident = {}
+    for name, ps in factor_rank:
+        bits = []
+        pattern = FACTOR_IDS.get(name)
+        if pattern:
+            found = [re.search(pattern, evidence[name][p["index"]]) or re.search(pattern, findings[p["index"]])
+                     for p in ps]
+            value = _most_common(m.group(1) for m in found if m)
+            if value:
+                bits.append(f"GUID {value}" if name == "Device-service polling" else value)
+        if name == "Device-service polling":
+            cadence = _most_common(m.group(1) for m in
+                                   (re.search(_CADENCE, evidence[name][p["index"]]) for p in ps) if m)
+            if cadence:
+                bits.append(f"~{cadence} s")
+        ident[name] = " · ".join(bits)
+    fact_hits = []
+    for label, pattern in DRIVER_FACTS:
+        ps = [p for p in checked if any(_factor_match(x, pattern) for x in _pieces(full[p["index"]]))]
+        if ps:
+            fact_hits.append((label, ps))
+
     agree_counts = {}
     for p in checked:
         agree_counts[agree_of[p["index"]]] = agree_counts.get(agree_of[p["index"]], 0) + 1
     hypotheses = {}
     for p in points:
         hypotheses.setdefault(_hypothesis(p.get("html_verdict")), []).append(p)
+
+    # ── Actions, merged across sessions ──
+    # Each session's own recommendations, grouped by the cause or follow-up
+    # they address; a topic is matched before a factor, since a follow-up
+    # line can mention a factor in passing.
+    topics = [(name, pat) for name, pat, _, _ in FOLLOW_UP_TOPICS] + list(CONTRIBUTING_FACTORS)
+    recs_by = {}
+    for p in checked:
+        seen = set()
+        for prio, text in agent_recommendations(reports.get(p["index"], "")):
+            name = next((n for n, pat in topics if re.search(pat, text, re.I)), "Other")
+            if name not in seen:
+                seen.add(name)
+                recs_by.setdefault(name, []).append((p, prio, text))
+
+    def agents_priority(name, default):
+        """The priority most of the agents gave it (the more urgent on a tie)."""
+        prios = [prio for _, prio, _ in recs_by.get(name, [])]
+        return min(set(prios), key=lambda x: (-prios.count(x), x)) if prios else default
+
+    actions = []
+    for name, ps in factor_rank:
+        if name in FACTOR_ACTIONS:
+            prio, text = FACTOR_ACTIONS[name]
+            actions.append((agents_priority(name, prio),
+                            text.replace("{id}", f" ({ident[name]})" if ident[name] else ""), name, ps))
+    for name, _, prio, text in FOLLOW_UP_TOPICS:
+        ps = [p for p, _, _ in recs_by.get(name, [])]
+        if len(ps) >= 2:
+            actions.append((agents_priority(name, prio), text, name, ps))
+    actions.sort(key=lambda a: (a[0], -len(a[3])))
+    logs = {}
+    for p in checked:
+        for line in logs_needed(reports.get(p["index"], "")):
+            # Two sessions asking about the same GUID / ID ask for one log.
+            hex_id = re.search(r"0x[0-9A-Fa-f]{6,8}", line)
+            key = (f"id:{hex_id.group(0).lower()}" if hex_id
+                   else re.sub(r"[^a-z0-9]+", " ", line.lower()).strip()[:40])
+            entry = logs.setdefault(key, [line, []])
+            if p not in entry[1]:
+                entry[1].append(p)
+    logs_ranked = sorted(logs.values(), key=lambda e: -len(e[1]))
 
     # ── The conclusion ──
     conclusion = ""
@@ -1608,10 +1832,12 @@ def summarize_run(source: str, points: list[dict], findings: dict,
                f"session(s)); hand it to the platform team." if top_group else ""))
     elif llm_call is not None and (points or sessions["groups"]):
         lines = [f"Bad sessions: {sessions['bad_total']}; wireless: {sessions['wireless']}; "
-                 f"system: {sessions['system']}. Checked against driver logs: {len(checked)} of {len(points)}."]
-        lines += [f"Driver-log cause {name}: {len(ps)}/{len(checked)} sessions" for name, ps in ranked]
-        lines += [f"Factor {name}: {len(ps)}/{len(checked)} sessions" for name, ps in factor_hits.items()]
-        lines += [f"Sleep Study verdict {k}: {v}/{len(checked)}" for k, v in agree_counts.items()]
+                 f"system: {sessions['system']}. Checked against driver logs: {n_checked} of {len(points)}."]
+        lines += [f"Driver-level root cause {name}" + (f" ({ident[name]})" if ident[name] else "")
+                  + f": {len(ps)}/{n_checked} sessions" for name, ps in factor_rank]
+        lines += [f"Driver fact '{label}': {len(ps)}/{n_checked} sessions" for label, ps in fact_hits]
+        lines += [f"Wake-cause category {name}: {len(ps)}/{n_checked} sessions" for name, ps in ranked]
+        lines += [f"Sleep Study verdict {k}: {v}/{n_checked}" for k, v in agree_counts.items()]
         for p in points:
             line = (f"Session {p['session_id']} SW DRIPS {_pct(p['sw_drip_pct'])}; Sleep Study: "
                     f"{p.get('html_verdict', '')}; ")
@@ -1631,12 +1857,18 @@ def summarize_run(source: str, points: list[dict], findings: dict,
             conclusion = re.sub(r"^\s*(?:#{1,6}\s*)?(?:\*\*)?Conclusion:?\s*", "", conclusion,
                                 flags=re.IGNORECASE)
             conclusion = re.sub(r"\*{1,2}", "", conclusion.replace(r"\*", "")).strip()
-            conclusion = _short_detail(conclusion, 420)
+            # Shown whole: the contract keeps it to two sentences, and a cut
+            # here would drop the end of the run's main finding.
+            conclusion = _short_detail(conclusion, 1200)
         except Exception as exc:
             conclusion = f"Summary unavailable ({type(exc).__name__}); see the comparison below."
+    elif factor_rank:
+        name, ps = factor_rank[0]
+        conclusion = (f"Driver logs most often point to {name}" + (f" ({ident[name]})" if ident[name] else "")
+                      + f": {len(ps)}/{n_checked} checked sessions.")
     elif ranked:
         lead, ps = ranked[0]
-        conclusion = f"Driver logs most often point to {lead} ({len(ps)}/{len(checked)} checked sessions)."
+        conclusion = f"Driver logs most often point to {lead} ({len(ps)}/{n_checked} checked sessions)."
     elif points:
         conclusion = "No driver logs were checked; this report reflects the Sleep Study evidence only."
 
@@ -1650,12 +1882,22 @@ def summarize_run(source: str, points: list[dict], findings: dict,
         kicker, subtitle = ("MODERN STANDBY · PLATFORM ISSUE",
                             "No wireless session to explain: every bad session is blocked outside the wireless driver.")
     else:
-        lead_name, lead_ps = ranked[0] if ranked else ("—", [])
+        if factor_rank:
+            lead_name, lead_ps = factor_rank[0]
+            lead_label = " · ".join(x for x in ("top root cause", ident[lead_name],
+                                                 f"{len(lead_ps)}/{n_checked} sessions") if x)
+        elif ranked:
+            lead_name, lead_ps = ranked[0]
+            lead_label = f"leading cause · {len(lead_ps)}/{n_checked} sessions"
+        else:
+            lead_name, lead_label = "—", "top root cause"
         judged = sum(v for k, v in agree_counts.items() if k != "unclear")
-        stats = [(lead_name, f"leading cause · {len(lead_ps)}/{len(checked)} sessions" if checked else "leading cause"),
-                 (f"{len(checked)} / {len(points)}", "sessions checked"),
-                 (f"{agree_counts.get('confirmed', 0)} / {judged}" if judged else "—", "Sleep Study confirmed"),
-                 (sessions["system"], "system sessions")]
+        held = agree_counts.get("confirmed", 0) + agree_counts.get("partly", 0)
+        stats = [(lead_name, lead_label),
+                 (f"{n_checked} / {len(points)}", "sessions checked"),
+                 (f"{held} / {judged}" if judged else "—", "Sleep Study cause held (fully or partly)"),
+                 (sessions["system"], "system sessions") if sessions["system"]
+                 else (len(factor_rank), "driver-level causes found")]
         kicker = "MODERN STANDBY · DRIVER LOG CORRELATION"
         subtitle = (f"{sessions['bad_total']} bad session(s) on battery · {len(points)} wireless analysed · "
                     f"{sessions['system']} system")
@@ -1679,51 +1921,128 @@ def summarize_run(source: str, points: list[dict], findings: dict,
                 f'<span class="ss-section-kicker">{kicker_text}</span><h3>{title}</h3></div>'
                 + (f'<span class="ss-muted">{esc(note)}</span>' if note else "") + '</div>')
 
-    # ── Root causes, ranked ──
-    if ranked:
+    def fold(title, body):
+        return (f'    <details class="ss-fold"><summary>{esc(title)}</summary>'
+                f'<div class="ss-fold-body">{body}</div></details>')
+
+    # ── Root causes, ranked, by session ──
+    if factor_rank:
+        cols = "".join(f'<th>{esc(p["session_id"])}</th>' for p in checked)
         out += ['  <section class="ss-report-section">',
-                heading("DRIVER LOG", "Root causes, ranked", f"{len(checked)} session(s) checked")]
+                heading("DRIVER LOG", "Root causes, ranked", f"{n_checked} session(s) checked"),
+                '    <table class="ss-matrix ss-rank-table"><thead><tr><th>Root cause</th><th>Share</th>'
+                + cols + '</tr></thead><tbody>']
+        for name, ps in factor_rank:
+            share = 100 * len(ps) / n_checked
+            cells = "".join('<td class="hit">●</td>' if p in ps else '<td></td>' for p in checked)
+            sub = f'<br><small>{esc(ident[name])}</small>' if ident[name] else ""
+            out.append(f'      <tr><th>{esc(name)}{sub}</th><td class="bar">'
+                       f'<span class="ss-drips-track"><i class="ss-drips-fill" style="width:{share:.0f}%"></i></span>'
+                       f'<b>{len(ps)}/{n_checked}</b></td>{cells}</tr>')
+        out.append('    </tbody></table>')
+        body = ""
+        for name, ps in factor_rank:
+            items = "".join(f'<li><b>{esc(p["session_id"])}</b> · {esc(evidence[name][p["index"]])}</li>'
+                            for p in ps if evidence[name][p["index"]])
+            if items:
+                body += f'<h4>{esc(name)}</h4><ul>{items}</ul>'
+        if body:
+            out.append(fold("Evidence by root cause", body))
+        out.append('  </section>')
+    elif ranked:
+        out += ['  <section class="ss-report-section">',
+                heading("DRIVER LOG", "Root causes, ranked", f"{n_checked} session(s) checked")]
         for name, ps in ranked:
-            share = 100 * len(ps) / len(checked)
+            share = 100 * len(ps) / n_checked
             out.append(
                 f'    <div class="ss-rank-row"><span class="ss-rank-name">{esc(name)}</span>'
                 f'<span class="ss-drips-track"><i class="ss-drips-fill" style="width:{share:.0f}%"></i></span>'
-                f'<span class="ss-rank-value"><b>{share:.0f}%</b> · {len(ps)}/{len(checked)}</span>'
-                f'<span class="ss-rank-sessions">{esc(", ".join(str(p["session_id"]) for p in ps))}</span></div>')
+                f'<span class="ss-rank-value"><b>{share:.0f}%</b> · {len(ps)}/{n_checked}</span>'
+                f'<span class="ss-rank-sessions">{esc(ids_of(ps))}</span></div>')
         out.append('  </section>')
 
-    # ── Contributing factors × session ──
-    if factor_hits:
-        cols = "".join(f'<th>{esc(p["session_id"])}</th>' for p in checked)
-        out += ['  <section class="ss-report-section">',
-                heading("ACROSS SESSIONS", "Contributing factors", "named in each driver conclusion"),
-                '    <table class="ss-matrix"><thead><tr><th>Factor</th>' + cols + '<th>Share</th></tr></thead><tbody>']
-        for name, ps in sorted(factor_hits.items(), key=lambda kv: -len(kv[1])):
-            cells = "".join('<td class="hit">●</td>' if p in ps else '<td></td>' for p in checked)
-            out.append(f'      <tr><th>{esc(name)}</th>{cells}'
-                       f'<td class="share">{len(ps)}/{len(checked)}</td></tr>')
-        out += ['    </tbody></table>', '  </section>']
-
-    # ── The Sleep Study's suspected causes against the logs ──
+    # ── Sleep Study vs driver log, side by side ──
     # With nothing checked it still says what the report suspected.
     if points:
         chip = lambda label, cls, n: (f'<span class="ss-state-pill {cls}">{label} {n}</span>' if n else "")
         out += ['  <section class="ss-report-section">',
-                heading("CROSS-CHECK", "Sleep Study vs driver log")]
-        if checked:
-            out.append('    <div class="ss-compare-chips">'
-                       + chip("Confirmed", "aligned", agree_counts.get("confirmed", 0))
-                       + chip("Partly", "review", agree_counts.get("partly", 0))
-                       + chip("Refuted", "review", agree_counts.get("refuted", 0))
-                       + chip("Unclear", "pending", agree_counts.get("unclear", 0)) + '</div>')
+                heading("CROSS-CHECK", "Sleep Study vs driver log", "what each one can see")]
         for hyp, ps in sorted(hypotheses.items(), key=lambda kv: -len(kv[1])):
+            saw = [f'Suspected <b>{esc(hyp or "no clear cause")}</b> in {len(ps)}/{len(points)} session(s)']
+            shares = [re.search(r"(\d+)% of ([a-z ]+)\)", str(p.get("html_verdict") or "")) for p in ps]
+            shares = [m for m in shares if m]
+            app = re.search(r"\(([^)]+)\)", hyp or "")
+            if shares and app:
+                lo, hi = min(int(m.group(1)) for m in shares), max(int(m.group(1)) for m in shares)
+                saw.append(f'{esc(app.group(1))}: {lo}%' + (f'–{hi}%' if hi != lo else '')
+                           + f' of {esc(shares[0].group(2))}')
+            jobs = {}
+            for p in ps:
+                for k, v in os_jobs(p.get("wake_evidence") or {}).items():
+                    jobs[k] = jobs.get(k, 0) + v
+            if jobs:
+                saw.append("OS jobs in its wakes: " + esc(", ".join(
+                    f"{k} ×{v}" for k, v in sorted(jobs.items(), key=lambda kv: -kv[1])[:4])))
+            short = sum(short_device_wakes(p.get("wake_evidence") or {}) for p in ps)
+            saw.append(f"Short device wakes: {short}")
+
             judged_here = [p for p in ps if p["index"] in findings]
-            tally = ", ".join(f"{k} {sum(1 for p in judged_here if agree_of[p['index']] == k)}"
-                              for k in ("confirmed", "partly", "refuted", "unclear")
-                              if any(agree_of[p["index"]] == k for p in judged_here))
-            out.append(f'    <p class="ss-compare-line">Suspected <b>{esc(hyp or "no clear cause")}</b> '
-                       f'in {len(ps)}/{len(points)} session(s)'
-                       + (f' → driver logs: {esc(tally)}' if tally else ' → not checked') + '</p>')
+            if judged_here:
+                adds = []
+                for name, hits in factor_rank:
+                    here = [p for p in hits if p in judged_here]
+                    if here:
+                        adds.append(f'<b>{esc(name)}</b>' + (f' ({esc(ident[name])})' if ident[name] else "")
+                                    + f' · {len(here)}/{len(judged_here)}')
+                for label, hits in fact_hits:
+                    here = [p for p in hits if p in judged_here]
+                    if here:
+                        adds.append(f'{esc(label)} · {len(here)}/{len(judged_here)}')
+                counts = {k: sum(1 for p in judged_here if agree_of[p["index"]] == k)
+                          for k in ("confirmed", "partly", "refuted", "unclear")}
+                verdict = ('<div class="ss-compare-chips">'
+                           + chip("Confirmed", "aligned", counts["confirmed"])
+                           + chip("Partly", "review", counts["partly"])
+                           + chip("Refuted", "review", counts["refuted"])
+                           + chip("Unclear", "pending", counts["unclear"]) + '</div>')
+                right = ("<ul>" + "".join(f"<li>{a}</li>" for a in adds) + "</ul>" if adds
+                         else '<p class="ss-muted">No driver-level cause isolated.</p>') + verdict
+            else:
+                right = '<p class="ss-muted">Not checked against a driver log.</p>'
+            out += ['    <div class="ss-vs">',
+                    '      <div class="ss-vs-col"><h4>Sleep Study saw</h4><ul>'
+                    + "".join(f"<li>{s}</li>" for s in saw) + '</ul>'
+                    '<p class="ss-muted">Which app used the network and which OS jobs joined a wake; '
+                    'not the command behind them, how often it fired, or why the driver stayed in D0.</p></div>',
+                    f'      <div class="ss-vs-col adds"><h4>Driver log adds</h4>{right}</div>',
+                    '    </div>']
+        out.append('  </section>')
+
+    # ── What to do next, merged across sessions ──
+    if actions or logs_ranked:
+        out += ['  <section class="ss-report-section">',
+                heading("NEXT STEPS", "Actions", "merged across sessions")]
+        for prio, text, name, ps in actions:
+            out.append(f'    <div class="ss-action"><span class="ss-prio {prio.lower()}">{prio}</span>'
+                       f'<span class="ss-action-text">{esc(text)}</span>'
+                       f'<span class="ss-action-sessions">{len(ps)}/{n_checked} · {esc(ids_of(ps))}</span></div>')
+        if logs_ranked:
+            line, ps = logs_ranked[0]
+            out.append(f'    <div class="ss-action"><span class="ss-prio logs">LOGS</span>'
+                       f'<span class="ss-action-text">{esc(line)}</span>'
+                       f'<span class="ss-action-sessions">{len(ps)}/{n_checked} · {esc(ids_of(ps))}</span></div>')
+        body = ""
+        for name in ([n for n, _ in factor_rank] + [t[0] for t in FOLLOW_UP_TOPICS] + ["Other"]):
+            if recs_by.get(name):
+                body += (f'<h4>{esc(name)}</h4><ul>' + "".join(
+                    f'<li><b>{esc(p["session_id"])}</b> · {esc(prio)} · {esc(text)}</li>'
+                    for p, prio, text in recs_by[name]) + '</ul>')
+        if logs_ranked:
+            body += ('<h4>Logs needed</h4><ul>' + "".join(
+                f'<li>{esc(line)} <span class="ss-muted">({esc(ids_of(ps))})</span></li>'
+                for line, ps in logs_ranked[:6]) + '</ul>')
+        if body:
+            out.append(fold("Each session's recommendations and logs needed", body))
         out.append('  </section>')
 
     # ── One row per session ──
@@ -1731,12 +2050,13 @@ def summarize_run(source: str, points: list[dict], findings: dict,
         out += ['  <section class="ss-report-section">',
                 heading("SESSIONS", "Per session", "details are in the session cards above"),
                 '    <table class="ss-matrix ss-session-table"><thead><tr><th>Session</th><th>SW DRIPS</th>'
-                '<th>Driver log cause</th><th>vs Sleep Study</th></tr></thead><tbody>']
+                '<th>Driver log root cause</th><th>vs Sleep Study</th></tr></thead><tbody>']
         for p in points:
             if p["index"] in findings:
                 agree = agree_of[p["index"]]
                 cls = {"confirmed": "aligned", "partly": "review", "refuted": "review"}.get(agree, "pending")
-                cause_cell = f'<span class="ss-cause-pill">{esc(cause_of[p["index"]])}</span>'
+                named = factors_of[p["index"]] or [cause_of[p["index"]]]
+                cause_cell = " ".join(f'<span class="ss-cause-pill">{esc(n)}</span>' for n in named[:3])
                 agree_cell = f'<span class="ss-state-pill {cls}">{esc(agree)}</span>'
             else:
                 cause_cell = '<span class="ss-muted">not checked</span>'
@@ -1754,5 +2074,3 @@ def summarize_run(source: str, points: list[dict], findings: dict,
         out.append('  </section>')
     out.append('</section>')
     return "\n".join(out)
-
-

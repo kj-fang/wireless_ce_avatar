@@ -331,15 +331,7 @@ def _point_request_text(point: dict, position: int, total: int) -> str:
     log_name = os.path.basename(log_path) if log_path else "(none selected)"
     device = point.get("device_label") or "wireless"
 
-    jobs = {}
-    for entry in (point.get("wake_evidence") or {}).get("device_entries") or []:
-        for wake in entry.get("wakes") or []:
-            for key, value in (wake.get("values") or {}).items():
-                if key.startswith("WiFiJob"):
-                    try:
-                        jobs[key[len("WiFiJob"):]] = jobs.get(key[len("WiFiJob"):], 0) + int(value)
-                    except ValueError:
-                        pass
+    jobs = sleepstudy_pipeline.os_jobs(point.get("wake_evidence") or {})
     top_jobs = ", ".join(f"{k} ×{v}" for k, v in sorted(jobs.items(), key=lambda kv: -kv[1])[:4])
 
     description = (f"Session {point['session_id']} ({device}, SW DRIPS {drip_text}): why did the "
@@ -358,6 +350,58 @@ def _point_request_text(point: dict, position: int, total: int) -> str:
         f"Issue description: {description}",
         f"Issue time: {point.get('issue_time') or 'unknown'}{window}",
         f"Sleep Study {position}/{total} · driver log {log_name}",
+    ])
+
+
+def _report_request_text(points: list[dict], findings: dict) -> str:
+    """
+    The user turn of the run's report, shaped like a time point's: the
+    cross-session question the report answers (what kept the driver in D0,
+    the root cause the sessions share, whether the driver logs back what the
+    Sleep Study blamed) and the span of time the checked sessions cover.
+    """
+    checked = [p for p in points if p.get("index") in findings] or points
+    devices = sorted({p.get("device_label") or "wireless" for p in checked})
+    device = " / ".join(devices)
+    drips = [p["sw_drip_pct"] for p in checked if isinstance(p.get("sw_drip_pct"), (int, float))]
+    drip_text = ""
+    if drips:
+        lo, hi = min(drips), max(drips)
+        drip_text = f", SW DRIPS {lo:.1f}%" if lo == hi else f", SW DRIPS {lo:.1f}–{hi:.1f}%"
+
+    blamed = {}
+    for p in checked:
+        h = sleepstudy_pipeline._hypothesis(p.get("html_verdict") or "")
+        if h:
+            blamed[h] = blamed.get(h, 0) + 1
+    blamed_text = "; ".join(f"{h} ×{n}" if len(checked) > 1 else h
+                            for h, n in sorted(blamed.items(), key=lambda kv: -kv[1]))
+
+    n = len(checked)
+    if n == 1:
+        description = (f"For session {checked[0].get('session_id')}, checked against its driver log "
+                       f"({device}{drip_text}): what kept the {device} driver in D0 during Modern "
+                       f"Standby, and does the driver log back what Sleep Study blamed")
+    else:
+        description = (f"Across the {n} sessions checked against their driver log ({device}{drip_text}): "
+                       f"what kept the {device} driver in D0 during Modern Standby, which root cause "
+                       f"do they share, and does the driver log back what Sleep Study blamed")
+    description += f" ({blamed_text})?" if blamed_text else "?"
+
+    def _when(value):
+        try:
+            return datetime.strptime(str(value), "%m/%d/%Y %H:%M:%S")
+        except ValueError:
+            return None
+    starts = [(_when(p.get("window_start")), p["window_start"]) for p in checked if p.get("window_start")]
+    ends = [(_when(p.get("window_end")), p["window_end"]) for p in checked if p.get("window_end")]
+    starts = [s for s in starts if s[0]]
+    ends = [e for e in ends if e[0]]
+    span = (f"{min(starts)[1]} → {max(ends)[1]}" if starts and ends else "unknown")
+    return "\n".join([
+        f"Issue description: {description}",
+        f"Issue time: {span} ({n} session window{'s' if n != 1 else ''})",
+        f"Sleep Study report · {len(findings)}/{len(points)} session(s) checked against a driver log",
     ])
 
 
@@ -647,7 +691,9 @@ def sleepstudy_summary():
         return jsonify({"success": False, "error": "Sleep Study run was not found in History."}), 404
     # A point counts as checked when its agent ran; its finding is what the
     # agent concluded, not the turn's text (which also quotes the report).
-    findings = {}
+    # The full analysis (recommendations, logs needed) is the folded part of
+    # the point's card, after "Detailed driver analysis".
+    findings, reports = {}, {}
     for turn in conv.get("turns") or []:
         result = turn.get("result") or {}
         point = result.get("point") if isinstance(result, dict) else None
@@ -655,6 +701,10 @@ def sleepstudy_summary():
                 and point.get("status") == "analyzed":
             findings[int(point["index"])] = (point.get("agent_summary")
                                              or history_service.assistant_text_from_result(result))
+            card = str(result.get("data") or "")
+            if "**Detailed driver analysis**" in card:
+                full = card.split("**Detailed driver analysis**", 1)[1]
+                reports[int(point["index"])] = full.rsplit("</details>", 1)[0].strip()
 
     spend = _new_spend()
     llm_model, llm_call = _one_shot_llm(spend, max_tokens=2500)
@@ -664,7 +714,7 @@ def sleepstudy_summary():
         markdown = sleepstudy_pipeline.summarize_run(
             sleep_path, points, findings, llm_call,
             system_prompt=conversation_speclet(_get_or_create_agent(), "sleepstudy_summary"),
-            sessions=sleepstudy_pipeline.system_sessions(sleep_path))
+            sessions=sleepstudy_pipeline.system_sessions(sleep_path), reports=reports)
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
@@ -682,8 +732,7 @@ def sleepstudy_summary():
 
     result = {"type": "text", "data": markdown}
     if points:
-        request_text = (f"Report: {len(findings)} of {len(points)} time point(s) checked "
-                        f"against a driver log")
+        request_text = _report_request_text(points, findings)
     else:
         # No wireless session: nothing was checked because nothing needed it.
         request_text = "Report: platform (system) issue, no driver log check needed"

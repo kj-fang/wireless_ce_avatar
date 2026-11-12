@@ -698,6 +698,103 @@
     .has-sleepstudy .ss-compare-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
     .has-sleepstudy .ss-compare-line { margin: 4px 0 0; color: #445468; font-size: 0.75rem; }
 
+    /* Report: root causes ranked, with a share bar beside the session marks. */
+    .has-sleepstudy .ss-rank-table td.bar {
+        min-width: 110px;
+        white-space: nowrap;
+        text-align: left;
+    }
+    .has-sleepstudy .ss-rank-table td.bar .ss-drips-track {
+        display: inline-block;
+        width: 64px;
+        height: 7px;
+        margin-right: 6px;
+        vertical-align: middle;
+        background: #eef2f6;
+    }
+    .has-sleepstudy .ss-rank-table td.bar .ss-drips-fill { background: linear-gradient(90deg, #3b8fd4, #0a6cb4); }
+    .has-sleepstudy .ss-rank-table td.bar b { color: #26374b; }
+
+    /* Report: Sleep Study saw / driver log adds, side by side. */
+    .has-sleepstudy .ss-vs {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        gap: 8px;
+        margin-top: 6px;
+    }
+    .has-sleepstudy .ss-vs-col {
+        padding: 9px 11px;
+        border: 1px solid #e6ecf2;
+        border-radius: 10px;
+        background: #f8fafc;
+        font-size: 0.74rem;
+        color: #34445a;
+    }
+    .has-sleepstudy .ss-vs-col.adds { border-color: #cfe5f5; background: #f2f8fd; }
+    .has-sleepstudy .ss-vs-col h4 {
+        margin: 0 0 5px;
+        color: #7a889a;
+        font-size: 0.66rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+    }
+    .has-sleepstudy .ss-vs-col.adds h4 { color: #0879bd; }
+    .has-sleepstudy .ss-vs-col ul { margin: 0; padding-left: 16px; }
+    .has-sleepstudy .ss-vs-col li { margin: 2px 0; overflow-wrap: anywhere; }
+    .has-sleepstudy .ss-vs-col p { margin: 6px 0 0; }
+    .has-sleepstudy .ss-vs-col .ss-compare-chips { margin: 7px 0 0; }
+    @media (max-width: 640px) {
+        .has-sleepstudy .ss-vs { grid-template-columns: minmax(0, 1fr); }
+    }
+
+    /* Report: actions merged across sessions. */
+    .has-sleepstudy .ss-action {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        gap: 8px;
+        align-items: baseline;
+        padding: 6px 0;
+        font-size: 0.76rem;
+        color: #26374b;
+    }
+    .has-sleepstudy .ss-action + .ss-action { border-top: 1px solid #eef2f6; }
+    .has-sleepstudy .ss-prio {
+        min-width: 34px;
+        padding: 2px 6px;
+        border-radius: 6px;
+        font-size: 0.64rem;
+        font-weight: 800;
+        text-align: center;
+        color: #5f6b7b;
+        background: #eef1f5;
+    }
+    .has-sleepstudy .ss-prio.p0 { color: #a32121; background: #fde8e8; }
+    .has-sleepstudy .ss-prio.p1 { color: #97520d; background: #fff3d9; }
+    .has-sleepstudy .ss-prio.logs { color: #075d91; background: #e7f4fb; }
+    .has-sleepstudy .ss-action-text { overflow-wrap: anywhere; }
+    .has-sleepstudy .ss-action-sessions { color: #8090a3; font-size: 0.68rem; white-space: nowrap; }
+
+    /* Report: folded cross-session detail. */
+    .has-sleepstudy .ss-fold {
+        margin-top: 8px;
+        border: 1px solid #e3eaf1;
+        border-radius: 10px;
+        background: #fff;
+    }
+    .has-sleepstudy .ss-fold > summary {
+        padding: 7px 11px;
+        color: #0879bd;
+        font-size: 0.74rem;
+        font-weight: 650;
+        cursor: pointer;
+    }
+    .has-sleepstudy .ss-fold[open] > summary { border-bottom: 1px solid #edf1f5; }
+    .has-sleepstudy .ss-fold-body { padding: 4px 12px 10px; font-size: 0.74rem; color: #34445a; }
+    .has-sleepstudy .ss-fold-body h4 { margin: 8px 0 3px; font-size: 0.74rem; color: #26374b; }
+    .has-sleepstudy .ss-fold-body ul { margin: 0; padding-left: 16px; }
+    .has-sleepstudy .ss-fold-body li { margin: 3px 0; overflow-wrap: anywhere; }
+
     /* The initial HTML selection is a compact, clearly separated session table. */
     .has-sleepstudy .ss-plan-intro p { margin: 0 0 6px; line-height: 1.5; }
     .has-sleepstudy .ss-plan-intro p:first-child {

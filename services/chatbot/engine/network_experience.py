@@ -17,6 +17,29 @@ class NwAnalysisAgentSystem(WifiLogAgentSystem):
 
     CAPABILITY_POLICY = NW_AGENT_POLICY
 
+    #: NW's own skills (nw_skills.yaml on the share: the Sleep Study /
+    #: Modern Standby driver skills), set once at startup by set_up_app.
+    #: When present they REPLACE the Wi-Fi skills on this page.
+    extra_skills: dict = {}
+    #: Keys of the Wi-Fi skill set, recorded at startup.
+    wifi_skill_keys: frozenset = frozenset()
+
+    def apply_updated_skills(self, skills) -> None:
+        """
+        Keep NW on its own skills through every swap. A reload, an append or
+        a New session hands in a Wi-Fi YAML (NW shares the Wi-Fi user/cloud
+        files); its Wi-Fi skills are left out, NW's are kept, and anything
+        else in it -- a skill someone appended -- is added. An incoming skill
+        with an NW key wins, so an appended edit of one of them applies.
+        """
+        cls = type(self)
+        incoming = dict(skills or {})
+        if cls.extra_skills:
+            incoming = {k: v for k, v in incoming.items()
+                        if k in cls.extra_skills or k not in cls.wifi_skill_keys}
+            incoming = {**cls.extra_skills, **incoming}
+        super().apply_updated_skills(incoming)
+
     def fetch_filtered_logs(self, skill_name: str) -> str:
         """Return NW's uncollapsed skill evidence payload."""
         skill = self.skills.get(skill_name)

@@ -911,11 +911,15 @@ def render_point_finding(p: dict) -> str:
 #  AGENT
 # ══════════════════════════════════════════════════════════════════════════════
 
-def default_agent_factory(device: str):
+def default_agent_factory(device: str, wifi_skills: Optional[dict] = None):
     """
     A fresh agent of the device's chatbot, sharing the boot-time agent's
     client, model, skills and ACE runner -- the same agent a user gets on the
     Wi-Fi or BT page, so its prompts and skills apply here unchanged.
+
+    `wifi_skills` replaces the boot-time Wi-Fi skills: the NW page passes its
+    conversation's, so a skill appended there ("Append Skills from YAML",
+    e.g. Modern Standby Wake) is used by the run at once, not after a restart.
     """
     from configs.global_configs import app_config
 
@@ -931,6 +935,8 @@ def default_agent_factory(device: str):
         base = getattr(app_config, "log_chatbot_agent", None)
 
     skills = getattr(base, "skills", None) or getattr(llm, "skills", None) or {}
+    if wifi_skills and device != ssa.DEVICE_BT:
+        skills = wifi_skills
     agent = agent_cls(client=llm.client, model=getattr(llm, "model", "gpt-4.1"), skills=skills)
     ace_runner = getattr(base, "ace_runner", None)
     if ace_runner is not None:

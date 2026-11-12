@@ -33,6 +33,7 @@ from typing import Optional, Tuple
 
 from configs.path_configs import (
     LOCAL_SKILLS_DIR_NAME,
+    NW_SKILLS_YAML_FILENAME,
     SKILLS_CONFIG_DIR_prim,
     SKILLS_CONFIG_DIR_bkup,
     SKILLS_YAML_DATED_RE,
@@ -305,6 +306,35 @@ def refresh_local_cloud_baseline() -> Tuple[Optional[Path], Optional[date]]:
         pass
 
     return (target, share_date if share_date is not None else date.today())
+
+
+def refresh_nw_skills_yaml(share_dir: Optional[str]) -> Optional[Path]:
+    """
+    The Network Experience extra skills file (nw_skills.yaml), mirrored from
+    the share into the local `cloud/` dir, or None when there is none.
+
+    `share_dir` is the reachable share skills_config dir, or None when the
+    caller already knows the share is unreachable -- probing it again would
+    cost seconds off-VPN -- in which case the last mirror is used. A file
+    withdrawn from a reachable share is withdrawn from the mirror too. The
+    Wi-Fi mirror's pruning only touches `skills_*`, so the two coexist.
+    """
+    import shutil as _shutil
+    target = local_cloud_baseline_dir() / NW_SKILLS_YAML_FILENAME
+    if share_dir:
+        source = Path(share_dir) / NW_SKILLS_YAML_FILENAME
+        try:
+            if source.exists():
+                current = (target.exists()
+                           and source.stat().st_size == target.stat().st_size
+                           and int(source.stat().st_mtime) == int(target.stat().st_mtime))
+                if not current:
+                    _shutil.copy2(str(source), str(target))
+            elif target.exists():
+                target.unlink()
+        except OSError as e:
+            print(f"[skills_yaml] refresh_nw_skills_yaml failed: {e}")
+    return target if target.exists() else None
 
 
 # --- Status summary for the chatbot init dialog --------------------------

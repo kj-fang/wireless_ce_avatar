@@ -732,6 +732,14 @@ def analyze_sleepstudy_point():
     # the stream opens; the speclet cache was primed at boot.
     point_template = _pinned_point_template(conversation_id) \
         or conversation_speclet(_get_or_create_agent(), "sleepstudy_point")
+    # The point agent reads this conversation's Wi-Fi skills (NW loads the
+    # same skill set as the Wi-Fi page), so a skill appended on this page --
+    # e.g. Modern Standby Wake -- is used by this run, not after a restart.
+    nw_skills = dict(getattr(_get_or_create_agent(), "skills", None) or {})
+
+    def point_agent_factory(device):
+        return sleepstudy_pipeline.default_agent_factory(device, wifi_skills=nw_skills or None)
+
     out_dir = os.path.join(
         app_config.avatarfiles_dir or os.path.expanduser("~"),
         "sleepstudy", datetime.now().strftime("%Y%m%d_%H%M%S") + f"_p{index:02d}",
@@ -752,7 +760,7 @@ def analyze_sleepstudy_point():
         try:
             for event in sleepstudy_pipeline.run_point(
                     sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent,
-                    point_template=point_template):
+                    point_template=point_template, agent_factory=point_agent_factory):
                 kind = event["type"]
                 if kind == "start":
                     point_meta = event["data"]

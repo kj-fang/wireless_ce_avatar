@@ -138,9 +138,15 @@
         _updateRestoreBtn();
     }
 
+    function _showAvatarForHistory() {
+        if (window.__chatRecipient !== 'echo') return true;
+        return typeof window.selectChatRecipient === 'function' && window.selectChatRecipient('avatar');
+    }
+
     // ➕ New Conversation: reset everything to the fresh, empty page state the
     // user sees when first entering the agent (no log, no issue time, no chat).
     async function startNewConversation() {
+        if (!_showAvatarForHistory()) return;
         document.dispatchEvent(new Event('chatbot:context-changed'));
         if (typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send (the
@@ -252,6 +258,7 @@
         // SAVED conversation flips firstRoundSent true, but the unsent live
         // draft captured earlier must still be resumable.
         if (!snap) return;
+        if (!_showAvatarForHistory()) return;
         if (typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send so it
         // can't swallow input in the restored session.
@@ -799,6 +806,7 @@
     // (restore the log file + context) so follow-up questions keep working.
     // If the analysis is still running, reconnect to its live stream.
     async function openHistoryConversation(id) {
+        if (!_showAvatarForHistory()) return;
         document.dispatchEvent(new Event('chatbot:context-changed'));
         // Stop rendering whatever stream is currently on screen (its server
         // job, if any, keeps running and can be re-attached to later).
@@ -815,6 +823,8 @@
         // we skip it only when hopping between already-saved conversations
         // (__viewingSavedConv), which must not clobber the live snapshot.
         if (!firstRoundSent && !window.__viewingSavedConv) captureLiveSessionSnapshot();
+        window.__avatarHistoryLoading = (window.__avatarHistoryLoading || 0) + 1;
+        window.refreshChatRecipientAvailability?.();
         try {
             const res = await fetch(`${CHATBOT_API}/history/load`, {
                 method: 'POST',
@@ -890,12 +900,19 @@
             loadHistoryList();
         } catch (e) {
             console.warn('[history] load failed:', e);
+        } finally {
+            window.__avatarHistoryLoading--;
+            window.refreshChatRecipientAvailability?.();
         }
     }
 
     async function deleteHistoryConversation(id, ev) {
         if (ev) ev.stopPropagation();
+        const deletingCurrent = (window.__feedbackConversationId || '') === id;
+        if (deletingCurrent && !_showAvatarForHistory()) return;
         if (!confirm('Delete this conversation? This cannot be undone.')) return;
+        if (deletingCurrent) window.__avatarHistoryLoading = (window.__avatarHistoryLoading || 0) + 1;
+        window.refreshChatRecipientAvailability?.();
         try {
             const res = await fetch(`${CHATBOT_API}/history/delete`, {
                 method: 'POST',
@@ -919,6 +936,9 @@
             }
         } catch (e) {
             console.warn('[history] delete failed:', e);
+        } finally {
+            if (deletingCurrent) window.__avatarHistoryLoading--;
+            window.refreshChatRecipientAvailability?.();
         }
     }
 

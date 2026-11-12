@@ -40,6 +40,7 @@
 
     function setSendBtnStopMode() {
         __chatStreaming = true;
+        window.refreshChatRecipientAvailability?.();
         // Before the early return below: a profile with no Send button still
         // has skill cards, and they must go inert too.
         setSkillCardsEnabled(false);
@@ -52,6 +53,7 @@
 
     function setSendBtnSendMode() {
         __chatStreaming = false;
+        window.refreshChatRecipientAvailability?.();
         setSkillCardsEnabled(true);
         window.__streamCtl = null;
         const btn = document.getElementById('send-btn');

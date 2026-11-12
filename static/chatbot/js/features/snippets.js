@@ -42,7 +42,8 @@
             summary.textContent = `Fragment explanation (${recipient() === 'echo' ? 'Echo' : 'Avatar'}) | ${selected.name} | L${selected.rows[0].lineNumber}-L${selected.rows[selected.rows.length - 1].lineNumber} | ${selected.rows.length} lines`;
             preview.textContent = formatRows(selected.rows);
         }
-        document.querySelectorAll('[data-chat-mode]').forEach(button => { button.disabled = busy; });
+        if (window.refreshChatRecipientAvailability) window.refreshChatRecipientAvailability();
+        else document.querySelectorAll('[data-chat-mode]').forEach(button => { button.disabled = busy; });
         if (typeof validateUserInput === 'function') validateUserInput();
     }
     clear.addEventListener('click', () => {

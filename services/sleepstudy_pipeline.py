@@ -593,6 +593,67 @@ Keep apart what WOKE the device (the D0 Entry: wake reason, the OS request that 
 Then add at most three short bullets: "Woke:" what brought the device to D0, with timestamps; "Held in D0:" what kept it there, with the cadence or counters; "Sleep Study:" why confirmed / partly / refuted, plus the skill you used in a few words. Do not list every OS job, write a full timeline, repeat the conclusion, or add generic recommendations. Keep the whole response under 140 words. Use only evidence; do not invent numbers."""
 
 
+# The driver's wake reasons (WOWLAN_WAKE_UP_REASON_API_E_VER_2), as the log
+# names them ("Wakeup due to: WAKEUP_BY_<NAME>") or sets them in the
+# WakeupReason bit mask. Grouped the way the NW skills group them
+# (nw_skills.yaml, Modern Standby Wake step 2), so the report files a wake
+# where the agent's skill did: name -> (bit, group).
+WAKE_REASONS = {
+    "NON_WIRELESS": (0x0, "os request"),
+    "MAGIC_PACKET": (0x1, "packet"),
+    "PATTERN": (0x2, "packet"),
+    "DISCONNECTION_ON_MISSED_BEACON": (0x4, "link lost"),
+    "DISCONNECTION_ON_DEAUTH": (0x8, "link lost"),
+    "GTK_REKEY_FAILURE": (0x10, "key exchange"),
+    "RFKILL_DEASSERTED": (0x20, "user"),
+    "UCODE_ERROR": (0x40, "firmware"),
+    "EAPOL_REQUEST": (0x80, "key exchange"),
+    "FOUR_WAY_HANDSHAKE": (0x100, "key exchange"),
+    "REM_WAKE_LINK_LOSS": (0x200, "remote wake ended"),
+    "REM_WAKE_SIGNATURE_TABLE": (0x400, "remote wake ended"),
+    "REM_WAKE_TCP_EXTERNAL": (0x800, "packet"),
+    "REM_WAKE_WAKEUP_PACKET": (0x1000, "packet"),
+    "D3_WAKEUP_HOST_TIMER": (0x4000, "timer"),
+    "RXFRAME_FILTERED_IN": (0x8000, "packet"),
+    "BEACON_FILTERED_IN": (0x10000, "packet"),
+    "11W_UNPROTECTED_DEAUTH_OR_DISASSOC": (0x20000, "link lost"),
+    "PATTERN_IPV4_TCP_SYN": (0x40000, "packet"),
+    "PATTERN_IPV4_TCP_SYN_WILDCARD": (0x80000, "packet"),
+    "PATTERN_IPV6_TCP_SYN": (0x100000, "packet"),
+    "PATTERN_IPV6_TCP_SYN_WILDCARD": (0x200000, "packet"),
+    "ACTION_FRAME": (0x400000, "packet"),
+}
+_WAKEUP_REASON_HEX = re.compile(r"(WakeupReason\s*[=:]?\s*)(0x[0-9A-Fa-f]+)\b")
+
+
+def wake_reason_re(group: str) -> str:
+    """A regex for the WAKEUP_BY_ names of one group; longest first, so
+    PATTERN_IPV4_TCP_SYN is not read as PATTERN."""
+    names = sorted((n for n, (_, g) in WAKE_REASONS.items() if g == group), key=len, reverse=True)
+    return r"WAKEUP_BY_(?:" + "|".join(names) + r")\b"
+
+
+def decode_wake_reason(value: int) -> list[str]:
+    """The WAKEUP_BY_ names of a WakeupReason bit mask; 0 is NON_WIRELESS.
+    A bit the enum does not define is kept as its hex value."""
+    if not value:
+        return ["WAKEUP_BY_NON_WIRELESS"]
+    names = [f"WAKEUP_BY_{n}" for n, (bit, _) in WAKE_REASONS.items() if bit and value & bit]
+    unknown = value & ~sum(bit for bit, _ in WAKE_REASONS.values())
+    return names + ([f"unknown bits 0x{unknown:X}"] if unknown else [])
+
+
+def _name_wake_reasons(text: str) -> str:
+    """'WakeupReason = 0x00000008' -> '... 0x00000008 (WAKEUP_BY_DISCONNECTION_ON_DEAUTH)',
+    unless the text already names it, so a raw value is classified too."""
+    def named(m):
+        names = decode_wake_reason(int(m.group(2), 16))
+        if all(n in text for n in names):
+            return m.group(0)
+        return f"{m.group(0)} ({' | '.join(names)})"
+    return _WAKEUP_REASON_HEX.sub(named, text)
+
+
 # The dominant wake cause of a session, in the categories the per-session
 # answer uses (POINT_ANSWER_CONTRACT), each with the words that identify it
 # when an answer phrases it loosely. First match wins, so the order matters:
@@ -623,10 +684,17 @@ def dominant_cause(text: str) -> tuple[str, str]:
 
     # Older agent responses sometimes put the same finding in an executive
     # summary without the contract header. Infer only from a named trigger.
-    lead = source[:1800].lower()
+    # A driver wake reason counts by its group: only a packet or a key
+    # exchange is a wake on packet (WAKEUP_BY_NON_WIRELESS is the OS's).
+    lead = _name_wake_reasons(source[:1800]).lower()
     detail = _first_causal_sentence(source)
-    if re.search(r"wake[- ]on[- ]packet|magic packet|netwakereason.*(packet|wireless)", lead):
+    if re.search(r"wake[- ]on[- ]packet|magic packet|" + wake_reason_re("packet")
+                 + "|" + wake_reason_re("key exchange"), lead, re.I):
         return "Wake on packet", detail
+    if re.search(wake_reason_re("user"), lead, re.I):
+        return "Wake on key / user", detail
+    if re.search(wake_reason_re("timer"), lead, re.I):
+        return "Timer", detail
     if re.search(r"roam|background scan|wificx|wifi.?job|device.?service.?command|\boid\b|os request|os job", lead):
         return "NDIS / OS request", detail
     if re.search(r"(?i)(?:app traffic|application traffic|pstcore.{0,100}(?:kept|held|prevent|delay)|(?:kept|held|prevent|delay).{0,100}pstcore|bulk (?:upload|download|transfer).{0,100}(?:kept|held|prevent|delay))", lead):
@@ -751,10 +819,16 @@ CONTRIBUTING_FACTORS = (
     ("Device-service polling", r"PROP_DEVICE_SERVICE_COMMAND|device[- ]service"),
     ("Statistics / BSS queries", r"PROP_GET_STATISTICS|QueryStatistics|GetBSSInfo|QueryConnectionInfo|statistics quer"),
     ("Background-scan roam", r"ROAM_REASON_BG_SCAN|background[- ]scan|\bbg[- ]scan|\broam"),
-    ("Firmware reload on resume", r"(?<!no need to )reload(?:ing|ed)? (?:the )?(?:fw|firmware)|RT full reset|FW was dead|image (?:is )?not intact"),
-    ("Wake on packet", r"wake[- ]on[- ]packet|magic packet|WAKEUP_BY_(?!NON)|pattern match"),
-    ("Disconnect / reconnect", r"disconnect|deauth|reconnect"),
-    ("Timer", r"\btimer\b"),
+    # The driver wake reasons (WAKE_REASONS) fall into the factor of their
+    # group, as the NW skills file them.
+    ("Firmware error / reload", r"(?<!no need to )reload(?:ing|ed)? (?:the )?(?:fw|firmware)|RT full reset|FW was dead|"
+                                r"image (?:is )?not intact|" + wake_reason_re("firmware")),
+    ("Wake on packet", r"wake[- ]on[- ]packet|magic packet|pattern match|" + wake_reason_re("packet")),
+    ("Key exchange wake", r"GTK rekey (?:failure|failed)|" + wake_reason_re("key exchange")),
+    ("Disconnect / reconnect", r"disconnect|deauth|disassoc|reconnect|" + wake_reason_re("link lost")),
+    ("Remote-wake session ended", wake_reason_re("remote wake ended")),
+    ("Radio switch (RF kill)", r"\brf[- ]?kill|" + wake_reason_re("user")),
+    ("Timer", r"\btimer\b|" + wake_reason_re("timer")),
 )
 
 
@@ -766,6 +840,7 @@ def _pieces(text: str) -> list[str]:
     """A root-cause summary cut into its sentences and bullets, without the
     contract line's labels, so a factor is matched to the claim naming it."""
     t = html_unescape(re.sub(r"<[^>]+>", " ", str(text or ""))).replace("**", "").replace("`", "")
+    t = _name_wake_reasons(t)
     t = re.sub(r"(?is)^.*?Dominant\s+wake\s+cause\s*:[^\n]*?\s(?:--|—|–)\s", "", t, count=1)
     out = []
     for chunk in re.split(r"\n+|\s*•\s*|(?<=[.;])\s+(?=[A-Z(])", t):
@@ -840,7 +915,10 @@ DRIVER_FACTS = (
 # The action each driver-level factor calls for; {id} is its identifier.
 FACTOR_ACTIONS = {
     "Device-service polling": ("P0", "Find the service sending PROP_DEVICE_SERVICE_COMMAND{id} and stop its polling in standby"),
-    "Firmware reload on resume": ("P0", "Firmware reloaded on resume: send the driver log to the Intel Wi-Fi team"),
+    "Firmware error / reload": ("P0", "Firmware failed or was reloaded in D3 (WAKEUP_BY_UCODE_ERROR, RT full reset): send the driver log to the Intel Wi-Fi team"),
+    "Key exchange wake": ("P1", "The AP's key exchange woke the host: check that GTK rekey offload is armed and why it did not complete in D3"),
+    "Remote-wake session ended": ("P2", "The offloaded TCP remote-wake session ended in D3: check the remote-wake configuration and its server side"),
+    "Radio switch (RF kill)": ("P2", "A radio kill switch change woke the device: a user or platform action, not a driver issue"),
     "Background-scan roam": ("P1", "Check why the OS runs background scans and roams in standby{id}: scan / roam policy, AP signal"),
     "Wake on packet": ("P1", "Review the WoWLAN patterns and the remote traffic that matched them"),
     "Disconnect / reconnect": ("P1", "Find why the link drops in standby (disconnect / deauth reason, AP side)"),

@@ -3,5 +3,5 @@
 .workspace-date-time { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-right: 10px; padding-right: 24px; border-right: 1px solid #ffffff33; font-variant-numeric: tabular-nums; }
 .workspace-account-avatar { display: inline-flex; width: 36px; height: 36px; flex: 0 0 36px; align-items: center; justify-content: center; border-radius: 50%; background: #ffffff33; font-size: 12px; font-weight: 600; }
 @media (max-width: 600px) {
-    .workspace-date-time { display: none; }
+	.workspace-date-time { display: none; }
 }

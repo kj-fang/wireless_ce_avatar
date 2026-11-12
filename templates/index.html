@@ -1760,6 +1760,7 @@
 
             if (actionType === 'submit') {
                 // Regular submit - just show loading and submit form
+                window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: true } }));
                 showCaseLoading();
                 document.getElementById('mainForm').submit();
             } else if (actionType === 'etl') {
@@ -2028,6 +2029,7 @@
             formData.append('source_path', selectedItem.sourcePath);
 
             // Show local-upload specific loading and connect socket for real-time logs
+            window.dispatchEvent(new CustomEvent('home:submission-state', { detail: { locked: true } }));
             showLocalUploadLoading();
 
             // Reset cancel state and prepare AbortController for this upload

@@ -16,6 +16,8 @@ _COMMON_FEATURES = {
     # what main shipped too.
     "skill_append": False,
     "sleepstudy": False,
+    # POST /prepare: download_result handing a decoded log to the agent.
+    "prepare": True,
 }
 
 BT_FEEDBACK_CONCLUSIONS = [
@@ -186,7 +188,9 @@ LOG_CHATBOT_UI = {
 NW_UI = {
     "domain": "wifi",
     "api": "/nw_analysis",
-    "title": "Wi-Fi Log Chatbot",
+    "title": "Network Experience",
+    # Same icon as the Network Experience button on the Avatar home page.
+    "icon": "🌐",
     "back_url": "/nw_analysis/back_to_avatar",
     "input_placeholder": "Ask a question about the log…",
     "accent": "#0071c5",
@@ -231,8 +235,12 @@ NW_UI = {
     },
     "features": {
         **_COMMON_FEATURES,
+        "sidebar_toggle": True,
+        "history": True,
         "skill_append": True,
+        "prompt_editor": True,
         "sleepstudy": True,
+        "prepare": False,
     },
 }
 

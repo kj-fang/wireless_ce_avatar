@@ -118,7 +118,8 @@
         const btn = document.getElementById('hist-restore-btn');
         if (!btn) return;
         const s = window.__liveSessionSnapshot;
-        const useful = !!(s && (s.logPath || s.issueTime || s.draft));
+        const customDraft = s && s.profileDraft && Object.keys(s.profileDraft).length > 0;
+        const useful = !!(s && (s.logPath || s.issueTime || s.draft || customDraft));
         btn.style.display = useful ? 'block' : 'none';
     }
 
@@ -130,18 +131,30 @@
         if (firstRoundSent) { window.__liveSessionSnapshot = null; _updateRestoreBtn(); return; }
         const logInp = document.getElementById('log-path-input');
         const draftInp = document.getElementById('user-input');
-        window.__liveSessionSnapshot = {
+        const snapshot = {
             logPath: logInp ? (logInp.value || '') : '',
             issueTime: (typeof getIssueTimeString === 'function') ? (getIssueTimeString() || '') : '',
             draft: draftInp ? (draftInp.value || '') : '',
+            profileDraft: (typeof captureHistoryDraft === 'function')
+                ? (captureHistoryDraft() || {}) : {},
         };
+        const profileHasDraft = snapshot.profileDraft
+            && Object.keys(snapshot.profileDraft).length > 0;
+        // Don't replace a deliberately preserved Draft with the blank page
+        // state of a freshly started session when the user opens History.
+        if (snapshot.logPath || snapshot.issueTime || snapshot.draft || profileHasDraft
+            || !window.__liveSessionSnapshot) {
+            window.__liveSessionSnapshot = snapshot;
+        }
         _updateRestoreBtn();
     }
 
     // ➕ New Conversation: reset everything to the fresh, empty page state the
     // user sees when first entering the agent (no log, no issue time, no chat).
     async function startNewConversation() {
-        if (typeof _abortActiveStream === 'function') _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream && typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send (the
         // no-issue-time confirm prompt or the time-capture popup). A stuck
         // modal overlay would otherwise swallow clicks/typing in the fresh
@@ -150,6 +163,12 @@
         if (typeof closeTimeCaptureModal === 'function') closeTimeCaptureModal();
         // Keep the current conversation's chat-box draft before leaving it.
         saveCurrentDraft();
+        // NW can have a loaded Sleep Study and generated plan before any
+        // analysis turn exists in History. Preserve that unsent report setup so
+        // New session behaves like the other chatbots' Draft / Resume flow.
+        const keepProfileDraft = typeof captureHistoryDraft === 'function'
+            && !firstRoundSent && !window.__viewingSavedConv;
+        if (keepProfileDraft) captureLiveSessionSnapshot();
         // Reset the server-side agent in the BACKGROUND — do NOT await it.
         // Another conversation may still be analysing (the server thread is
         // busy), and awaiting here would stall the whole reset, leaving the
@@ -167,7 +186,7 @@
         // jumps into history their new unsent work (log / issue time / draft)
         // can be snapshotted for "↩ Resume draft".
         firstRoundSent = false;
-        window.__liveSessionSnapshot = null;
+        if (!keepProfileDraft) window.__liveSessionSnapshot = null;
         // Back in a fresh live session (not viewing a saved conversation).
         window.__viewingSavedConv = false;
 
@@ -221,6 +240,8 @@
         // Guarantee the chat box is typeable again, regardless of any state the
         // previous (possibly still-running) analysis left behind.
         _unlockChatInput();
+        // A profile whose inputs are not the log box (NW) clears its own.
+        if (typeof onHistoryNewConversation === 'function') onHistoryNewConversation();
         switchSidebarView('controls');
         loadHistoryList();
     }
@@ -251,7 +272,9 @@
         // SAVED conversation flips firstRoundSent true, but the unsent live
         // draft captured earlier must still be resumable.
         if (!snap) return;
-        if (typeof _abortActiveStream === 'function') _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream && typeof _abortActiveStream === 'function') _abortActiveStream();
         // Dismiss any blocking modal left open by the previous send so it
         // can't swallow input in the restored session.
         if (typeof closeConfirmModal === 'function') closeConfirmModal(false);
@@ -350,6 +373,12 @@
                 try { await fetch(`${CHATBOT_API}/reset`, {method: 'POST'}); } catch (e) { /* ignore */ }
                 logLoaded = false;
                 if (typeof validateUserInput === 'function') validateUserInput();
+            }
+            // A profile may own additional draft state (NW's Sleep Study
+            // report path). Restore it after the generic reset so its own
+            // loader can safely re-prime the server and redraw the plan.
+            if (snap.profileDraft && typeof onHistoryDraftRestored === 'function') {
+                try { await onHistoryDraftRestored(snap.profileDraft); } catch (e) { /* ignore */ }
             }
             // setLog() reassigns window.__feedbackConversationId to a brand-new
             // id, which changes _draftKey(). Re-file the restored draft under
@@ -582,6 +611,10 @@
                 const card = __makeStepCard({collapsed: true});
                 savedSteps.forEach(function (s) { card.appendStep(s); });
             }
+            // A profile may draw a result type of its own (NW: the Sleep Study
+            // run plan, with its points' progress).
+            if (typeof renderCustomHistoryResult === 'function'
+                && renderCustomHistoryResult(t, turns)) return;
             const r = t.result || {};
             const turnId = t.turn_id || null;
             if (r.type === 'report') {
@@ -798,7 +831,9 @@
     async function openHistoryConversation(id) {
         // Stop rendering whatever stream is currently on screen (its server
         // job, if any, keeps running and can be re-attached to later).
-        _abortActiveStream();
+        const keepProfileStream = typeof shouldKeepActiveStreamOnHistorySwitch === 'function'
+            && shouldKeepActiveStreamOnHistorySwitch();
+        if (!keepProfileStream) _abortActiveStream();
         // Preserve the chat-box draft of the conversation we're leaving so it
         // reappears when we switch back to it (kept per-conversation in memory).
         saveCurrentDraft();
@@ -863,6 +898,8 @@
             } else if (data.log_path) {
                 if (st) showStatus(st, '⚠ Original log not found — viewing history only.', 'warn');
             }
+            // A profile whose inputs are not the log box (NW) restores its own.
+            if (typeof onHistoryConversationLoaded === 'function') onHistoryConversationLoaded(data);
 
             // Restore this conversation's own unsent draft (chat-box text +
             // Issue Time + log source). Called AFTER the server-side restore so

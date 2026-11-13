@@ -127,12 +127,23 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
     tag = f"[{label}] " if label else ""
     print(f"{tag}checking shared folder path...")
     for path in [primary, backup]:
-        result = {"exists": False, "error": None}
+        result = {"exists": False, "error": None,
+                   "parent_exists": None, "parent_error": None}
         def check():
             try:
-                result["exists"] = Path(path).exists()
+                if Path(path).exists():
+                    result["exists"] = True
+                    return
             except Exception as e:
                 result["error"] = e
+                return
+            # Full path not found — re-check the parent folder so a
+            # missing/inaccessible share or intermediate folder can be told
+            # apart from "folder is fine, this file just isn't in it".
+            try:
+                result["parent_exists"] = Path(path).parent.exists()
+            except Exception as pe:
+                result["parent_error"] = pe
         start = time.monotonic()
         thread = threading.Thread(target=check, daemon=True)
         thread.start()
@@ -148,7 +159,15 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
         if result["exists"]:
             print(f"{tag}Using: {path} (found in {elapsed:.1f}s)")
             return path
-        print(f"{tag}  NOT FOUND after {elapsed:.1f}s: {path}")
+        if result["parent_error"] is not None:
+            pe = result["parent_error"]
+            print(f"{tag}  NOT FOUND after {elapsed:.1f}s — parent folder also inaccessible "
+                  f"({type(pe).__name__}: {pe}): {path}")
+        elif result["parent_exists"] is False:
+            print(f"{tag}  NOT FOUND after {elapsed:.1f}s — parent folder is also missing/unreachable: {path}")
+        else:
+            print(f"{tag}  NOT FOUND after {elapsed:.1f}s — parent folder is reachable, "
+                  f"this specific file/path is missing: {path}")
     print(f"{tag}!! ALL SHARED FOLDER UNAVAILABLE")
 
 

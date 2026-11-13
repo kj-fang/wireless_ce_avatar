@@ -136,6 +136,8 @@ HANDSFREE_POST_VERSION = 1
 #        the drafts that were shown in that reviewer's queue.
 HANDSFREE_EVENT_VERSION = 1
 
+
+
 # Bucket for records that carry no domain, rather than assuming the busiest
 # one. Defaulting these to "wifi" made real wifi traffic indistinguishable
 # from "we don't know" — every pre-v4 record on the share has no domain, so
@@ -152,8 +154,6 @@ _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 _MAX_POST_CHARS = 60000       # cap each stored Beacon draft text (suggested / posted)
 _MAX_EDIT_LINES = 200         # cap the removed / added line lists of an edit summary
 _MAX_EDIT_LINE_CHARS = 500    # cap one line in those lists
-_MAX_DIFF_LINES = 2000        # lines of each text an edit summary compares
-_DIFF_EXACT_CELLS = 250_000   # changed-part size (lines x lines) still compared line for line
 
 # Minimum seconds between async aggregate rebuilds (per process). Each write
 # schedules a rebuild but only one runs per cooldown window, so a burst of
@@ -171,6 +171,8 @@ _AGG_COOLDOWN_SEC = 600
 # Record kinds that live under the mode sub-root, one file per id, per user.
 _RECORD_DIRS = ("sessions", "workflows", "feedback_submissions", "handsfree_posts",
                 "handsfree_events")
+
+
 
 # Which build produced a record. Reporting has to tell support traffic from
 # developer traffic and a flat tree cannot: both landed in the same folders.
@@ -2113,38 +2115,13 @@ def summarise_edit(suggested: Any, posted: Any) -> dict:
     line: how alike the two texts are, which suggested lines were dropped and
     which lines were written in. This is the learning signal - the dropped
     lines are what reviewers do NOT pass on to a customer. Blank lines and
-    trailing spaces are ignored. Pure; never raises on odd input.
-
-    The work is bounded, because a line-by-line comparison of two long,
-    repetitive texts can take time out of all proportion to what it tells:
-
-      * the lines both texts start and end with are set aside first - a post
-        is the suggestion with a few changes, so what is left to compare is
-        normally a handful of lines;
-      * when what is left is still large (_DIFF_EXACT_CELLS), lines that
-        repeat many times are no longer matched one by one
-        (`comparison`: "approximate");
-      * lines past _MAX_DIFF_LINES are only checked for being the same
-        (`comparison`: "truncated")."""
+    trailing spaces are ignored. Pure; never raises on odd input."""
     import difflib
-    all_a, all_b = _post_lines(suggested), _post_lines(posted)
-    a, b = all_a[:_MAX_DIFF_LINES], all_b[:_MAX_DIFF_LINES]
-    beyond_differs = all_a[_MAX_DIFF_LINES:] != all_b[_MAX_DIFF_LINES:]
-    truncated = len(all_a) > len(a) or len(all_b) > len(b)
-    shorter = min(len(a), len(b))
-    head = 0
-    while head < shorter and a[head] == b[head]:
-        head += 1
-    tail = 0
-    while tail < shorter - head and a[-1 - tail] == b[-1 - tail]:
-        tail += 1
-    mid_a, mid_b = a[head:len(a) - tail], b[head:len(b) - tail]
-    exact = len(mid_a) * len(mid_b) <= _DIFF_EXACT_CELLS
+    a, b = _post_lines(suggested), _post_lines(posted)
     removed: list[str] = []
     added: list[str] = []
-    kept = head + tail
-    matcher = difflib.SequenceMatcher(None, mid_a, mid_b, autojunk=not exact)
-    a, b = mid_a, mid_b
+    kept = 0
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             kept += i2 - i1
@@ -2154,14 +2131,11 @@ def summarise_edit(suggested: Any, posted: Any) -> dict:
         if tag in ("insert", "replace"):
             added.extend(b[j1:j2])
     clip = lambda lines: [ln[:_MAX_EDIT_LINE_CHARS] for ln in lines[:_MAX_EDIT_LINES]]
-    compared = min(len(all_a), _MAX_DIFF_LINES) + min(len(all_b), _MAX_DIFF_LINES)
     return {
-        "changed": bool(removed or added or beyond_differs),
-        # 2 x matching lines / all lines, as difflib's ratio() defines it
-        "similarity": round(2 * kept / compared, 3) if compared else 1.0,
-        "comparison": "truncated" if truncated else ("exact" if exact else "approximate"),
-        "suggested_lines": len(all_a),
-        "posted_lines": len(all_b),
+        "changed": bool(removed or added),
+        "similarity": round(matcher.ratio(), 3) if (a or b) else 1.0,
+        "suggested_lines": len(a),
+        "posted_lines": len(b),
         "kept_lines": kept,
         "removed_count": len(removed),
         "added_count": len(added),
@@ -2176,32 +2150,10 @@ def _post_text(text: Any) -> dict:
             "lines": len(_post_lines(s)), "truncated": len(s) > _MAX_POST_CHARS}
 
 
-def _post_content(*, suggested_plain: Any, suggested_source: str, posted_plain: Any,
-                  echo_stripped: bool, edit_baseline_plain: Any) -> dict:
-    """The text part of a post record: what Beacon suggested, what went out,
-    and the reviewer's edit between the two. Runs on the writer thread - the
-    line diff of two long texts is the one costly step of a post record, and
-    the approval that reports it is holding the post lock."""
-    baseline = (edit_baseline_plain(suggested_plain) if callable(edit_baseline_plain)
-                else edit_baseline_plain)
-    return {
-        "suggested": {**_post_text(suggested_plain),
-                      "source": str(suggested_source or "")[:20]},
-        "posted": _post_text(posted_plain),
-        "edit": {**summarise_edit(suggested_plain if baseline is None else baseline,
-                                  posted_plain),
-                 "baseline": "suggested" if baseline is None else "suggested_without_echo",
-                 "echo_stripped": bool(echo_stripped)},
-    }
-
-
-def _do_record_handsfree_post(event: dict, texts: Optional[dict] = None) -> None:
-    """Write one Beacon post event; idempotent per post_event_id. `texts` are
-    the arguments of _post_content, turned into the record's text part here."""
+def _do_record_handsfree_post(event: dict) -> None:
+    """Write one Beacon post event; idempotent per post_event_id."""
     user = _current_user()
     try:
-        if texts:
-            event = {**event, **_post_content(**texts)}
         path = _handsfree_post_path(event["post_event_id"], user)
         record = {
             "schema_version": GATHER_SCHEMA_VERSION,
@@ -2259,14 +2211,11 @@ def record_handsfree_post(
     `edit` describes what the REVIEWER changed. When the system itself took
     something out before posting (the internal Echo section, `echo_stripped`),
     the caller passes `edit_baseline_plain` - the suggestion without that
-    part, or a function that makes it from the suggestion - and the edit is
-    measured against it; `edit.baseline` says which was used. The full
-    suggestion is stored either way.
+    part - and the edit is measured against it; `edit.baseline` says which
+    was used. The full suggestion is stored either way.
 
     Like every Gather write: independent of the caller, in a background
     thread, never raises, and silent when collection is off for this build.
-    The texts are only handed over here; clipping and comparing them is the
-    writer thread's work (_post_content), so the caller is not held up.
     Returns the event id ("" when nothing was recorded)."""
     if not draft_id or not _collection_enabled():
         return ""
@@ -2292,11 +2241,16 @@ def record_handsfree_post(
             "visibility": str(visibility or "")[:20],
             "error": str(error or "")[:500],
             "comment_id": str(comment_id or "")[:64],
+            "suggested": {**_post_text(suggested_plain),
+                          "source": str(suggested_source or "")[:20]},
+            "posted": _post_text(posted_plain),
+            "edit": {**summarise_edit(suggested_plain if edit_baseline_plain is None
+                                      else edit_baseline_plain, posted_plain),
+                     "baseline": ("suggested" if edit_baseline_plain is None
+                                  else "suggested_without_echo"),
+                     "echo_stripped": bool(echo_stripped)},
         }
-        texts = {"suggested_plain": suggested_plain, "suggested_source": suggested_source,
-                 "posted_plain": posted_plain, "echo_stripped": echo_stripped,
-                 "edit_baseline_plain": edit_baseline_plain}
-        threading.Thread(target=_do_record_handsfree_post, args=(event, texts), daemon=True,
+        threading.Thread(target=_do_record_handsfree_post, args=(event,), daemon=True,
                          name="gather-handsfree-post").start()
         return event_id
     except Exception as e:

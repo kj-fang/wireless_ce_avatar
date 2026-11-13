@@ -1084,12 +1084,12 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
                                     "subject": saved.get("subject", ""),
                                     "reply_all": reply_all,
                                     "in_reply_to": email.get("subject", "")})
-        done = store.update(draft_id, status="posted", post_result=result.to_dict())
-        _track_post(store, draft_id, ok=True, posted_plain=sent_plain, rec=done)
+        store.update(draft_id, status="posted", post_result=result.to_dict())
+        _track_post(store, draft_id, ok=True, posted_plain=sent_plain)
         return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
-    failed = store.update(draft_id, status="post_failed",
-                          post_result={"ok": False, "backend": "outlook", "error": err})
-    _track_post(store, draft_id, ok=False, posted_plain=sent_plain, rec=failed)
+    store.update(draft_id, status="post_failed",
+                 post_result={"ok": False, "backend": "outlook", "error": err})
+    _track_post(store, draft_id, ok=False, posted_plain=sent_plain)
     return {"ok": False, "error": err, "draft": store.get(draft_id)}
 # retention
 # ---------------------------------------------------------------------------
@@ -1227,41 +1227,28 @@ def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
     """Usage record of an approval that reached a posting backend: who
     posted, from which page, with what outcome, and the text that went out
     next to the text Beacon suggested (gather_service.record_handsfree_post).
-
-    This runs while the approval holds _post_lock, so it does as little as
-    it can here: `rec` is the draft as the posting path just wrote it (what
-    store.update returned), so the shared queue is not read again; only the
-    approval's own fields are picked up on this thread, and working on the
-    texts is left to the Gather service's writer thread. A build with
-    collection switched off does nothing at all. Never raises."""
+    Reads the draft as it stands after the post. Never raises and never
+    delays the answer - the write runs on the Gather service's own thread,
+    and a build with collection switched off records nothing."""
     try:
         from services import gather_service
         from . import scheduler
-        if not gather_service._collection_enabled():
-            return
         if rec is None:
             rec = store.get(draft_id) or {}
         result = rec.get("post_result") or {}
         analysis = rec.get("analysis") or {}
         backend = str(result.get("backend") or "")
         current = rec.get("draft_plain") or ""
-        sent = current if posted_plain is None else posted_plain
         suggested = rec["suggested_plain"] if "suggested_plain" in rec else current
+        echo_stripped = bool(getattr(_approval, "echo_stripped", False))
         # The Echo section is dropped by the SYSTEM (public IPS posts, every
         # Outlook reply), never by the reviewer: the reviewer's edit is
         # measured against the suggestion without it, or every such post
-        # would read as "the reviewer cut 30 lines". A failed public post
-        # leaves the draft saved without the section, so the retry finds
-        # nothing to strip: the draft itself remembers that the system did
-        # it (echo_stripped_by_system). Text that goes out WITH the section
-        # was not stripped, whatever happened on an earlier attempt.
-        echo_stripped = (bool(getattr(_approval, "echo_stripped", False)
-                              or rec.get("echo_stripped_by_system"))
-                         and ECHO_SECTION_START not in sent)
+        # would read as "the reviewer cut 30 lines".
         edit_baseline = None
         if echo_stripped:
             from .composer import strip_echo_section
-            edit_baseline = strip_echo_section       # applied by the writer thread
+            edit_baseline = strip_echo_section(suggested)
         who = result.get("posted_by") if isinstance(result.get("posted_by"), dict) else None
         gather_service.record_handsfree_post(
             draft_id=draft_id,
@@ -1283,7 +1270,7 @@ def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
             # separate copy: what it holds IS the suggestion.
             suggested_plain=suggested,
             suggested_source=str(rec.get("suggested_source") or "unchanged"),
-            posted_plain=sent,
+            posted_plain=current if posted_plain is None else posted_plain,
             echo_stripped=echo_stripped,
             edit_baseline_plain=edit_baseline,
         )
@@ -1471,8 +1458,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         # draft that no longer has the section, and usage tracking must not
         # take the system's removal for the reviewer's edit (_track_post).
         rec = store.update(draft_id, draft_plain=plain,
-                           draft_html=compose_html(plain),
-                           echo_stripped_by_system=True)
+                           draft_html=compose_html(plain))
         _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section stripped from the public "
                    f"post of {draft_id}")
@@ -1577,8 +1563,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             # The session is no longer the reviewer's. That is not a REST
             # problem the UI poster could work around: stop, the reviewer
             # signs in again and approves again.
-            failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
-            _track_post(store, draft_id, ok=False, rec=failed)
+            store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            _track_post(store, draft_id, ok=False)
             return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
     if result is None or (not result.ok and backend == "auto"):
@@ -1627,11 +1613,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
                           first_response=draft_is_checklist and is_public_reply,
                           posted_by=reviewer_name)
-        _track_post(store, draft_id, ok=True, rec=done)
+        _track_post(store, draft_id, ok=True)
         return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
-    failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
-    _track_post(store, draft_id, ok=False, rec=failed)
+    store.update(draft_id, status="post_failed", post_result=result.to_dict())
+    _track_post(store, draft_id, ok=False)
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
 

@@ -252,7 +252,7 @@ def set_up(socketio):
 
 
     # key
-    key_path = helpers.get_load_path(KEY_PATH_prim, KEY_PATH_bkup)
+    key_path = helpers.get_load_path(KEY_PATH_prim, KEY_PATH_bkup, label="key")
     if key_path != None:
         key = helpers.load_module(key_path, "key_moudle")
         app_config.set_key(key)

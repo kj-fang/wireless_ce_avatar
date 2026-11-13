@@ -392,9 +392,11 @@
         setPostStatus('Resetting case history...');
         try {
             await request('case/' + encodeURIComponent(caseNbr) + '/reset', 'POST', {purge_downloads: false});
-            busy = false;
-            closeModal();
             await loadQueue();
+            allowClose = true;
+            element('unsaved').hidden = true;
+            setPostStatus('Case history reset. You can close this window.');
+            busy = false;
         } catch (error) {
             setPostStatus('Could not reset case history: ' + error, 'error');
         } finally {

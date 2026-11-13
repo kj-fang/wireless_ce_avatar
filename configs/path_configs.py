@@ -32,6 +32,12 @@ SKILLS_YAML_DATED_GLOB = "skills_*.yaml"                   # e.g. skills_2026-05
 SKILLS_YAML_DATED_RE = r"^skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 SKILLS_YAML_DATED_TEMPLATE = "skills_{date}.yaml"          # date = YYYY-MM-DD
 
+# Network Experience skills — same shared skills_config dir. When present, NW
+# uses these (the Sleep Study / Modern Standby driver skills) instead of the
+# Wi-Fi skills above, for its page and its Sleep Study runs; the Wi-Fi page
+# is unchanged. Mirrored to the local cloud/ dir for off-VPN starts.
+NW_SKILLS_YAML_FILENAME = "nw_skills.yaml"
+
 # Bluetooth skills YAML — lives next to skills.yaml in the same shared
 # skills_config dir. Loaded at startup by set_up_app to populate the
 # bt_chatbot_agent. Falls back to the WiFi skills (skills.yaml) when this

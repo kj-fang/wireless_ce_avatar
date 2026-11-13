@@ -63,7 +63,7 @@
             // The bundle is named for what it is rather than for its kind.
             btn.textContent = doc.shared_across_profiles
                 ? doc.doc.replace('_', ' ')
-                : (doc.kind === 'agent' ? 'all three, one file' : doc.kind);
+                : (doc.kind === 'agent' ? 'all three, one file' : doc.kind.replace(/_/g, ' '));
             if (doc.source === 'local') {
                 const dot = document.createElement('span');
                 dot.className = 'prompt-doc-dot';
@@ -342,13 +342,15 @@
         renderMeta();
     }
 
-    window.openPromptEditor = async function () {
+    // `docName` opens on one document instead of the first (NW's button opens
+    // on its Sleep Study prompt), with the section list showing.
+    window.openPromptEditor = async function (docName) {
         const modal = el('prompt-editor-modal');
         if (!modal) return;
         modal.classList.add('open');
         modal.setAttribute('aria-hidden', 'false');
         const advanced = el('prompt-advanced');
-        if (advanced) advanced.open = false;
+        if (advanced) advanced.open = !!docName;
         skillChoice = null;
         skillPath = null;
         const chosen = el('prompt-skill-chosen');
@@ -362,6 +364,11 @@
         status('Loading…');
         try {
             await refreshStatus(false);
+            if (docName && docs.some((d) => d.doc === docName)) {
+                current = docName;
+                renderTabs();
+                renderMeta();
+            }
             if (current) await selectDoc(current);
         } catch (e) {
             status(e.message, 'err');

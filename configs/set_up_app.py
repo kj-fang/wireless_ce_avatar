@@ -17,6 +17,8 @@ from utils import speclets_utils
 from utils.skills_yaml_utils import (
     current_active_yaml,
     refresh_local_cloud_baseline,
+    refresh_nw_skills_yaml,
+    resolve_cloud_skills_dir,
     set_active_source,
 )
 from utils.bt_skills_yaml_utils import (
@@ -307,9 +309,11 @@ def set_up(socketio):
     #   3. Load whichever file `current_active_yaml()` resolves to.
 
     skills_loaded = False
+    share_reachable = False   # reused below so NW does not probe the share again
     set_active_source("cloud")
     try:
         refreshed_path, refreshed_date = refresh_local_cloud_baseline()
+        share_reachable = refreshed_path is not None
         if refreshed_path is not None:
             print(f"📥 Refreshed local cloud baseline → {refreshed_path} "
                   f"(date={refreshed_date})")
@@ -417,12 +421,27 @@ def set_up(socketio):
     app_config.set_log_chatbot_agent(log_chatbot_agent)
 
     # NW Analysis Agent — separate backend instance (own copy of WifiLogAgentSystem)
+    #
+    # NW uses its own skills (nw_skills.yaml on the share: the Sleep Study /
+    # Modern Standby driver skills) instead of the Wi-Fi ones, mirrored
+    # locally so an off-VPN start still has them. Without that file NW falls
+    # back to the Wi-Fi skills. Either way the Wi-Fi page is unchanged.
+    nw_extra_skills = {}
+    try:
+        nw_yaml = refresh_nw_skills_yaml(resolve_cloud_skills_dir() if share_reachable else None)
+        if nw_yaml is not None:
+            nw_extra_skills = load_skills_from_yaml(str(nw_yaml))
+            print(f"✅  {len(nw_extra_skills)} NW skills loaded from {nw_yaml}")
+    except Exception as e:
+        print(f"⚠️  NW skills not loaded ({e}); NW uses the Wi-Fi skills.")
+    NwAnalysisAgentSystem.extra_skills = nw_extra_skills
+    NwAnalysisAgentSystem.wifi_skill_keys = frozenset(llm_helper.skills or {})
     if llm_helper.client is not None:
         model = getattr(llm_helper, 'model', 'gpt-4.1')
         nw_analysis_agent = NwAnalysisAgentSystem(
             client=llm_helper.client,
             model=model,
-            skills=llm_helper.skills,   # reuse, no second disk read
+            skills=dict(nw_extra_skills) if nw_extra_skills else llm_helper.skills,
         )
         print(f"🌐 NW Analysis Agent loaded (model={model})")
     else:

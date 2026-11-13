@@ -18,12 +18,11 @@ Two different questions are answered here, and they do not have the same
 answers:
 
   * Which files does this conversation belong in?  ->  DOMAINS.
-    Wi-Fi and NW are one storage domain: NW declares domain "wifi" and shares
-    Wi-Fi's folder, which is why "nw" is an alias rather than a row.
+    NW has its own row: its History lists Sleep Study runs, which must not
+    show up on the Wi-Fi page's History tab (nor Wi-Fi chats on NW's).
 
   * Which agent produced this turn?  ->  AGENT_DOMAINS.
-    Gather measures NW separately from Wi-Fi, so it needs a name Wi-Fi's
-    storage key does not provide.
+    Gather measures NW separately from Wi-Fi.
 
 This module deliberately imports nothing from the app, so anything may import
 it without dragging in configuration or the LLM client.
@@ -55,7 +54,7 @@ class ChatDomain(NamedTuple):
 DOMAINS: tuple[ChatDomain, ...] = (
     ChatDomain(
         key="",
-        aliases=("", "wifi", "nw"),
+        aliases=("", "wifi"),
         history_folder="history",
         history_prefix="",
         feedback_prefix="",
@@ -68,6 +67,13 @@ DOMAINS: tuple[ChatDomain, ...] = (
         feedback_prefix="bt_",
     ),
     ChatDomain(
+        key="nw",
+        aliases=("nw",),
+        history_folder="nw_history",
+        history_prefix="nw-",
+        feedback_prefix="nw_",
+    ),
+    ChatDomain(
         key="linux",
         aliases=("linux",),
         history_folder="linux_history",
@@ -76,9 +82,8 @@ DOMAINS: tuple[ChatDomain, ...] = (
     ),
 )
 
-# The agent labels Gather accepts. Wi-Fi and NW are separate here although
-# they share one storage domain, because "which agent ran" and "whose files
-# are these" are different questions.
+# The agent labels Gather accepts. "Which agent ran" and "whose files are
+# these" are different questions, so this set is kept apart from DOMAINS.
 AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux"})
 
 # A third question, and the one that is easiest to get wrong: which agents

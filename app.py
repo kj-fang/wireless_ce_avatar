@@ -60,8 +60,8 @@ import blueprints.llm.llm_routes
 def _bring_chrome_to_front(server_pid):
     """Bring Avatar's Chrome browser to the foreground.
 
-    Called from the short-lived SendTo helper process which is spawned by
-    File Explorer and therefore has foreground permission.
+    Called from the short-lived launcher, which is spawned by File Explorer
+    or the user and therefore has foreground permission.
 
     Uses psutil to walk the Avatar server's descendant processes and find
     only the chrome.exe that belongs to Avatar's ChromeDriver — not any
@@ -118,6 +118,22 @@ def _bring_chrome_to_front(server_pid):
             print(f'⚠️ [SendTo] No Chrome_WidgetWin_1 found for pids={chrome_pids}')
     except Exception as e:
         print(f'⚠️ [SendTo] _bring_chrome_to_front failed: {e}')
+
+
+def _reuse_existing_avatar(instance_url, server_pid, startup_path):
+    """Reactivate Avatar without discarding its current page on a plain launch.
+
+    A launch with no file arguments means "show the running app". Navigating
+    that browser to `/` unexpectedly tears a user out of a chatbot. Send To
+    launches carry a concrete path and should still navigate to its analysis.
+    """
+    _bring_chrome_to_front(server_pid)
+    if not startup_path or startup_path == '/':
+        print('ℹ️ No startup file was supplied; preserving Avatar browser page.')
+        return
+
+    if not _navigate_existing_browser(instance_url, startup_path):
+        webbrowser.open(f"{instance_url}{startup_path}")
 
 def _build_startup_path(input_paths, sendto_token=None, default='/'):
     """Route any SendTo path straight to open_local_analysis and let that route
@@ -301,13 +317,8 @@ if __name__ == "__main__":
                     except Exception:
                         pass
                 sys.exit(1)
-        print(f"✅ Avatar is already running at {existing.get('url')} — opening in browser.")
-        if startup_path and startup_path != '/':
-            # This process was launched by File Explorer (SendTo) so it has
-            # foreground permission — bring Chrome to front before exiting.
-            _bring_chrome_to_front(existing['pid'])
-        if not _navigate_existing_browser(existing['url'], startup_path):
-            webbrowser.open(f"{existing['url']}{startup_path}")
+        print(f"✅ Avatar is already running at {existing.get('url')} — reusing its browser.")
+        _reuse_existing_avatar(existing['url'], existing['pid'], startup_path)
         sys.exit(0)
     # Acquire a startup lock so only one process proceeds past this point.
     # Any other instance that starts while we are in the window between
@@ -316,10 +327,7 @@ if __name__ == "__main__":
         print("\u2139\ufe0f Another IntelAvatar instance is starting up \u2014 exiting this instance.")
         existing = check_already_running()
         if existing:
-            if startup_path and startup_path != '/':
-                _bring_chrome_to_front(existing['pid'])
-            if not _navigate_existing_browser(existing['url'], startup_path):
-                webbrowser.open(f"{existing['url']}{startup_path}")
+            _reuse_existing_avatar(existing['url'], existing['pid'], startup_path)
         sys.exit(0)    
     # Create / refresh the Windows Startup shortcut so the app auto-starts on login
     ensure_startup_shortcut()
@@ -348,11 +356,8 @@ if __name__ == "__main__":
         listener_pid = get_listening_pid_on_port(preferred_port)
         if listener_pid and is_intelavatar_process(listener_pid):
             print(f"✅ IntelAvatar is already running on port {preferred_port} (PID={listener_pid}).")
-            if startup_path and startup_path != '/':
-                _bring_chrome_to_front(listener_pid)
             existing_url = f'http://127.0.0.1:{preferred_port}'
-            if not _navigate_existing_browser(existing_url, startup_path):
-                webbrowser.open(f'{existing_url}{startup_path}')
+            _reuse_existing_avatar(existing_url, listener_pid, startup_path)
             sys.exit(0)
         else:
             # Either another process owns the port, or we couldn't determine the owner.

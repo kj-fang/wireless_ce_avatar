@@ -147,6 +147,53 @@ NW_REPORT = """Your `markdown_summary` format (REQUIRED):
 
 #: Keyed as "<profile>_<kind>" to match utils.speclets_utils' cache keys.
 
+# --- Network Experience: Sleep Study --------------------------------------
+# Two documents the NW page edits besides its agent bundle (PROFILE_EXTRA_KINDS
+# in utils/speclets_utils.py). Words in {braces} are filled in per session by
+# services/sleepstudy_pipeline.py; an unknown {word} is left as written, so an
+# editor cannot break the prompt by adding braces of their own.
+#
+# What is NOT here, on purpose: the scenario rules (A / B / contact Intel),
+# their thresholds and the first line of the answer. The pipeline appends
+# those itself (POINT_ANSWER_CONTRACT), because it compares the agent's
+# verdict with the report's by the same rules -- an edit that changed one
+# side only would make every session look like a disagreement.
+#
+# sleepstudy_point fields:
+#   {session_id} {session_type} {start} {end} {duration} {sw_drips} {hw_drips}
+#   {threshold} {top_blocker} {top_blocker_active} {device}
+#   {wake_evidence}       what the report recorded about the device: D0 window,
+#                         OS jobs that woke it, net wake reasons, wake
+#                         durations, platform DRIPS wake sources
+#   {app_activity}        network power and traffic per app (SRUM, NDIS)
+#   {short_device_wakes}  short (0-29 s) wakes raised by the device
+#   {short_wake_limit}    above this many, the session goes to the Intel team
+#   {html_verdict}        the scenario the report alone points to
+#   {driver_request_examples}  device-specific OS/driver requests to check
+NW_SLEEPSTUDY_POINT = """Modern Standby battery drain. Sleep Study session {session_id} ({session_type}) ran {start} to {end} ({duration}) on battery with software DRIPS {sw_drips} and hardware DRIPS {hw_drips}, below the {threshold} bar. The RED top blocker was {top_blocker} ({top_blocker_active} active).
+
+What Sleep Study recorded about the {device} device in this session:
+{wake_evidence}
+
+Network activity by app in this session (SRUM network power, NDIS bytes and outgoing wakes):
+{app_activity}
+
+Short (0-29 s) wakes raised by the device (NetWakeReasonTypeDevice): {short_device_wakes}. From the report alone this session reads as: {html_verdict}.
+
+Driver issue description and analysis request: explain, from the {device} driver's perspective, why it repeatedly left low power (D0/Dx transitions) during this Sleep Study window and what prevented the platform from reaching or staying in DRIPS. Use the Sleep Study evidence above to prioritize the investigation: correlate {driver_request_examples} and wake counts with timestamps and durations in the driver log; check app traffic only when the report points to it; and distinguish an OS/driver request, device-originated wake (identify packet/pattern if present, or disconnect/roam), user input, and timer-driven activity. For each supported wake sequence, say whether the driver returned to low power promptly, and compare the driver evidence with the report's {html_verdict} hypothesis.
+
+Choose and use the most relevant skill or skills available to this {device} agent, based on the Sleep Study evidence and the matching driver-log symptoms. When the "Modern Standby Wake (D0/Dx)" skill is available, start with it: it reads the D0 Entry / D0 Exit windows, the wake reason, the resume and suspend flows and the OS commands received while in D0; add another skill only when that evidence points to one (for example a roam or a disconnect inside the window). Briefly name the selected skill(s) and the evidence that made them relevant. If no available skill fits, say so and continue with a focused general log analysis. Do not infer a wake trigger or claim a skill-specific issue without log evidence.
+
+Keep the answer concise because this session is compared with other time points. Use only the report and driver-log evidence; do not invent numbers."""
+
+# sleepstudy_summary fields: {short_wake_limit}
+NW_SLEEPSTUDY_SUMMARY = """You are a Modern Standby power analyst for Intel wireless drivers. You get the bad sessions of one Sleep Study report: sessions on battery where the platform failed to rest. Some have a wireless device as the RED top blocker; for each of those you have what Sleep Study recorded (OS jobs that woke the device, net wake reasons, short wakes, network activity by app) and the scenario the report alone points to, and for the ones a person chose to check, what a driver log agent concluded after reading that session's driver log. The others ("system") have no wireless RED blocker and were not checked against a driver log.
+
+Scenarios: A = activity by OS / app (an App ID or OS job dominates network power or traffic); B = activity by remote (a stream of short wakes raised by the device, NetWakeReasonTypeDevice, from unsolicited inbound traffic); "Please contact Intel Wi-Fi team" = neither is supported, or more than {short_wake_limit} short device wakes in a session.
+
+Write concise English. Return only a **Conclusion** of at most two short sentences: identify the leading cause across checked sessions, whether driver logs confirm or change the Sleep Study interpretation, and any important system blocker. The application shows each session's evidence separately. Do not add headings, tables, timelines, per-session restatements, or recommendations. Use the provided counts; do not recount or invent evidence. If the logs do not support a clear cause, say so plainly."""
+
+
 # --- Linux (linux_chatbot) ------------------------------------------------
 
 # Without these the Linux agent sent an empty system prompt, which the LLM API
@@ -312,6 +359,8 @@ DEFAULTS: dict[str, str] = {
     "bt_report": BT_REPORT,
     "nw_prompt": NW_PROMPT,
     "nw_report": NW_REPORT,
+    "nw_sleepstudy_point": NW_SLEEPSTUDY_POINT,
+    "nw_sleepstudy_summary": NW_SLEEPSTUDY_SUMMARY,
     "linux_prompt": LINUX_PROMPT,
     "linux_report": LINUX_REPORT,
     "shared_review": SHARED_REVIEW,

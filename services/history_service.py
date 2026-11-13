@@ -107,6 +107,13 @@ _LIST_LIMIT = 300
 # without bound. 200k chars is far above any real report.
 _MAX_RESULT_CHARS = 200_000
 
+# Snapshot fields record_turn owns; a profile's ``extra`` may not replace them.
+_SNAPSHOT_KEYS = frozenset({
+    "schema_version", "conversation_id", "session_id", "title", "created_at",
+    "updated_at", "log_path", "issue", "issue_time", "domain", "turns",
+    "pinned", "case_nbr", "case_ref_source",
+})
+
 # --- Sidecars -------------------------------------------------------------
 # Subfolders (NOT files in the root) so the conversation listing's
 # non-recursive "*.json" glob never sees them — see the module docstring.
@@ -363,6 +370,7 @@ def record_turn(
     domain: str = "",
     steps: Optional[list] = None,
     agent_context: Optional[list] = None,
+    extra: Optional[dict] = None,
 ) -> None:
     """
     Append one turn to the conversation's history file, creating the file on
@@ -377,6 +385,11 @@ def record_turn(
     the turn. Both go to sidecars, never into the conversation file, and only
     after the turn itself is safely on disk — they are nice-to-haves, the turn
     is not.
+
+    ``extra`` holds profile-specific inputs kept on the snapshot next to
+    ``log_path`` (NW: the driver log of each Sleep Study time point). Keys
+    the snapshot already defines are never overwritten by it, and a dict
+    value is merged into the one earlier turns saved.
     """
     path = _conversation_path(conversation_id, domain)
     if path is None or not turn_id:
@@ -408,6 +421,15 @@ def record_turn(
                 snapshot["issue"] = issue
             if issue_time:
                 snapshot["issue_time"] = issue_time
+            for key, value in (extra or {}).items():
+                if key in _SNAPSHOT_KEYS:
+                    continue
+                # A dict accumulates across turns (NW: one driver log per
+                # time point, each saved by its own turn).
+                if isinstance(value, dict) and isinstance(snapshot.get(key), dict):
+                    snapshot[key] = {**snapshot[key], **value}
+                else:
+                    snapshot[key] = value
             snapshot["updated_at"] = _now_iso()
 
             # The case this conversation belongs to, recorded with it. The

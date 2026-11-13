@@ -477,6 +477,33 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         mock_orch.approve_and_post.assert_called_once_with(
             "d-1", edited_plain="edited text", visibility=None, attempt_id="a-12345678")
 
+    def test_approve_says_which_page_it_came_from(self, mock_orch):
+        """approve tells the orchestrator where the approval came from (usage tracking).
+
+        Input: POST /handsfree/queue/d-1/approve with via in the body; with no
+        via but a Referer of the Beacon page / the home page; with a via the
+        route does not know and no Referer.
+        Expected: via="home_dashboard" / "beacon_page" from the body, the
+        same two derived from the Referer, and no via argument at all when
+        nothing tells (the orchestrator then records the post as "api").
+        """
+        # Arrange
+        mock_orch.approve_and_post.return_value = {"ok": True}
+        url = "/handsfree/queue/d-1/approve"
+
+        # Act
+        self.client.post(url, json={"via": "home_dashboard"})
+        self.client.post(url, json={"via": "Beacon_Page"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/handsfree/"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/"})
+        self.client.post(url, json={"via": "somewhere-else"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/log_chatbot/"})
+
+        # Assert
+        self.assertEqual([c.kwargs.get("via", "<none>") for c in mock_orch.approve_and_post.call_args_list],
+                         ["home_dashboard", "beacon_page", "beacon_page", "home_dashboard",
+                          "<none>", "<none>"])
+
     def test_approve_without_body_passes_none(self, mock_orch):
         """approve passes edited_plain=None and visibility=None with no body.
 

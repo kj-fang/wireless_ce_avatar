@@ -975,8 +975,11 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
     from .composer import compose_html, strip_echo_section
     from .ips_client import PostResult
     plain = rec.get("draft_plain") or ""
+    sent_plain = plain                  # the text that goes into the reply
     if ECHO_SECTION_START in plain:
-        body_html = compose_html(strip_echo_section(plain))
+        sent_plain = strip_echo_section(plain)
+        body_html = compose_html(sent_plain)
+        _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section left out of the Outlook reply "
                    f"of {draft_id} (kept in the review record)")
     else:
@@ -998,9 +1001,11 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
                                     "reply_all": reply_all,
                                     "in_reply_to": email.get("subject", "")})
         store.update(draft_id, status="posted", post_result=result.to_dict())
+        _track_post(store, draft_id, ok=True, posted_plain=sent_plain)
         return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
     store.update(draft_id, status="post_failed",
                  post_result={"ok": False, "backend": "outlook", "error": err})
+    _track_post(store, draft_id, ok=False, posted_plain=sent_plain)
     return {"ok": False, "error": err, "draft": store.get(draft_id)}
 # retention
 # ---------------------------------------------------------------------------
@@ -1111,7 +1116,7 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
         _log_event(f"[{case_nbr}] auto-post skipped: no verified rest_field_map - "
                    f"{draft_id} left for review")
         return
-    res = approve_and_post(draft_id, visibility=VISIBILITY_EXTERNAL)
+    res = approve_and_post(draft_id, visibility=VISIBILITY_EXTERNAL, via="auto_post")
     if res.get("ok"):
         store.update(draft_id, auto_posted=True)
         _log_event(f"[{case_nbr}] auto-posted first response {draft_id} (mode={mode})")
@@ -1120,9 +1125,76 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
                    "- left for review")
 
 
+# Per approval, on the thread that runs it: where the approval came from and
+# what the system itself changed in the text. Read by _track_post, which
+# records the post for usage analytics; kept out of every signature in
+# between.
+_approval = threading.local()
+
+# Where an approval can come from (gather_service.HANDSFREE_POST_VIAS).
+POST_VIAS = ("beacon_page", "home_dashboard", "auto_post", "api")
+
+
+def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
+                posted_plain: Optional[str] = None) -> None:
+    """Usage record of an approval that reached a posting backend: who
+    posted, from which page, with what outcome, and the text that went out
+    next to the text Beacon suggested (gather_service.record_handsfree_post).
+    Reads the draft as it stands after the post. Never raises and never
+    delays the answer - the write runs on the Gather service's own thread,
+    and a build with collection switched off records nothing."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        rec = store.get(draft_id) or {}
+        result = rec.get("post_result") or {}
+        analysis = rec.get("analysis") or {}
+        backend = str(result.get("backend") or "")
+        current = rec.get("draft_plain") or ""
+        suggested = rec["suggested_plain"] if "suggested_plain" in rec else current
+        echo_stripped = bool(getattr(_approval, "echo_stripped", False))
+        # The Echo section is dropped by the SYSTEM (public IPS posts, every
+        # Outlook reply), never by the reviewer: the reviewer's edit is
+        # measured against the suggestion without it, or every such post
+        # would read as "the reviewer cut 30 lines".
+        edit_baseline = None
+        if echo_stripped:
+            from .composer import strip_echo_section
+            edit_baseline = strip_echo_section(suggested)
+        who = result.get("posted_by") if isinstance(result.get("posted_by"), dict) else None
+        gather_service.record_handsfree_post(
+            draft_id=draft_id,
+            case_nbr=str(rec.get("case_nbr") or ""),
+            via=getattr(_approval, "via", "") or "api",
+            ok=bool(ok),
+            backend=backend,
+            visibility=("email" if backend == "outlook"
+                        else str(result.get("visibility") or getattr(_approval, "visibility", "") or "")),
+            error="" if ok else str(result.get("error") or ""),
+            comment_id=str(result.get("comment_id") or ""),
+            draft_mode=str(rec.get("mode") or ""),
+            draft_source=str(rec.get("source") or ""),
+            case_domain=str(analysis.get("wifi_or_bt") or ""),
+            issue_domain=str(analysis.get("issue_domain") or ""),
+            reviewer=who or getattr(_approval, "reviewer", None),
+            handsfree_role=scheduler.role(),
+            # A draft whose text never changed since it was queued carries no
+            # separate copy: what it holds IS the suggestion.
+            suggested_plain=suggested,
+            suggested_source=str(rec.get("suggested_source") or "unchanged"),
+            posted_plain=current if posted_plain is None else posted_plain,
+            echo_stripped=echo_stripped,
+            edit_baseline_plain=edit_baseline,
+        )
+    except Exception as e:
+        print(f"[handsfree] post of {draft_id} not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
                      visibility: Optional[str] = None,
-                     attempt_id: Optional[str] = None) -> dict:
+                     attempt_id: Optional[str] = None,
+                     via: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
     Returns the updated draft record + result.
 
@@ -1145,9 +1217,18 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
     draft's status and post_result may still describe an EARLIER attempt
     (a post_failed draft keeps them until its retry finishes), and taking
     that stale failure for this attempt's would unlock editing and Reject
-    while the retry is still posting."""
+    while the retry is still posting.
+
+    via says where the approval came from, for usage tracking only (one of
+    POST_VIAS: the Beacon page, the Avatar home dashboard, the server's
+    automatic first response; anything else counts as "api")."""
     attempt = _clean_attempt_id(attempt_id)
     with _post_lock:
+        via_clean = str(via or "").strip().lower()
+        _approval.via = via_clean if via_clean in POST_VIAS else "api"
+        _approval.echo_stripped = False
+        _approval.visibility = ""
+        _approval.reviewer = None
         if attempt:
             _mark_attempt(draft_id, attempt, "running")
         result: Optional[dict] = None
@@ -1157,6 +1238,10 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
         finally:
             if attempt:
                 _mark_attempt(draft_id, attempt, "done", result)
+            _approval.via = ""
+            _approval.echo_stripped = False
+            _approval.visibility = ""
+            _approval.reviewer = None
 
 
 def _clean_attempt_id(attempt_id) -> str:
@@ -1245,6 +1330,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                              reviewer: Optional[dict] = None,
                              visibility: str = DEFAULT_VISIBILITY) -> dict:
     store = _store()
+    _approval.visibility = visibility       # for the usage record of a failed post
+    _approval.reviewer = reviewer           # a failed post has no posted_by to read it from
     cfg = store.load_config()
     rec = store.get(draft_id)
     if rec is None:
@@ -1281,6 +1368,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         plain = strip_echo_section(rec.get("draft_plain") or "")
         rec = store.update(draft_id, draft_plain=plain,
                            draft_html=compose_html(plain))
+        _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section stripped from the public "
                    f"post of {draft_id}")
 
@@ -1365,6 +1453,7 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             # problem the UI poster could work around: stop, the reviewer
             # signs in again and approves again.
             store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            _track_post(store, draft_id, ok=False)
             return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
     if result is None or (not result.ok and backend == "auto"):
@@ -1412,9 +1501,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
                           first_response=draft_is_checklist and is_public_reply,
                           posted_by=reviewer_name)
+        _track_post(store, draft_id, ok=True)
         return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
     store.update(draft_id, status="post_failed", post_result=result.to_dict())
+    _track_post(store, draft_id, ok=False)
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
 

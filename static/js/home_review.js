@@ -491,6 +491,7 @@
             try {
                 await request('queue/' + encodeURIComponent(draftId) + '/approve', 'POST', {
                     draft_plain: element('draft-text').value, visibility, attempt: attemptId,
+                    via: 'home_dashboard',          // which page this post came from (usage tracking)
                 }, timing.approveMs);
             } catch (error) {
                 if (error.answered) throw error;       // the server refused: nothing is running

@@ -349,6 +349,25 @@ def save_draft(draft_id: str):
     return jsonify({"ok": True, "draft": rec})
 
 
+def _approval_via(body: dict) -> str:
+    """Which page an approval came from, for usage tracking: what the page
+    says in the body ("beacon_page", "home_dashboard"), else what the
+    Referer shows (the Beacon page lives under /handsfree/, the dashboard on
+    the home page). "" when neither tells - the orchestrator then files the
+    post as "api" (a script, an older page)."""
+    said = str(body.get("via") or "").strip().lower()
+    if said in ("beacon_page", "home_dashboard"):
+        return said
+    from urllib.parse import urlsplit
+    referer = request.headers.get("Referer") or ""
+    if not referer:
+        return ""
+    path = urlsplit(referer).path or "/"
+    if path.startswith("/handsfree"):
+        return "beacon_page"
+    return "home_dashboard" if path in ("/", "/index", "/index.html") else ""
+
+
 @handsfree_bp.route("/queue/<draft_id>/approve", methods=["POST"])
 def approve(draft_id: str):
     """Body: draft_plain (the reviewer's text) and visibility — "internal"
@@ -361,6 +380,9 @@ def approve(draft_id: str):
         # The page's own id for this approval: it reads the outcome back by
         # it when the answer to this request never arrives.
         extra["attempt_id"] = str(body.get("attempt"))
+    via = _approval_via(body)
+    if via:
+        extra["via"] = via
     return jsonify(orchestrator.approve_and_post(
         draft_id, edited_plain=body.get("draft_plain"),
         visibility=body.get("visibility"), **extra))

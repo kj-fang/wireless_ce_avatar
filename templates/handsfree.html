@@ -1846,8 +1846,9 @@
     document.getElementById('post-status').textContent = currentDraftEmail ? 'saving the Outlook draft…' : 'posting…';
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/approve', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
+      // via: which page this post came from (usage tracking)
       body: JSON.stringify({draft_plain: document.getElementById('draft-text').value,
-                            visibility: visibility}),
+                            visibility: visibility, via: 'beacon_page'}),
     });
     const j = await r.json();
     const postedName = j.ok && ((j.result && j.result.author && j.result.author.name)

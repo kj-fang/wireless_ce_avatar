@@ -113,7 +113,18 @@ from utils import check_ips_utils
 # this: it adds one optional field, and one directory level for developer runs
 # only, and changes the meaning of no existing field. The collector accepts
 # records with and without execution_mode, and reads the flat root as "exe".
+#
+# Beacon (Handsfree) post events do not bump it either: they are a NEW record
+# kind in a folder of its own (<root>/handsfree_posts/<user>/<id>.json), no
+# existing record changes, and the kind versions itself with
+# `handsfree_post_version` (see record_handsfree_post).
 GATHER_SCHEMA_VERSION = 6
+
+# Version of the "handsfree_post" record, independent of the schema above.
+#   v1 - who posted which draft from which page, with what outcome; the text
+#        Beacon suggested, the text that was posted, and a line-level summary
+#        of the reviewer's edit.
+HANDSFREE_POST_VERSION = 1
 
 # Bucket for records that carry no domain, rather than assuming the busiest
 # one. Defaulting these to "wifi" made real wifi traffic indistinguishable
@@ -126,6 +137,11 @@ _MAX_MSG_CHARS = 4000         # cap the stored first question
 _MAX_TURNS = 200              # cap turns[] so a long conversation can't bloat the file
 _MAX_INVOCATIONS = 500        # bounded feature ledger per case workflow
 _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
+# A full-analysis draft with its Echo section runs to ~21,000 characters on
+# real cases; the cap is a guard against a runaway text, not a trim.
+_MAX_POST_CHARS = 60000       # cap each stored Beacon draft text (suggested / posted)
+_MAX_EDIT_LINES = 200         # cap the removed / added line lists of an edit summary
+_MAX_EDIT_LINE_CHARS = 500    # cap one line in those lists
 
 # Minimum seconds between async aggregate rebuilds (per process). Each write
 # schedules a rebuild but only one runs per cooldown window, so a burst of
@@ -141,7 +157,7 @@ _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 _AGG_COOLDOWN_SEC = 600
 
 # Record kinds that live under the mode sub-root, one file per id, per user.
-_RECORD_DIRS = ("sessions", "workflows", "feedback_submissions")
+_RECORD_DIRS = ("sessions", "workflows", "feedback_submissions", "handsfree_posts")
 
 # Which build produced a record. Reporting has to tell support traffic from
 # developer traffic and a flat tree cannot: both landed in the same folders.
@@ -440,6 +456,13 @@ def _feedback_submission_path(feedback_event_id: str, user: str) -> Path:
     user_dir = root / "feedback_submissions" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(feedback_event_id)}.json"
+
+
+def _handsfree_post_path(post_event_id: str, user: str) -> Path:
+    root = _mode_root(_resolve_root())
+    user_dir = root / "handsfree_posts" / _safe_id(user)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir / f"{_safe_id(post_event_id)}.json"
 
 
 def _agent_domain(value: Any) -> str:
@@ -2011,6 +2034,169 @@ def record_feedback_submit(
 
 
 # ---------------------------------------------------------------------------
+# Beacon (Handsfree) posts: who posted what, and how it differs from what
+# Beacon suggested
+# ---------------------------------------------------------------------------
+
+# Where an approval came from. Anything else is recorded as "api".
+HANDSFREE_POST_VIAS = ("beacon_page", "home_dashboard", "auto_post", "api")
+
+
+def _post_lines(text: Any) -> list[str]:
+    """The lines of a draft that carry content, trailing space removed."""
+    return [ln.rstrip() for ln in str(text or "").replace("\r\n", "\n").split("\n")
+            if ln.strip()]
+
+
+def summarise_edit(suggested: Any, posted: Any) -> dict:
+    """What a reviewer did to Beacon's suggestion before it went out, line by
+    line: how alike the two texts are, which suggested lines were dropped and
+    which lines were written in. This is the learning signal - the dropped
+    lines are what reviewers do NOT pass on to a customer. Blank lines and
+    trailing spaces are ignored. Pure; never raises on odd input."""
+    import difflib
+    a, b = _post_lines(suggested), _post_lines(posted)
+    removed: list[str] = []
+    added: list[str] = []
+    kept = 0
+    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            kept += i2 - i1
+            continue
+        if tag in ("delete", "replace"):
+            removed.extend(a[i1:i2])
+        if tag in ("insert", "replace"):
+            added.extend(b[j1:j2])
+    clip = lambda lines: [ln[:_MAX_EDIT_LINE_CHARS] for ln in lines[:_MAX_EDIT_LINES]]
+    return {
+        "changed": bool(removed or added),
+        "similarity": round(matcher.ratio(), 3) if (a or b) else 1.0,
+        "suggested_lines": len(a),
+        "posted_lines": len(b),
+        "kept_lines": kept,
+        "removed_count": len(removed),
+        "added_count": len(added),
+        "removed_lines": clip(removed),
+        "added_lines": clip(added),
+    }
+
+
+def _post_text(text: Any) -> dict:
+    s = str(text or "")
+    return {"text": s[:_MAX_POST_CHARS], "chars": len(s),
+            "lines": len(_post_lines(s)), "truncated": len(s) > _MAX_POST_CHARS}
+
+
+def _do_record_handsfree_post(event: dict) -> None:
+    """Write one Beacon post event; idempotent per post_event_id."""
+    user = _current_user()
+    try:
+        path = _handsfree_post_path(event["post_event_id"], user)
+        record = {
+            "schema_version": GATHER_SCHEMA_VERSION,
+            "record_type": "handsfree_post",
+            "handsfree_post_version": HANDSFREE_POST_VERSION,
+            "user_name": user,
+            "date": _today(),
+            "app_version": APP_VERSION,
+            "execution_mode": _execution_mode(),
+            **event,
+        }
+        with _lock_for(path):
+            _write_json_atomic(path, record)
+    except Exception as e:
+        print(f"[gather] handsfree post failed (event={event.get('post_event_id')}): {e}")
+        return
+    _maybe_rebuild_aggregates_async()
+
+
+def record_handsfree_post(
+    *,
+    draft_id: str,
+    case_nbr: str,
+    via: str = "",
+    ok: bool = True,
+    backend: str = "",
+    visibility: str = "",
+    error: str = "",
+    comment_id: str = "",
+    draft_mode: str = "",
+    draft_source: str = "",
+    case_domain: str = "",
+    issue_domain: str = "",
+    reviewer: Optional[dict] = None,
+    handsfree_role: str = "",
+    suggested_plain: Any = "",
+    suggested_source: str = "",
+    posted_plain: Any = "",
+    echo_stripped: bool = False,
+    edit_baseline_plain: Any = None,
+    post_event_id: str = "",
+) -> str:
+    """Record one Beacon approval that reached a posting backend.
+
+    Answers two questions for later analysis:
+
+      * usage - who posted (Windows user, IPS reviewer), from which page
+        (`via`: the Beacon page, the Avatar home dashboard, the server's
+        automatic first response, or another caller), to which backend, as an
+        internal or a customer-visible comment, and whether it went through;
+      * content - the text Beacon suggested, the text that was actually
+        posted, and a line-level summary of the difference (summarise_edit),
+        so we can learn which parts of a suggestion reviewers keep.
+
+    `edit` describes what the REVIEWER changed. When the system itself took
+    something out before posting (the internal Echo section, `echo_stripped`),
+    the caller passes `edit_baseline_plain` - the suggestion without that
+    part - and the edit is measured against it; `edit.baseline` says which
+    was used. The full suggestion is stored either way.
+
+    Like every Gather write: independent of the caller, in a background
+    thread, never raises, and silent when collection is off for this build.
+    Returns the event id ("" when nothing was recorded)."""
+    if not draft_id or not _collection_enabled():
+        return ""
+    try:
+        event_id = _safe_id(post_event_id) if post_event_id else f"{_safe_id(draft_id)}__{uuid.uuid4().hex[:8]}"
+        via_clean = str(via or "").strip().lower()
+        who = reviewer or {}
+        event = {
+            "post_event_id": event_id,
+            "posted_at": _now_iso(),
+            "via": via_clean if via_clean in HANDSFREE_POST_VIAS else "api",
+            "handsfree_role": str(handsfree_role or "")[:20],
+            "reviewer": {"name": str(who.get("name") or "")[:120],
+                         "user_id": str(who.get("user_id") or "")[:40]},
+            "case_nbr": check_ips_utils.normalise_ips(str(case_nbr or "")) or str(case_nbr or "")[:20],
+            "draft_id": _safe_id(draft_id),
+            "draft_mode": str(draft_mode or "")[:40],
+            "draft_source": str(draft_source or "")[:20],
+            "case_domain": str(case_domain or "")[:20],
+            "issue_domain": str(issue_domain or "")[:80],
+            "ok": bool(ok),
+            "backend": str(backend or "")[:20],
+            "visibility": str(visibility or "")[:20],
+            "error": str(error or "")[:500],
+            "comment_id": str(comment_id or "")[:64],
+            "suggested": {**_post_text(suggested_plain),
+                          "source": str(suggested_source or "")[:20]},
+            "posted": _post_text(posted_plain),
+            "edit": {**summarise_edit(suggested_plain if edit_baseline_plain is None
+                                      else edit_baseline_plain, posted_plain),
+                     "baseline": ("suggested" if edit_baseline_plain is None
+                                  else "suggested_without_echo"),
+                     "echo_stripped": bool(echo_stripped)},
+        }
+        threading.Thread(target=_do_record_handsfree_post, args=(event,), daemon=True,
+                         name="gather-handsfree-post").start()
+        return event_id
+    except Exception as e:
+        print(f"[gather] handsfree post dispatch failed: {e}")
+        return ""
+
+
+# ---------------------------------------------------------------------------
 # Silver layer: aggregate rollups derived from the bronze per-conversation
 # records. Files live at <root>/aggregates/*.json and are fully regenerated
 # from the bronze records, so they're always consistent with the source of
@@ -2400,6 +2586,12 @@ def compute_aggregates() -> dict:
         },
     }
 
+    try:
+        handsfree_stats = _handsfree_stats()
+    except Exception as e:
+        print(f"[gather] handsfree stats skipped: {e}")
+        handsfree_stats = {}
+
     feature_spend_out = {
         feature: {
             **data,
@@ -2505,6 +2697,7 @@ def compute_aggregates() -> dict:
         "feature_spend": feature_spend_out,
         "attachment_stats": attachment_stats,
         "feedback_stats": feedback_stats,
+        "handsfree_stats": handsfree_stats,
         "top_users": top_users,
         "top_cases": top_cases,
     }
@@ -2519,6 +2712,94 @@ def compute_aggregates() -> dict:
         "feature_spend": feature_spend_out,
         "attachment_stats": attachment_stats,
         "feedback_stats": feedback_stats,
+        "handsfree_stats": handsfree_stats,
+    }
+
+
+def iter_handsfree_posts() -> Iterator[dict]:
+    """Yield Beacon post events (record_handsfree_post)."""
+    try:
+        root = _resolve_root()
+    except Exception:
+        return
+    event_dir = root / "handsfree_posts"
+    if not event_dir.exists():
+        return
+    for user_dir in event_dir.iterdir():
+        if not user_dir.is_dir():
+            continue
+        for f in user_dir.glob("*.json"):
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
+def _handsfree_stats() -> dict:
+    """Rollup of the Beacon post events: how many posts, by whom, from which
+    page, with what visibility, and how often the suggestion was edited."""
+    by_via: Counter = Counter()
+    by_visibility: Counter = Counter()
+    by_mode: Counter = Counter()
+    by_backend: Counter = Counter()
+    users: dict[str, dict] = defaultdict(
+        lambda: {"posts": 0, "failed": 0, "edited": 0, "by_via": Counter(), "case_numbers": set()})
+    total = ok_posts = edited = 0
+    similarity_sum = 0.0
+    cases: set = set()
+    for event in iter_handsfree_posts():
+        total += 1
+        user_name = str(event.get("user_name") or "anon").strip() or "anon"
+        via = str(event.get("via") or "api")
+        entry = users[user_name]
+        if not event.get("ok"):
+            entry["failed"] += 1
+            continue
+        ok_posts += 1
+        edit = event.get("edit") if isinstance(event.get("edit"), dict) else {}
+        by_via[via] += 1
+        by_visibility[str(event.get("visibility") or "unknown")] += 1
+        by_mode[str(event.get("draft_mode") or "unknown")] += 1
+        by_backend[str(event.get("backend") or "unknown")] += 1
+        entry["posts"] += 1
+        entry["by_via"][via] += 1
+        case_nbr = str(event.get("case_nbr") or "").strip()
+        if case_nbr:
+            cases.add(case_nbr)
+            entry["case_numbers"].add(case_nbr)
+        if edit.get("changed"):
+            edited += 1
+            entry["edited"] += 1
+        try:
+            similarity_sum += float(edit.get("similarity", 1.0))
+        except (TypeError, ValueError):
+            similarity_sum += 1.0
+    return {
+        "total_events": total,
+        "posts": ok_posts,
+        "failed_posts": total - ok_posts,
+        "distinct_users": len(users),
+        "distinct_cases": len(cases),
+        "edited_posts": edited,
+        "posted_as_suggested": ok_posts - edited,
+        "mean_similarity": round(similarity_sum / ok_posts, 3) if ok_posts else None,
+        "by_via": dict(by_via),
+        "by_visibility": dict(by_visibility),
+        "by_draft_mode": dict(by_mode),
+        "by_backend": dict(by_backend),
+        "by_user": {
+            user_name: {
+                "posts": data["posts"],
+                "failed": data["failed"],
+                "edited": data["edited"],
+                "by_via": dict(data["by_via"]),
+                "distinct_cases": len(data["case_numbers"]),
+                "case_numbers": sorted(data["case_numbers"]),
+            }
+            for user_name, data in sorted(users.items())
+        },
     }
 
 

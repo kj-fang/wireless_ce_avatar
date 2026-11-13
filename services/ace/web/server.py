@@ -240,6 +240,7 @@ def _resolve_key_module(force: bool = False) -> object:
         key_path = helpers.get_load_path(
             path_configs.KEY_PATH_prim,
             path_configs.KEY_PATH_bkup,
+            label="key",
         )
         if key_path is None:
             raise RuntimeError("Could not resolve key share — VPN reachable?")

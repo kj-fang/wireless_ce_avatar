@@ -10,6 +10,7 @@ import subprocess
 import importlib.util
 import pyperclip
 import threading
+import time
 from pathlib import Path
 from typing import List
 
@@ -122,20 +123,33 @@ def load_module(path, module_name):
     spec.loader.exec_module(module)
     return module
 
-def get_load_path(primary, backup, timeout_sec=8):
-    print("checking shared folder path...")
+def get_load_path(primary, backup, timeout_sec=8, label=None):
+    tag = f"[{label}] " if label else ""
+    print(f"{tag}checking shared folder path...")
     for path in [primary, backup]:
-        result = [False]
-        def check(): 
-            try: result.__setitem__(0, Path(path).exists())
-            except: pass
+        result = {"exists": False, "error": None}
+        def check():
+            try:
+                result["exists"] = Path(path).exists()
+            except Exception as e:
+                result["error"] = e
+        start = time.monotonic()
         thread = threading.Thread(target=check, daemon=True)
         thread.start()
         thread.join(timeout_sec)
-        if not thread.is_alive() and result[0]:
-            print(f"Using: {path}")
+        elapsed = time.monotonic() - start
+        if thread.is_alive():
+            print(f"{tag}  TIMEOUT after {elapsed:.1f}s (> {timeout_sec}s): {path}")
+            continue
+        if result["error"] is not None:
+            err = result["error"]
+            print(f"{tag}  ERROR after {elapsed:.1f}s checking {path}: {type(err).__name__}: {err}")
+            continue
+        if result["exists"]:
+            print(f"{tag}Using: {path} (found in {elapsed:.1f}s)")
             return path
-    print("!! ALL SHARED FOLDER UNAVAILABLE")
+        print(f"{tag}  NOT FOUND after {elapsed:.1f}s: {path}")
+    print(f"{tag}!! ALL SHARED FOLDER UNAVAILABLE")
 
 
 def read_log_file(path: str) -> List[str]:

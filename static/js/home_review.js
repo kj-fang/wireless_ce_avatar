@@ -310,6 +310,7 @@
         element('approve').disabled = busy || closed || !!draft?.trial;
         element('save').disabled = busy || closed;
         element('reject').disabled = busy || closed;
+        element('reset').disabled = busy || handoffBusy || !draft?.case_nbr || draft.status === 'unconfirmed';
         element('folder').disabled = busy || folderBusy || !draft;
         element('post-close').disabled = busy;
         const hasLog = !!(draft?.shared_log_path || draft?.analysis?.log_path) && !avatarUnavailable;
@@ -371,6 +372,31 @@
             await loadQueue();
         } catch (error) {
             setPostStatus('Could not reject draft: ' + error, 'error');
+        } finally {
+            busy = false;
+            updateButtons();
+        }
+    }
+
+    async function resetCase() {
+        if (!draft || element('reset').disabled) return;
+        const caseNbr = draft.case_nbr;
+        const message = 'Reset Beacon history of case ' + caseNbr + '?\n\n' +
+            'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
+            'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
+            (isDirty() ? 'Unsaved changes to this draft will be discarded.\n\n' : '') +
+            'OK = reset (keep downloaded files)\nCancel = do nothing';
+        if (!window.confirm(message)) return;
+        busy = true;
+        updateButtons();
+        setPostStatus('Resetting case history...');
+        try {
+            await request('case/' + encodeURIComponent(caseNbr) + '/reset', 'POST', {purge_downloads: false});
+            busy = false;
+            closeModal();
+            await loadQueue();
+        } catch (error) {
+            setPostStatus('Could not reset case history: ' + error, 'error');
         } finally {
             busy = false;
             updateButtons();
@@ -552,6 +578,7 @@
     element('approve').addEventListener('click', approveDraft);
     element('save').addEventListener('click', saveDraft);
     element('reject').addEventListener('click', rejectDraft);
+    element('reset').addEventListener('click', resetCase);
     element('save-close').addEventListener('click', async () => {
         if (await saveDraft()) closeModal();
     });

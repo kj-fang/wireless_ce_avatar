@@ -70,7 +70,7 @@
             margin: 5px 8px 7px; border: 1px solid #d6dbe1; border-radius: 5px; overflow: hidden;
         }
         .key-log-filter-head, .key-log-filter-rule {
-            display: grid; grid-template-columns: 44px minmax(0, 1fr) 46px 28px; align-items: center;
+            display: grid; grid-template-columns: 62px minmax(0, 1fr) 46px 28px; align-items: center;
         }
         .key-log-filter-head {
             min-height: 21px; background: #f4f6f8; border-bottom: 1px solid #d6dbe1;
@@ -81,12 +81,18 @@
         .key-log-filter-list { flex: 1; min-height: 0; overflow: auto; font-size: 0.68rem; }
         .key-log-filter-rule {
             min-height: 21px; border-bottom: 1px solid #f0f2f4; line-height: 1.4;
-            color: #2c2f33;
+            color: #2c2f33; cursor: grab; user-select: none;
         }
         .key-log-filter-rule:hover { background: rgba(0, 113, 197, 0.05); }
+        .key-log-filter-rule.is-dragging { opacity: 0.45; cursor: grabbing; }
+        .key-log-filter-rule.drop-before { box-shadow: inset 0 2px #0071c5; }
+        .key-log-filter-rule.drop-after { box-shadow: inset 0 -2px #0071c5; }
         .key-log-filter-mod {
             display: flex; align-items: center; gap: 3px; min-width: 0; padding: 1px 4px;
         }
+        .key-log-filter-drag { width: 16px; height: 18px; flex: 0 0 16px; cursor: grab; }
+        .key-log-filter-drag:active { cursor: grabbing; }
+        .key-log-filter-drag svg { width: 14px; height: 14px; }
         .key-log-filter-mod input { width: 12px; height: 12px; margin: 0; }
         .key-log-filter-letter {
             color: #7a8088; font: 0.64rem Consolas, monospace;
@@ -121,6 +127,14 @@
         .key-log-filter-editor input[type="color"] { width: 20px; height: 18px; padding: 0; border: none; }
         .key-log-filter-editor-error { flex: 1 1 100%; color: #b3261e; font-size: 0.68rem; }
         .key-log-filter-editor-buttons { flex: 1 1 100%; display: flex; gap: 6px; justify-content: flex-end; }
+        .key-log-filter-editor-buttons button {
+            min-height: 28px; padding: 4px 12px; border: 1px solid #cbd5e1; border-radius: 4px;
+            background: #fff; color: #475569; font-size: 0.72rem; font-weight: 600; cursor: pointer;
+        }
+        .key-log-filter-editor-cancel:hover { background: #f1f5f9; }
+        .key-log-filter-editor-buttons .key-log-filter-editor-submit { border-color: #0071c5; background: #0071c5; color: #fff; }
+        .key-log-filter-editor-buttons .key-log-filter-editor-submit:hover { border-color: #005a9e; background: #005a9e; }
+        .key-log-filter-editor-buttons button:focus-visible { outline: 2px solid #0071c5; outline-offset: 2px; }
         .key-log-state { padding: 2px 7px; border-radius: 4px; background: #fff3cd; color: #664d03; font-size: 0.68rem; font-weight: 500; }
         .key-log-state.success { background: #e8f5e9; color: #1b5e20; }
         .key-log-content {
@@ -131,6 +145,7 @@
             color: #2c2f33; background: #fff; text-align: left;
         }
         .key-log-content.virtualized { position: relative; padding: 0; white-space: normal; }
+        .key-log-content .key-log-unmatched { color: #89939d; }
         .key-log-content * { font-family: inherit; }
         .key-log-virtual-spacer { position: relative; width: max-content; min-width: 100%; }
         .key-log-virtual-row {

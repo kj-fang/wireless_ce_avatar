@@ -1239,10 +1239,60 @@ class AgentRoutes:
         try:
             if data.get("recipient", "avatar") == "avatar":
                 client, model = self._get_llm_client_model()
+                agent = self._get_configuration_agent()
+                skills = getattr(agent, "skills", {}) or {}
+                skill_catalog = []
+                if isinstance(skills, dict):
+                    skill_values = skills.values()
+                elif isinstance(skills, (list, tuple)):
+                    skill_values = skills
+                else:
+                    skill_values = ()
+                for skill in skill_values:
+                    if isinstance(skill, dict):
+                        skill_catalog.append({
+                            "name": skill.get("name"),
+                            "description": skill.get("description"),
+                            "expert_rules": skill.get("expert_rules"),
+                            "keywords": skill.get("keywords", []),
+                        })
+                    else:
+                        skill_catalog.append({
+                            "name": getattr(skill, "name", None),
+                            "description": getattr(skill, "description", None),
+                            "expert_rules": getattr(skill, "expert_rules", None),
+                            "keywords": getattr(skill, "keywords", []),
+                        })
+                analysis = explain_snippet(
+                    data, client=client, model=model, echo_ask=ask_echo_chat,
+                    skill_catalog=skill_catalog, include_metadata=True,
+                    disabled_tools=getattr(getattr(agent, "capabilities", None), "disabled_tools", ()),
+                )
             else:
                 client, model = None, None
-            answer = explain_snippet(data, client=client, model=model, echo_ask=ask_echo_chat)
-            return jsonify(success=True, answer=answer)
+                analysis = explain_snippet(
+                    data, client=client, model=model, echo_ask=ask_echo_chat,
+                    include_metadata=True,
+                )
+            if isinstance(analysis, dict):
+                answer = analysis.get("answer", "")
+                applied_skills = analysis.get("applied_skills", [])
+                selection_status = analysis.get("selection_status", "no_match")
+                tool_results = analysis.get("tool_results", [])
+                token_usage = analysis.get("token_usage")
+            else:
+                answer = analysis
+                applied_skills = []
+                selection_status = "no_match"
+                tool_results = []
+                token_usage = None
+            result = dict(success=True, answer=answer, applied_skills=applied_skills,
+                          selection_status=selection_status)
+            if tool_results:
+                result["tool_results"] = tool_results
+            if data.get("recipient", "avatar") == "avatar":
+                result["token_usage"] = token_usage
+            return jsonify(result)
         except ValueError as error:
             return jsonify(success=False, error=str(error)), 400
         except Exception:

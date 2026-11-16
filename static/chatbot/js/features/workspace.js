@@ -11,6 +11,38 @@
     let active = false;
     let rawPath = '';
     let currentView = 'raw';
+    let sidebarWasCollapsed = false;
+
+    function setupLogDivider(viewer) {
+        const logLayout = viewer.querySelector('.key-log-layout');
+        if (logLayout.querySelector('.workspace-log-divider')) return;
+        const element = document.createElement('div');
+        element.className = 'workspace-log-divider';
+        element.setAttribute('role', 'separator');
+        element.setAttribute('aria-orientation', 'horizontal');
+        element.setAttribute('aria-label', 'Resize log viewer and filter');
+        logLayout.insertBefore(element, logLayout.querySelector('.key-log-filter-panel'));
+        element.addEventListener('pointerdown', event => {
+            if (event.button !== 0) return;
+            const available = logLayout.clientHeight - element.offsetHeight;
+            if (available <= 0) return;
+            const minimum = Math.min(100, available / 2);
+            const startHeight = logLayout.querySelector('.key-log-view').getBoundingClientRect().height;
+            const originY = event.clientY;
+            element.setPointerCapture(event.pointerId);
+            layout.classList.add('workspace-resizing');
+            element.onpointermove = move => {
+                const height = Math.max(minimum, Math.min(available - minimum, startHeight + move.clientY - originY));
+                pane.style.setProperty('--workspace-log-view', `${height / available}fr`);
+                pane.style.setProperty('--workspace-log-filter', `${(available - height) / available}fr`);
+            };
+            element.onpointerup = element.onpointercancel = element.onlostpointercapture = () => {
+                element.onpointermove = null;
+                layout.classList.remove('workspace-resizing');
+            };
+            event.preventDefault();
+        });
+    }
 
     function selectView(name) {
         currentView = name;
@@ -30,13 +62,16 @@
         if (!logLoaded) {
             if (!hosts.raw.firstElementChild) {
                 const viewer = openKeyLogModal('', toggle, 'preview', {id: 'workspace-raw-viewer', host: hosts.raw});
-                viewer.querySelector('.key-log-content').textContent = 'No log loaded.';
+                setupLogDivider(viewer);
             }
+            hosts.raw.firstElementChild.querySelector('.key-log-content').textContent = 'No log loaded.';
             return;
         }
         if (rawPath === path && hosts.raw.firstElementChild?.__source) return;
         rawPath = path;
-        await openTatPreviewFromSidebar(toggle, {id: 'workspace-raw-viewer', host: hosts.raw});
+        const preview = openTatPreviewFromSidebar(toggle, {id: 'workspace-raw-viewer', host: hosts.raw});
+        setupLogDivider(hosts.raw.firstElementChild);
+        await preview;
     }
 
     function divider(label, leftName, rightName) {
@@ -96,6 +131,12 @@
     layout.insertBefore(rightDivider, chat);
     toggle.addEventListener('click', () => {
         active = !active;
+        if (active) {
+            sidebarWasCollapsed = document.body.classList.contains('sidebar-collapsed');
+            document.body.classList.add('sidebar-collapsed');
+        } else {
+            document.body.classList.toggle('sidebar-collapsed', sidebarWasCollapsed);
+        }
         layout.classList.toggle('advanced-workspace', active);
         pane.hidden = leftDivider.hidden = rightDivider.hidden = !active;
         toggle.setAttribute('aria-pressed', String(active));
@@ -110,6 +151,7 @@
         showRaw,
         showEvidence(raw, trigger, status) {
             const viewer = openKeyLogModal(raw, trigger, status, {id: 'workspace-evidence-viewer', host: hosts.evidence});
+            setupLogDivider(viewer);
             selectView('evidence');
             return viewer;
         },
@@ -117,6 +159,6 @@
     document.addEventListener('chatbot:context-changed', () => {
         rawPath = '';
         for (const host of Object.values(hosts)) if (host.firstElementChild) cleanupKeyLogModal(host.firstElementChild);
-        if (active) showRaw();
+        queueMicrotask(() => { if (active) showRaw(); });
     });
 })();

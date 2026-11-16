@@ -26,6 +26,67 @@
             el.textContent = text;
         }
     }
+    function renderSkillMetadata(container, target, payload) {
+        container.replaceChildren();
+        container.hidden = target !== 'avatar';
+        if (container.hidden) return;
+
+        const status = payload.selection_status;
+        if (status === 'applied' && Array.isArray(payload.applied_skills) && payload.applied_skills.length) {
+            const heading = document.createElement('span');
+            heading.className = 'snippet-skill-heading';
+            heading.textContent = 'Skills applied';
+            const list = document.createElement('ul');
+            payload.applied_skills.forEach(skill => {
+                if (!skill || typeof skill.name !== 'string' || !skill.name) return;
+                const item = document.createElement('li');
+                const matchedKeywords = Array.isArray(skill.matched_keywords)
+                    ? skill.matched_keywords.filter(keyword => typeof keyword === 'string' && keyword)
+                    : [];
+                const evidence = matchedKeywords.length
+                    ? `Matched keywords: ${matchedKeywords.join(', ')}`
+                    : '';
+                item.textContent = [
+                    skill.name,
+                    evidence,
+                    typeof skill.reason === 'string' ? skill.reason : '',
+                ].filter(Boolean).join(' | ');
+                list.appendChild(item);
+            });
+            if (list.childElementCount) container.append(heading, list);
+            else container.textContent = 'No matching configured skill; general knowledge used.';
+        } else if (status === 'selection_failed') {
+            container.textContent = 'Skill selection failed; general knowledge used.';
+        } else if (status === 'no_match') {
+            container.textContent = 'No matching configured skill; general knowledge used.';
+        } else {
+            container.hidden = true;
+        }
+        if (Array.isArray(payload.tool_results) && payload.tool_results.length) {
+            container.hidden = false;
+            const heading = document.createElement('span');
+            heading.className = 'snippet-skill-heading';
+            heading.textContent = 'Tools';
+            const list = document.createElement('ul');
+            payload.tool_results.forEach(tool => {
+                if (!tool || typeof tool.name !== 'string' || typeof tool.status !== 'string') return;
+                const item = document.createElement('li');
+                item.textContent = [tool.name, tool.status, typeof tool.detail === 'string' ? tool.detail : ''].filter(Boolean).join(' | ');
+                list.appendChild(item);
+            });
+            if (list.childElementCount) container.append(heading, list);
+        }
+    }
+    function renderTokenUsage(container, target, usage) {
+        container.hidden = target !== 'avatar';
+        if (container.hidden) return;
+        if (!usage || typeof usage !== 'object') {
+            container.textContent = 'Token usage unavailable';
+            return;
+        }
+        const format = value => Number.isSafeInteger(value) && value >= 0 ? value.toLocaleString() : 'N/A';
+        container.textContent = `Tokens | Input: ${format(usage.input_tokens)} | Output: ${format(usage.output_tokens)} | Total: ${format(usage.total_tokens)}`;
+    }
     function formatRows(rows) {
         const lines = [];
         let previous = 0;
@@ -102,11 +163,19 @@
             body.className = 'msg-bubble snippet-answer';
             const label = document.createElement('strong');
             label.textContent = `${target === 'echo' ? 'Echo' : 'Avatar'} | Fragment explanation`;
+            const skillMetadata = document.createElement('div');
+            skillMetadata.className = 'snippet-skill-status';
+            skillMetadata.setAttribute('role', 'status');
+            skillMetadata.setAttribute('aria-live', 'polite');
+            skillMetadata.hidden = true;
             const answer = document.createElement('div');
             answer.className = 'markdown-section';
+            const tokenUsage = document.createElement('div');
+            tokenUsage.className = 'snippet-token-usage';
+            tokenUsage.hidden = true;
             pendingAnswer = answer;
             setAnswerText(answer, 'Explaining selected lines...');
-            body.append(label, answer);
+            body.append(label, skillMetadata, answer, tokenUsage);
             row.appendChild(body);
             document.getElementById('chat-window').appendChild(row);
             scrollBottom();
@@ -120,7 +189,9 @@
                 const payload = await response.json();
                 if (!response.ok || !payload.success) throw new Error(payload.error || 'Fragment explanation failed.');
                 if (contextGeneration !== generation) return;
+                renderSkillMetadata(skillMetadata, target, payload);
                 setAnswerText(answer, payload.answer);
+                renderTokenUsage(tokenUsage, target, payload.token_usage);
                 history.push({role: 'user', content: question}, {role: 'assistant', content: payload.answer});
             } catch (error) {
                 if (contextGeneration !== generation) return;

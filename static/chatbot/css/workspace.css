@@ -19,6 +19,11 @@ body.sidebar-collapsed .advanced-workspace > .sidebar + .workspace-divider { vis
 .workspace-view-host[hidden] { display: none; }
 .workspace-view-host > .key-log-modal { position: static; inset: auto; margin: 0; width: 100%; max-width: none; height: 100%; max-height: none; display: flex; flex-direction: column; border: 0; border-radius: 0; box-shadow: none; }
 .workspace-view-host > .key-log-modal > .key-log-heading { display: none; }
+.workspace-view-host .key-log-layout { grid-template-rows: minmax(min(100px, calc(50% - 2.5px)), var(--workspace-log-view, 3fr)) 5px minmax(min(100px, calc(50% - 2.5px)), var(--workspace-log-filter, 1fr)); }
+.workspace-view-host .key-log-filter-panel { overflow: hidden; }
+.workspace-log-divider { position: relative; z-index: 2; background: #e4eaf2; cursor: row-resize; touch-action: none; }
+.workspace-log-divider::before { content: ""; position: absolute; inset: -5px 0; }
+.workspace-log-divider:hover { background: #0071c5; }
 .main-layout.advanced-workspace.workspace-resizing { transition: none; user-select: none; }
 .workspace-divider { position: relative; z-index: 2; background: #e4eaf2; cursor: col-resize; touch-action: none; }
 .workspace-divider::before { content: ""; position: absolute; inset: 0 -5px; }
@@ -39,4 +44,15 @@ body.sidebar-collapsed .advanced-workspace > .sidebar + .workspace-divider { vis
 .snippet-message-attachment summary { font-size: 0.68rem; overflow-wrap: anywhere; cursor: pointer; }
 .snippet-answer { min-width: 0; overflow-wrap: anywhere; }
 .snippet-answer strong { display: block; font-size: 0.72rem; margin-bottom: 5px; }
+.snippet-skill-status { margin: 0 0 6px; padding: 4px 0; border-bottom: 1px solid #d5dce3; color: #435363; font-size: 0.7rem; overflow-wrap: anywhere; }
+.snippet-skill-status[hidden] { display: none; }
+.snippet-skill-heading { font-weight: 600; }
+.snippet-skill-status ul { margin: 2px 0 0; padding-left: 18px; }
+.snippet-token-usage { margin-top: 8px; padding-top: 5px; border-top: 1px solid #d5dce3; color: #64748b; font-size: 0.7rem; font-variant-numeric: tabular-nums; }
+.snippet-token-usage[hidden] { display: none; }
 .snippet-answer > .markdown-section { border-top: none; padding-top: 0; margin-top: 0; }
+.snippet-answer > .markdown-section strong { display: inline; font-size: inherit; margin: 0; }
+.snippet-answer > .markdown-section :is(h1, h2, h3, h4, h5, h6) { margin: 10px 0 4px; font-size: 0.9rem; line-height: 1.4; font-weight: 700; }
+.snippet-answer > .markdown-section :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+.snippet-answer > .markdown-section code { font-family: Consolas, "Courier New", monospace; font-size: 0.95em; }
+.snippet-answer > .markdown-section table { display: block; max-width: 100%; overflow-x: auto; }

@@ -87,53 +87,77 @@
 
     function startTatLogScan(dialog) {
         if (!dialog.__source) return;
-        if (dialog.__worker) dialog.__worker.terminate();
+        const reuseWorker = !!dialog.__worker && dialog.__workerSource === dialog.__source;
+        if (!reuseWorker && dialog.__worker) dialog.__worker.terminate();
+        const keepView = reuseWorker && dialog.__workerReady;
         dialog.__workerRunId = (dialog.__workerRunId || 0) + 1;
-        dialog.__workerReady = false;
-        dialog.__rowCount = 0;
-        dialog.__candidateCount = 0;
-        dialog.__lastVirtualRange = '';
+        if (!keepView) {
+            dialog.__workerReady = false;
+            dialog.__displayRunId = 0;
+            dialog.__rowCount = 0;
+            dialog.__candidateCount = 0;
+            dialog.__lastVirtualRange = '';
+        }
         dialog.__virtualMode = true;
         dialog.__rawLogs = '';
         dialog.__previewError = false;
-        dialog.__selectionStart = null;
-        dialog.__selectionEnd = null;
-        if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = true;
+        if (!keepView) {
+            dialog.__selectionStart = null;
+            dialog.__selectionEnd = null;
+            if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = true;
+            if (dialog.__copySelectionButton) dialog.__copySelectionButton.disabled = true;
+        }
         ensureVirtualLogView(dialog);
         const state = dialog.querySelector('.key-log-state');
         state.hidden = false;
         state.classList.remove('success');
-        state.textContent = 'Starting background scan…';
-        renderKeyLogContent(dialog);
+        state.textContent = keepView ? 'Updating filters…' : 'Starting background scan…';
+        if (!keepView) renderKeyLogContent(dialog);
 
-        const worker = new Worker('/static/js/tat_log_preview_worker.js');
+        const worker = reuseWorker ? dialog.__worker : new Worker('/static/js/tat_log_preview_worker.js?v=unmatched-lines');
         dialog.__worker = worker;
+        dialog.__workerSource = dialog.__source;
         const runId = dialog.__workerRunId;
         worker.onmessage = event => {
             const message = event.data || {};
-            if (message.runId !== dialog.__workerRunId) return;
+            if (dialog.__worker !== worker) return;
+            const isScanMessage = ['progress', 'ready', 'error'].includes(message.type);
+            if (message.runId !== (isScanMessage ? dialog.__workerRunId : dialog.__displayRunId)) return;
             if (message.type === 'progress') {
                 const state = dialog.querySelector('.key-log-state');
                 state.hidden = false;
                 state.classList.remove('success');
-                state.textContent = `Scanning ${Number(message.candidateCount || 0).toLocaleString()} lines…`;
+                state.textContent = `${dialog.__workerReady ? 'Updating filters' : 'Scanning'}: ${Number(message.candidateCount || 0).toLocaleString()} lines…`;
             } else if (message.type === 'ready') {
+                const content = dialog.querySelector('.key-log-content');
+                const visibleIndex = Math.floor(content.scrollTop / TAT_VIRTUAL_ROW_HEIGHT);
+                const visibleRow = dialog.__workerReady && dialog.querySelector(`.key-log-virtual-row[data-row-index="${visibleIndex}"]`);
+                const revealLine = dialog.__pendingRevealLine ?? (visibleRow ? Number(visibleRow.dataset.lineNumber) : null);
+                const revealOffset = dialog.__pendingRevealLine != null
+                    ? -TAT_VIRTUAL_REVEAL_MARGIN * TAT_VIRTUAL_ROW_HEIGHT
+                    : content.scrollTop - visibleIndex * TAT_VIRTUAL_ROW_HEIGHT;
+                dialog.__pendingRevealLine = null;
+                dialog.__revealOffset = revealOffset;
+                dialog.__displayRunId = message.runId;
                 dialog.__workerReady = true;
                 dialog.__rowCount = message.rowCount;
                 dialog.__candidateCount = message.candidateCount;
                 dialog.__tatHitCounts = message.ruleHitCounts || [];
+                dialog.__lastVirtualRange = '';
+                dialog.__selectionStart = null;
+                dialog.__selectionEnd = null;
+                if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = true;
+                if (dialog.__copySelectionButton) dialog.__copySelectionButton.disabled = true;
                 dialog.__virtualSpacer.style.height = `${message.rowCount * TAT_VIRTUAL_ROW_HEIGHT}px`;
-                const revealLine = dialog.__pendingRevealLine;
-                dialog.__pendingRevealLine = null;
                 if (revealLine === null || revealLine === undefined) {
-                    dialog.querySelector('.key-log-content').scrollTop = 0;
+                    content.scrollTop = 0;
                 }
                 renderKeyLogContent(dialog);
                 renderTatFilterOptions(dialog);
                 requestVisibleLogRows(dialog);
                 if (revealLine !== null && revealLine !== undefined) {
                     dialog.__locateRequestId = (dialog.__locateRequestId || 0) + 1;
-                    worker.postMessage({type: 'locate', runId: dialog.__workerRunId,
+                    worker.postMessage({type: 'locate', runId: dialog.__displayRunId,
                         requestId: dialog.__locateRequestId, lineNumber: revealLine});
                 }
             } else if (message.type === 'range') {
@@ -142,7 +166,7 @@
             } else if (message.type === 'locate') {
                 if (message.requestId !== dialog.__locateRequestId) return;
                 const content = dialog.querySelector('.key-log-content');
-                content.scrollTop = Math.max(0, (message.index - TAT_VIRTUAL_REVEAL_MARGIN) * TAT_VIRTUAL_ROW_HEIGHT);
+                content.scrollTop = Math.max(0, message.index * TAT_VIRTUAL_ROW_HEIGHT + (dialog.__revealOffset || 0));
                 requestVisibleLogRows(dialog);
             } else if (message.type === 'selection') {
                 if (message.requestId !== dialog.__selectionRequestId) return;
@@ -156,7 +180,6 @@
                     window.ChatbotSnippets.select({name: dialog.__logName || 'Analysis evidence', rows: message.rows});
                 }
             } else if (message.type === 'error') {
-                dialog.__workerReady = false;
                 const state = dialog.querySelector('.key-log-state');
                 state.hidden = false;
                 state.classList.remove('success');
@@ -169,7 +192,7 @@
             regex: rule.regex, caseSensitive: rule.caseSensitive,
             foreground: rule.foreground, background: rule.background,
         }));
-        worker.postMessage({type: 'start', runId, source: dialog.__source,
+        worker.postMessage({type: 'start', runId, source: dialog.__source, reuseCache: reuseWorker,
             rules, chunkSize: TAT_WORKER_CHUNK_BYTES,
             showOnlyFilteredLines: dialog.__showOnlyFilteredLines !== false});
     }
@@ -185,7 +208,7 @@
         if (rangeKey === dialog.__lastVirtualRange) return;
         dialog.__lastVirtualRange = rangeKey;
         dialog.__lastRangeRequestId = (dialog.__lastRangeRequestId || 0) + 1;
-        dialog.__worker.postMessage({type: 'range', runId: dialog.__workerRunId,
+        dialog.__worker.postMessage({type: 'range', runId: dialog.__displayRunId,
             requestId: dialog.__lastRangeRequestId, start, count: end - start});
     }
 
@@ -203,6 +226,7 @@
             number.textContent = String(row.lineNumber);
             const text = document.createElement('span');
             text.className = 'key-log-line-text';
+            if (row.dimmed) text.classList.add('key-log-unmatched');
             text.textContent = row.text.replace(/[\r\n]+$/, '');
             element.append(number, text);
             if (row.foreground) element.style.color = row.foreground;
@@ -258,7 +282,7 @@
         const requestSelection = purpose => {
             if (!dialog.__workerReady || dialog.__selectionStart === null || dialog.__selectionStart === undefined) return;
             dialog.__selectionRequestId = (dialog.__selectionRequestId || 0) + 1;
-            dialog.__worker.postMessage({type: 'selection', runId: dialog.__workerRunId,
+            dialog.__worker.postMessage({type: 'selection', runId: dialog.__displayRunId,
                 requestId: dialog.__selectionRequestId, start: dialog.__selectionStart, end: dialog.__selectionEnd, purpose});
         };
         const addSelection = () => requestSelection('add');
@@ -474,16 +498,13 @@
             candidateCount++;
             rules.forEach((rule, index) => { if (matches(line, rule)) ruleHitCounts[index]++; });
             if (excludeRules.some(rule => matches(line, rule))) continue;
-            let matchingInclude = null;
-            for (const rule of includeRules) {
-                if (matches(line, rule)) matchingInclude = rule;
-            }
+            const matchingInclude = includeRules.find(rule => matches(line, rule));
             if (matchingInclude) {
                 matchedLines.push({text: originalLine, foreground: matchingInclude.foreground,
                     background: matchingInclude.background});
                 matchedCount++;
             } else if (!showOnlyFilteredLines) {
-                matchedLines.push({text: originalLine, foreground: '', background: ''});
+                matchedLines.push({text: originalLine, foreground: '', background: '', dimmed: true});
             }
         }
         flushSection();
@@ -625,6 +646,19 @@
         else renderKeyLogContent(dialog);
     }
 
+    function reorderTatFilter(dialog, sourceIndex, targetIndex) {
+        const rules = dialog.__tatRules || [];
+        if (sourceIndex < 0 || targetIndex < 0 || sourceIndex >= rules.length
+                || targetIndex >= rules.length || sourceIndex === targetIndex) return false;
+        const editingRule = rules[dialog.__editingRuleIndex];
+        rules.splice(targetIndex, 0, rules.splice(sourceIndex, 1)[0]);
+        if (editingRule) dialog.__editingRuleIndex = rules.indexOf(editingRule);
+        if (dialog.__tatHitCounts?.length === rules.length) {
+            dialog.__tatHitCounts.splice(targetIndex, 0, dialog.__tatHitCounts.splice(sourceIndex, 1)[0]);
+        }
+        return true;
+    }
+
     function renderTatFilterOptions(dialog) {
         const list = dialog.querySelector('.key-log-filter-list');
         const count = dialog.querySelector('.key-log-filter-count');
@@ -634,8 +668,10 @@
         count.textContent = rules.length ? `(${enabledCount} enabled)` : '';
         const saveBtn = dialog.querySelector('.key-log-filter-save');
         const saveAsBtn = dialog.querySelector('.key-log-filter-save-as');
+        const disableAllBtn = dialog.querySelector('.key-log-filter-disable-all');
         if (saveBtn) saveBtn.disabled = !rules.length;
         if (saveAsBtn) saveAsBtn.disabled = !rules.length;
+        if (disableAllBtn) disableAllBtn.disabled = !enabledCount;
         if (!rules.length) {
             const empty = document.createElement('div');
             empty.className = 'key-log-filter-empty';
@@ -646,7 +682,52 @@
         rules.forEach((rule, index) => {
             const label = document.createElement('label');
             label.className = 'key-log-filter-rule';
-            label.title = 'Double-click to edit';
+            label.title = 'Drag to reorder; double-click to edit';
+            label.draggable = true;
+            let dragBlocked = false;
+            label.addEventListener('pointerdown', event => {
+                dragBlocked = !!event.target.closest('input, .key-log-filter-actions');
+            });
+            label.addEventListener('dragstart', event => {
+                if (dragBlocked) {
+                    event.preventDefault();
+                    return;
+                }
+                dialog.__draggedTatRule = rule;
+                event.dataTransfer.effectAllowed = 'move';
+                event.dataTransfer.setData('text/plain', rule.text);
+                label.classList.add('is-dragging');
+            });
+            label.addEventListener('dragend', () => {
+                dialog.__draggedTatRule = null;
+                label.classList.remove('is-dragging');
+                list.querySelectorAll('.drop-before, .drop-after').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+            });
+            label.addEventListener('dragover', event => {
+                if (!dialog.__draggedTatRule || !rules.includes(dialog.__draggedTatRule)) return;
+                event.preventDefault();
+                event.dataTransfer.dropEffect = 'move';
+                const before = event.clientY < label.getBoundingClientRect().top + label.offsetHeight / 2;
+                list.querySelectorAll('.drop-before, .drop-after').forEach(row => row.classList.remove('drop-before', 'drop-after'));
+                label.classList.add(before ? 'drop-before' : 'drop-after');
+            });
+            label.addEventListener('dragleave', event => {
+                if (!label.contains(event.relatedTarget)) label.classList.remove('drop-before', 'drop-after');
+            });
+            label.addEventListener('drop', event => {
+                const sourceIndex = rules.indexOf(dialog.__draggedTatRule);
+                if (sourceIndex < 0) return;
+                event.preventDefault();
+                const before = event.clientY < label.getBoundingClientRect().top + label.offsetHeight / 2;
+                const insertionIndex = index + (before ? 0 : 1);
+                const targetIndex = insertionIndex - (sourceIndex < insertionIndex ? 1 : 0);
+                dialog.__draggedTatRule = null;
+                label.classList.remove('drop-before', 'drop-after');
+                if (!reorderTatFilter(dialog, sourceIndex, targetIndex)) return;
+                renderTatFilterOptions(dialog);
+                if (dialog.__source) startTatLogScan(dialog);
+                else renderKeyLogContent(dialog);
+            });
             label.addEventListener('click', event => {
                 if (event.target.closest('.key-log-filter-mod, .key-log-filter-actions')) return;
                 event.preventDefault();
@@ -658,6 +739,10 @@
             });
             const mod = document.createElement('span');
             mod.className = 'key-log-filter-mod';
+            const dragHandle = makeKeyLogButton('grip-vertical', `Drag to reorder ${rule.text}`, '\u22ee');
+            dragHandle.classList.add('key-log-filter-drag');
+            dragHandle.draggable = true;
+            dragHandle.addEventListener('click', event => { event.preventDefault(); event.stopPropagation(); });
             const checkbox = document.createElement('input');
             checkbox.type = 'checkbox';
             checkbox.checked = rule.enabled;
@@ -675,7 +760,7 @@
                 letter.textContent = String.fromCharCode(97 + (letterIndex % 26)) + letter.textContent;
                 letterIndex = Math.floor(letterIndex / 26) - 1;
             } while (letterIndex >= 0);
-            mod.append(checkbox, letter);
+            mod.append(dragHandle, checkbox, letter);
             label.appendChild(mod);
             const pattern = document.createElement('span');
             pattern.className = 'key-log-filter-pattern';
@@ -730,6 +815,7 @@
             if (section.heading) content.appendChild(document.createTextNode(section.heading));
             section.lines.forEach(line => {
                 const span = document.createElement('span');
+                if (line.dimmed) span.classList.add('key-log-unmatched');
                 span.textContent = line.text;
                 if (line.foreground) span.style.color = line.foreground;
                 if (line.background) span.style.backgroundColor = line.background;
@@ -821,19 +907,32 @@
         removeKeyLogRestoreLauncher(dialog);
         if (dialog.__worker) dialog.__worker.terminate();
         dialog.__worker = null;
+        dialog.__workerSource = null;
+        dialog.__displayRunId = 0;
+        dialog.__pendingRevealLine = null;
         dialog.__source = null;
         dialog.__virtualMode = false;
         dialog.__workerReady = false;
         dialog.__virtualSpacer = null;
+        dialog.__rowCount = 0;
+        dialog.__candidateCount = 0;
+        dialog.__tatHitCounts = [];
+        dialog.__lastVirtualRange = '';
         dialog.__selectionStart = null;
         dialog.__selectionEnd = null;
         if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = true;
+        if (dialog.__copySelectionButton) dialog.__copySelectionButton.disabled = true;
         dialog.querySelector('.key-log-content').classList.remove('virtualized');
         dialog.querySelector('pre').textContent = '';
         dialog.__rawLogs = '';
         dialog.__previewError = false;
         dialog.__logName = '';
         dialog.querySelector('.key-log-log-name').textContent = '';
+        const state = dialog.querySelector('.key-log-state');
+        state.hidden = true;
+        state.classList.remove('success');
+        state.textContent = '';
+        renderTatFilterOptions(dialog);
         if (!dialog.closest('.workspace-pane') && dialog.__trigger && dialog.__trigger.isConnected) dialog.__trigger.focus();
     }
 
@@ -947,6 +1046,20 @@
             addFilter.classList.add('key-log-filter-action');
             addFilter.addEventListener('click', () => openFilterEditor(dialog, null));
 
+            const disableAll = makeKeyLogButton('filter-x', 'Disable all filters', '\u00d7');
+            disableAll.classList.add('key-log-filter-disable-all');
+            disableAll.addEventListener('click', () => {
+                const rules = dialog.__tatRules || [];
+                if (!rules.some(rule => rule.enabled)) return;
+                rules.forEach(rule => { rule.enabled = false; });
+                if (Number.isInteger(dialog.__editingRuleIndex)) {
+                    dialog.querySelector('.key-log-filter-editor-enabled').checked = false;
+                }
+                renderTatFilterOptions(dialog);
+                if (dialog.__source) startTatLogScan(dialog);
+                else renderKeyLogContent(dialog);
+            });
+
             const saveTat = makeKeyLogButton('save', 'Save .tat', '💾');
             saveTat.classList.add('key-log-filter-action', 'key-log-filter-save');
             saveTat.addEventListener('click', () => downloadTatFilter(dialog, dialog.__tatName || 'filters.tat'));
@@ -963,7 +1076,7 @@
             dialog.querySelector('.key-log-filter-editor-cancel')
                 .addEventListener('click', () => closeFilterEditor(dialog));
 
-            filterHeader.append(loadTat, addFilter, saveTat, saveAsTat, filterName);
+            filterHeader.append(loadTat, addFilter, disableAll, saveTat, saveAsTat, filterName);
             filterPanel.appendChild(fileInput);
             dialog.__showOnlyFilteredLines = true;
             renderTatFilterOptions(dialog);
@@ -1032,6 +1145,9 @@
         removeKeyLogRestoreLauncher(dialog);
         if (dialog.__worker) dialog.__worker.terminate();
         dialog.__worker = null;
+        dialog.__workerSource = null;
+        dialog.__displayRunId = 0;
+        dialog.__pendingRevealLine = null;
         dialog.__source = null;
         dialog.__virtualMode = false;
         dialog.__workerReady = false;

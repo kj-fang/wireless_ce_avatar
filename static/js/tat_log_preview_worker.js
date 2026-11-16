@@ -2,27 +2,34 @@ const DEFAULT_CHUNK_BYTES = 1024 * 1024;
 const ADD_TO_QUESTION_MAX_LINES = 200;
 const ADD_TO_QUESTION_MAX_CHARS = 8000;
 const COPY_MAX_LINES = 50000;
+const MAX_SOURCE_CACHE_BYTES = 32 * 1024 * 1024;
+const MAX_RULE_INDEX_BYTES = 16 * 1024 * 1024;
 let activeRunId = 0;
+let displayedRunId = 0;
 let matchedRows = [];
 let ruleHitCounts = [];
+let cachedChunks = null;
+let cachedIndexes = new Map();
 
 self.onmessage = event => {
     const message = event.data || {};
     if (message.type === 'start') {
         activeRunId = message.runId;
-        matchedRows = [];
-        ruleHitCounts = [];
+        if (!message.reuseCache) {
+            cachedChunks = null;
+            cachedIndexes = new Map();
+        }
         scanSource(message, message.runId).catch(error => {
             if (message.runId !== activeRunId) return;
             self.postMessage({type: 'error', runId: message.runId,
                 message: error && error.message ? error.message : String(error)});
         });
-    } else if (message.type === 'range' && message.runId === activeRunId) {
+    } else if (message.type === 'range' && message.runId === displayedRunId) {
         const start = Math.max(0, Math.min(matchedRows.length, message.start | 0));
         const end = Math.max(start, Math.min(matchedRows.length, start + (message.count | 0)));
-        self.postMessage({type: 'range', runId: activeRunId, requestId: message.requestId,
+        self.postMessage({type: 'range', runId: displayedRunId, requestId: message.requestId,
             start, rows: matchedRows.slice(start, end)});
-    } else if (message.type === 'selection' && message.runId === activeRunId) {
+    } else if (message.type === 'selection' && message.runId === displayedRunId) {
         const start = Math.max(0, Math.min(message.start, message.end));
         const end = Math.min(matchedRows.length - 1, Math.max(message.start, message.end));
         const purpose = message.purpose === 'copy' ? 'copy' : 'add';
@@ -36,13 +43,13 @@ self.onmessage = event => {
                 const error = purpose === 'copy'
                     ? `Select at most ${maxLines.toLocaleString()} lines to copy. Nothing was copied.`
                     : 'Select at most 200 lines and 8,000 characters. Nothing was added.';
-                self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, purpose, error});
+                self.postMessage({type: 'selection', runId: displayedRunId, requestId: message.requestId, purpose, error});
                 return;
             }
             rows.push(matchedRows[index]);
         }
-        self.postMessage({type: 'selection', runId: activeRunId, requestId: message.requestId, purpose, rows});
-    } else if (message.type === 'locate' && message.runId === activeRunId) {
+        self.postMessage({type: 'selection', runId: displayedRunId, requestId: message.requestId, purpose, rows});
+    } else if (message.type === 'locate' && message.runId === displayedRunId) {
         let low = 0;
         let high = matchedRows.length - 1;
         let index = matchedRows.length - 1;
@@ -56,7 +63,7 @@ self.onmessage = event => {
             }
         }
         index = Math.max(0, Math.min(matchedRows.length - 1, index));
-        self.postMessage({type: 'locate', runId: activeRunId, requestId: message.requestId, index});
+        self.postMessage({type: 'locate', runId: displayedRunId, requestId: message.requestId, index});
     }
 };
 
@@ -81,10 +88,27 @@ function compileRules(sourceRules) {
 
 async function scanSource(message, runId) {
     const rules = compileRules(message.rules);
-    const includeRules = rules.filter(rule => rule.enabled && !rule.excluding);
-    const excludeRules = rules.filter(rule => rule.enabled && rule.excluding);
+    const source = message.source || {};
+    const sourceSize = source.kind === 'file' ? source.file?.size : source.size;
+    const canIndex = Number.isSafeInteger(sourceSize) && sourceSize >= 0 && sourceSize <= MAX_SOURCE_CACHE_BYTES;
+    const nextIndexes = new Map();
+    const indexWords = canIndex ? Math.ceil(sourceSize / 32) : 0;
+    let indexBytes = 0;
+    const ruleIndexes = rules.map(rule => {
+        if (!canIndex) return null;
+        const key = JSON.stringify([rule.text, rule.regex, rule.caseSensitive]);
+        if (nextIndexes.has(key)) return nextIndexes.get(key);
+        const existing = message.reuseCache && cachedChunks ? cachedIndexes.get(key) : null;
+        const bits = existing || (indexBytes + indexWords * 4 <= MAX_RULE_INDEX_BYTES ? new Uint32Array(indexWords) : null);
+        if (!bits || indexBytes + bits.byteLength > MAX_RULE_INDEX_BYTES) return null;
+        const entry = {bits, ready: !!existing};
+        nextIndexes.set(key, entry);
+        indexBytes += bits.byteLength;
+        return entry;
+    });
     const showOnlyFilteredLines = message.showOnlyFilteredLines !== false;
-    ruleHitCounts = new Array(rules.length).fill(0);
+    const nextRows = [];
+    const nextHitCounts = new Array(rules.length).fill(0);
     const decoder = new TextDecoder('utf-8');
     const chunkSize = Math.max(32 * 1024, Math.min(message.chunkSize || DEFAULT_CHUNK_BYTES, 1024 * 1024));
     let pending = '';
@@ -109,20 +133,28 @@ async function scanSource(message, runId) {
         if (!line.trim()) return;
         candidateCount++;
         const lowerLine = line.toLowerCase();
-        rules.forEach((rule, index) => { if (matches(line, lowerLine, rule)) ruleHitCounts[index]++; });
         if (!rules.length) {
-            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
+            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
             return;
         }
-        if (excludeRules.some(rule => matches(line, lowerLine, rule))) return;
+        const wordIndex = (candidateCount - 1) >>> 5;
+        const mask = 1 << ((candidateCount - 1) & 31);
         let include = null;
-        for (const rule of includeRules) {
-            if (matches(line, lowerLine, rule)) include = rule;
-        }
+        let excluded = false;
+        rules.forEach((rule, index) => {
+            const entry = ruleIndexes[index];
+            const matched = entry?.ready ? !!(entry.bits[wordIndex] & mask) : matches(line, lowerLine, rule);
+            if (!matched) return;
+            if (entry && !entry.ready) entry.bits[wordIndex] |= mask;
+            nextHitCounts[index]++;
+            if (rule.enabled && rule.excluding) excluded = true;
+            else if (rule.enabled && !include) include = rule;
+        });
+        if (excluded) return;
         if (include) {
-            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
+            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
         } else if (!showOnlyFilteredLines) {
-            matchedRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
+            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: '', dimmed: true});
         }
     }
 
@@ -147,13 +179,30 @@ async function scanSource(message, runId) {
         }
     }
 
-    const source = message.source || {};
-    if (source.kind === 'file' && source.file) {
+    let nextCache = Number.isSafeInteger(sourceSize) && sourceSize > MAX_SOURCE_CACHE_BYTES ? null : [];
+    function rememberChunk(buffer) {
+        if (!nextCache) return;
+        if (bytesRead > MAX_SOURCE_CACHE_BYTES) nextCache = null;
+        else nextCache.push(buffer);
+    }
+    if (cachedChunks && message.reuseCache) {
+        nextCache = cachedChunks;
+        for (let index = 0; index < cachedChunks.length; index++) {
+            if (runId !== activeRunId) return;
+            const buffer = cachedChunks[index];
+            bytesRead += buffer.byteLength;
+            consumeDecoded(decoder.decode(buffer, {stream: index < cachedChunks.length - 1}), index === cachedChunks.length - 1);
+            emitProgress();
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
+        if (!cachedChunks.length) consumeDecoded(decoder.decode(), true);
+    } else if (source.kind === 'file' && source.file) {
         const file = source.file;
         for (let offset = 0; offset < file.size; offset += chunkSize) {
             if (runId !== activeRunId) return;
             const buffer = await file.slice(offset, Math.min(file.size, offset + chunkSize)).arrayBuffer();
             bytesRead += buffer.byteLength;
+            rememberChunk(buffer);
             const finalChunk = offset + buffer.byteLength >= file.size;
             consumeDecoded(decoder.decode(buffer, {stream: !finalChunk}), finalChunk);
             emitProgress();
@@ -174,6 +223,7 @@ async function scanSource(message, runId) {
             eof = response.headers.get('X-Log-Eof') === 'true';
             if (!buffer.byteLength && !eof) throw new Error('Log preview returned an empty chunk before EOF.');
             bytesRead += buffer.byteLength;
+            rememberChunk(buffer);
             consumeDecoded(decoder.decode(buffer, {stream: !eof}), eof);
             offset = Number.isFinite(nextOffset) && nextOffset > offset ? nextOffset : offset + buffer.byteLength;
             emitProgress();
@@ -184,6 +234,12 @@ async function scanSource(message, runId) {
     }
 
     if (runId !== activeRunId) return;
+    if (canIndex && bytesRead > sourceSize) nextCache = null;
+    cachedChunks = nextCache;
+    cachedIndexes = nextCache ? new Map(Array.from(nextIndexes, ([key, entry]) => [key, entry.bits])) : new Map();
+    matchedRows = nextRows;
+    ruleHitCounts = nextHitCounts;
+    displayedRunId = runId;
     self.postMessage({type: 'ready', runId, rowCount: matchedRows.length,
         candidateCount, bytesRead, sourceName: source.name || '', ruleHitCounts});
 
@@ -191,6 +247,6 @@ async function scanSource(message, runId) {
         const now = Date.now();
         if (now - lastProgressAt < 200) return;
         lastProgressAt = now;
-        self.postMessage({type: 'progress', runId, candidateCount, matchedCount: matchedRows.length, bytesRead});
+        self.postMessage({type: 'progress', runId, candidateCount, matchedCount: nextRows.length, bytesRead});
     }
 }

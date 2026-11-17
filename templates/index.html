@@ -1306,6 +1306,148 @@
                 to { opacity: 1; transform: translateY(0); }
             }
         }
+
+        .home-card .chatbot-shortcut-links { display: block; text-align: left; }
+        .chatbot-shortcut-primary {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            align-items: start;
+            gap: 8px;
+        }
+        .chatbot-shortcut-primary > .chatbot-tech-btn {
+            width: 100%;
+            min-width: 0;
+            padding: 6px 8px;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .chatbot-log-analysis-trigger {
+            width: 100%;
+            min-width: 0;
+            min-height: 38px;
+            cursor: pointer;
+            font-family: inherit;
+            line-height: 1.25;
+        }
+        .chatbot-log-analysis-trigger:focus-visible,
+        .chatbot-log-analysis-grid a:focus-visible {
+            outline: 2px solid currentColor;
+            outline-offset: 3px;
+        }
+        .chatbot-log-chevron {
+            width: 8px;
+            height: 8px;
+            flex: 0 0 8px;
+            margin: -4px 2px 0 auto;
+            border-right: 1.5px solid currentColor;
+            border-bottom: 1.5px solid currentColor;
+            transform: rotate(45deg);
+            transition: transform .2s ease;
+        }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-chevron {
+            margin-top: 4px;
+            transform: rotate(225deg);
+        }
+        .chatbot-log-analysis-options {
+            display: grid;
+            grid-template-rows: 0fr;
+            opacity: 0;
+            transform: translateY(-5px);
+            transition: grid-template-rows .24s cubic-bezier(.2, .8, .2, 1), opacity .16s ease, transform .24s cubic-bezier(.2, .8, .2, 1);
+        }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-analysis-options {
+            grid-template-rows: 1fr;
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .chatbot-log-analysis-options-inner { min-height: 0; overflow: hidden; }
+        .chatbot-log-analysis-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 6px;
+            padding-top: 10px;
+        }
+        .chatbot-log-analysis-grid .chatbot-tech-btn {
+            width: 100%;
+            min-width: 0;
+            min-height: 38px;
+            gap: 4px;
+            padding: 6px;
+            font-size: 11px;
+            white-space: nowrap;
+        }
+        .chatbot-log-analysis-grid .chatbot-tech-btn::before { display: none; }
+        .chatbot-log-analysis-grid .chatbot-tech-btn,
+        .chatbot-log-analysis-trigger { animation: none; }
+        .chatbot-log-analysis-grid .chatbot-tech-btn {
+            opacity: 0;
+            transform: translateY(-4px);
+            transition: opacity .16s ease, transform .2s ease;
+        }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-analysis-grid .chatbot-tech-btn {
+            opacity: 1;
+            transform: translateY(0);
+        }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-analysis-grid .chatbot-tech-btn:nth-child(2) { transition-delay: .03s; }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-analysis-grid .chatbot-tech-btn:nth-child(3) { transition-delay: .06s; }
+        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-analysis-grid .chatbot-tech-btn:nth-child(4) { transition-delay: .09s; }
+        .chatbot-log-analysis-grid .shortcut-action-wifi {
+            --action-bg: #4e7773;
+            --action-hover: #3f6562;
+            --action-shadow: rgba(78, 119, 115, .22);
+        }
+        .chatbot-log-analysis-grid .shortcut-action-bluetooth {
+            --action-bg: #756b82;
+            --action-hover: #5d5368;
+            --action-shadow: rgba(117, 107, 130, .22);
+        }
+        .chatbot-log-analysis-grid .shortcut-action-linux {
+            --action-bg: #966957;
+            --action-hover: #794f40;
+            --action-shadow: rgba(150, 105, 87, .22);
+        }
+        .chatbot-log-analysis-grid .shortcut-action-generic {
+            --action-bg: #68785e;
+            --action-hover: #4d5c47;
+            --action-shadow: rgba(104, 120, 94, .22);
+        }
+        .chatbot-log-analysis-grid .chatbot-tech-btn {
+            border-color: var(--action-hover);
+            color: #fff;
+            background: var(--action-bg);
+            box-shadow: 0 5px 14px var(--action-shadow), inset 0 1px 0 rgba(255, 255, 255, .2);
+            transition: color .18s ease, background-color .18s ease, border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+        }
+        .chatbot-log-analysis-grid .chatbot-tech-btn:hover {
+            border-color: var(--action-hover);
+            color: #fff;
+            background: var(--action-hover);
+            box-shadow: 0 8px 18px var(--action-shadow), inset 0 1px 0 rgba(255, 255, 255, .24);
+        }
+        #chatbot-shortcut-links .chatbot-log-analysis-trigger,
+        #chatbot-shortcut-links .chatbot-shortcut-primary > a {
+            border-color: #2869aa;
+            color: #fff;
+            background: linear-gradient(110deg, #347fc4, #2869aa);
+            background-size: 200% auto;
+            box-shadow: 0 3px 9px rgba(40, 105, 170, .2);
+        }
+        #chatbot-shortcut-links .chatbot-log-analysis-trigger:hover,
+        #chatbot-shortcut-links .chatbot-shortcut-primary > a:hover {
+            border-color: #20588f;
+            color: #fff;
+            background: linear-gradient(115deg, #286eae, #20588f);
+            box-shadow: 0 5px 14px rgba(40, 105, 170, .26);
+        }
+        #chatbot-log-analysis-trigger .shortcut-icon,
+        #chatbot-shortcut-links .chatbot-shortcut-primary > a .shortcut-icon,
+        .chatbot-log-analysis-grid .shortcut-icon { filter: brightness(0) invert(1); }
+        .home-analysis-unframed .chatbot-log-analysis-grid .chatbot-tech-btn:hover .shortcut-icon { filter: brightness(0) invert(1); }
+        @media (prefers-reduced-motion: reduce) {
+            .chatbot-log-chevron,
+            .chatbot-log-analysis-options,
+            .chatbot-log-analysis-grid .chatbot-tech-btn { transition: none; transform: none; }
+        }
     </style>
 </head>
 <body class="home-dashboard-page">
@@ -1497,11 +1639,24 @@
     <div id="chatbot-shortcut-section" class="chatbot-shortcut-section">
         <div class="chatbot-shortcut-caption">Already got logs?  Try these</div>
         <div id="chatbot-shortcut-links" class="chatbot-shortcut-links">
-            <a href="/log_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-wifi.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Wi-Fi Analysis</a>
-            <a href="/nw_analysis/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-network.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Network Experience</a>
-            <a href="/bt_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-bluetooth.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Bluetooth Analysis</a>
-            <a href="/linux_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Linux Log Analysis</a>
-            <a href="/generic_chatbot/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Generic Log Analysis</a>
+            <div class="chatbot-shortcut-primary">
+                <button type="button" class="chatbot-tech-btn chatbot-log-analysis-trigger" id="chatbot-log-analysis-trigger" aria-expanded="false" aria-controls="chatbot-log-analysis-options">
+                    <img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">
+                    <span>Log Analysis</span>
+                    <span class="chatbot-log-chevron" aria-hidden="true"></span>
+                </button>
+                <a href="/nw_analysis/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-network.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Network Experience</a>
+            </div>
+            <div id="chatbot-log-analysis-options" class="chatbot-log-analysis-options" aria-hidden="true" inert>
+                <div class="chatbot-log-analysis-options-inner">
+                    <div class="chatbot-log-analysis-grid">
+                        <a href="/log_chatbot/" class="chatbot-tech-btn shortcut-action-wifi" aria-label="Wi-Fi Log Analysis" title="Wi-Fi Log Analysis"><img src="{{ url_for('static', filename='lucide-wifi.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Wi-Fi</a>
+                        <a href="/bt_chatbot/" class="chatbot-tech-btn shortcut-action-bluetooth" aria-label="Bluetooth Log Analysis" title="Bluetooth Log Analysis"><img src="{{ url_for('static', filename='lucide-bluetooth.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Bluetooth</a>
+                        <a href="/linux_chatbot/" class="chatbot-tech-btn shortcut-action-linux" aria-label="Linux Log Analysis" title="Linux Log Analysis"><img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Linux</a>
+                        <a href="/generic_chatbot/" class="chatbot-tech-btn shortcut-action-generic" aria-label="Generic Log Analysis" title="Generic Log Analysis"><img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Generic</a>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     </section>
@@ -2200,6 +2355,86 @@
                 }
             }
         }
+    </script>
+
+    <script>
+        (() => {
+            const shortcutGroup = document.getElementById('chatbot-shortcut-links');
+            const trigger = document.getElementById('chatbot-log-analysis-trigger');
+            const options = document.getElementById('chatbot-log-analysis-options');
+            if (!shortcutGroup || !trigger || !options) {
+                return;
+            }
+
+            let escapeDismissed = false;
+            let lastPointerType = '';
+
+            const setOptionsOpen = (isOpen) => {
+                if ((trigger.getAttribute('aria-expanded') === 'true') === isOpen) {
+                    return;
+                }
+
+                shortcutGroup.classList.toggle('is-log-analysis-open', isOpen);
+                trigger.setAttribute('aria-expanded', String(isOpen));
+                options.setAttribute('aria-hidden', String(!isOpen));
+                options.inert = !isOpen;
+            };
+
+            trigger.addEventListener('pointerenter', (event) => {
+                if (event.pointerType === 'mouse') {
+                    setOptionsOpen(true);
+                }
+            });
+
+            shortcutGroup.addEventListener('pointerleave', (event) => {
+                if (event.pointerType === 'mouse' && !shortcutGroup.contains(document.activeElement)) {
+                    setOptionsOpen(false);
+                }
+            });
+
+            shortcutGroup.addEventListener('focusin', (event) => {
+                if (event.target === trigger && !escapeDismissed) {
+                    setOptionsOpen(true);
+                }
+            });
+
+            shortcutGroup.addEventListener('focusout', (event) => {
+                if (!shortcutGroup.contains(event.relatedTarget)) {
+                    escapeDismissed = false;
+                    setOptionsOpen(false);
+                }
+            });
+
+            trigger.addEventListener('pointerdown', (event) => {
+                lastPointerType = event.pointerType;
+            });
+
+            trigger.addEventListener('click', (event) => {
+                const isOpen = trigger.getAttribute('aria-expanded') === 'true';
+                if (event.detail > 0 && lastPointerType === 'mouse') {
+                    setOptionsOpen(true);
+                } else {
+                    setOptionsOpen(!isOpen);
+                }
+                lastPointerType = '';
+            });
+
+            shortcutGroup.addEventListener('keydown', (event) => {
+                if (event.key === 'Escape' && trigger.getAttribute('aria-expanded') === 'true') {
+                    event.preventDefault();
+                    escapeDismissed = true;
+                    setOptionsOpen(false);
+                    trigger.focus();
+                }
+            });
+
+            document.addEventListener('pointerdown', (event) => {
+                if (!shortcutGroup.contains(event.target)) {
+                    escapeDismissed = false;
+                    setOptionsOpen(false);
+                }
+            });
+        })();
     </script>
 
     <!-- Toggle loading view (for design preview) -->

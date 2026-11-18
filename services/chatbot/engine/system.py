@@ -609,6 +609,7 @@ class WifiLogAgentSystem(
         # In-memory caches for this agent session
         self._raw_log_cache: List[str] = []
         self._raw_log_cache_path: str = ""
+        self._raw_log_line_number_lookup = None
         self._filter_cache_by_skill: Dict[str, dict] = {}
         self._detail_cache: Dict[str, str] = {}
         self._detail_query_seen: set = set()

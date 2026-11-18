@@ -41,22 +41,38 @@ class SkillAnalysisMixin:
         return [row["text"] for row in self._compact_original_skill_rows(
             [{"text": line} for line in lines])]
 
+    def _get_raw_log_line_number_lookup(self):
+        """id(line) -> source line number, built once per raw-cache generation."""
+        source_lines = getattr(self, "_raw_log_cache", []) or []
+        cached = getattr(self, "_raw_log_line_number_lookup", None)
+        # The list identity/length guard covers reassignment of the cache elsewhere.
+        if cached is not None and cached[0] is source_lines and cached[1] == len(source_lines):
+            return cached[2]
+        source_numbers = getattr(self, "_raw_log_source_line_numbers", [])
+        lookup = {
+            id(line): source_numbers[index] if index < len(source_numbers) else index + 1
+            for index, line in enumerate(source_lines)
+        }
+        self._raw_log_line_number_lookup = (source_lines, len(source_lines), lookup)
+        return lookup
+
     def _remember_turn_skill_logs(self, skill_name, lines):
         if not hasattr(self, "_turn_skill_log_lines"):
             self._turn_skill_log_lines = {}
         if not hasattr(self, "_turn_skill_log_rows"):
             self._turn_skill_log_rows = {}
         originals = getattr(self, "_original_wrapped_lines", {})
-        source_lines = getattr(self, "_raw_log_cache", []) or []
-        source_numbers = getattr(self, "_raw_log_source_line_numbers", [])
-        line_numbers = {
-            id(line): source_numbers[index] if index < len(source_numbers) else index + 1
-            for index, line in enumerate(source_lines)
-        }
-        rows = [
-            {"lineNumber": line_numbers[id(line)], "text": originals.get(line, line)}
-            for line in lines if id(line) in line_numbers
-        ]
+        line_numbers = self._get_raw_log_line_number_lookup()
+        rows = []
+        for line in lines:
+            if id(line) not in line_numbers:
+                continue
+            first_number = line_numbers[id(line)]
+            original = originals.get(line, line)
+            rows.extend(
+                {"lineNumber": first_number + offset, "text": physical_line}
+                for offset, physical_line in enumerate(original.splitlines(keepends=True))
+            )
         compacted = self._compact_original_skill_rows(rows)
         self._turn_skill_log_rows[skill_name] = compacted
         self._turn_skill_log_lines[skill_name] = [row["text"] for row in compacted]

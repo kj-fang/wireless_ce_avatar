@@ -341,6 +341,7 @@
         const copySelection = () => requestSelection('copy');
         add.addEventListener('click', addSelection);
         copy.addEventListener('click', copySelection);
+        const content = dialog.querySelector('.key-log-content');
         content.setAttribute('role', 'listbox');
         content.setAttribute('aria-label', 'Filtered log lines');
         content.setAttribute('aria-multiselectable', 'true');
@@ -389,7 +390,6 @@
             event.preventDefault();
             copySelection();
         }, true);
-        const content = dialog.querySelector('.key-log-content');
         const isSelected = index => dialog.__selectionStart !== null && dialog.__selectionStart !== undefined
             && index >= Math.min(dialog.__selectionStart, dialog.__selectionEnd)
             && index <= Math.max(dialog.__selectionStart, dialog.__selectionEnd);

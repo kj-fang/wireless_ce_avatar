@@ -50,9 +50,12 @@ class LogScopeMixin:
 
         try:
             self._raw_log_cache = helpers.read_log_file(self.current_log_path)
-            self._raw_log_source_line_numbers = list(range(1, len(self._raw_log_cache) + 1))
+            with open(self.current_log_path, "r", encoding="utf-8", errors="replace") as log_file:
+                 source_start = 2 if log_file.readline().startswith("# WCE_LOG_TZ_SHIFTED=") else 1
+            self._raw_log_source_line_numbers = list(range(source_start, source_start + len(self._raw_log_cache)))
             self._raw_log_cache_path = self.current_log_path
             self._original_wrapped_lines = {}
+            self._raw_log_line_number_lookup = None
             # A different file means all derived caches are stale.
             self._filter_cache_by_skill = {}
             self._detail_cache = {}
@@ -241,6 +244,7 @@ class LogScopeMixin:
             self._original_wrapped_lines = dict(zip(merged, originals))
             self._raw_log_cache = merged
             self._raw_log_source_line_numbers = merged_line_numbers
+            self._raw_log_line_number_lookup = None
             print(f"[PreScan] 🔗 Merged {wrapped} wrapped continuation line(s) "
                   f"in time-only log (now {len(merged)} entries).")
 

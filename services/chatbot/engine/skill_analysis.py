@@ -125,7 +125,12 @@ class SkillAnalysisMixin:
         
         if skill_name in self._filter_cache_by_skill:
             cached = self._filter_cache_by_skill[skill_name]
-            if not getattr(self, "_turn_skill_log_lines", {}).get(skill_name):
+            cached_originals = cached.get("original_lines")
+            if cached_originals is not None:
+                if not hasattr(self, "_turn_skill_log_lines"):
+                    self._turn_skill_log_lines = {}
+                self._turn_skill_log_lines[skill_name] = list(cached_originals)
+            elif not getattr(self, "_turn_skill_log_lines", {}).get(skill_name):
                 self._get_filtered_log_lines(skill_name, apply_output_limit=False)
             export_path = self._export_assembled_log_file()
             total_count = len(self._assembled_log_text.splitlines()) if self._assembled_log_text else 0
@@ -227,6 +232,7 @@ class SkillAnalysisMixin:
             "skill_name": skill_name,
             "line_count": len(compact_lines),
             "lines": compact_lines,
+            "original_lines": list(self._turn_skill_log_lines.get(skill_name, [])),
             "created_at": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
         }
 

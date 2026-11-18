@@ -860,6 +860,7 @@
         if (!firstRoundSent && !window.__viewingSavedConv) captureLiveSessionSnapshot();
         window.__avatarHistoryLoading = (window.__avatarHistoryLoading || 0) + 1;
         window.refreshChatRecipientAvailability?.();
+        let contextRestored = false;
         try {
             const res = await fetch(`${CHATBOT_API}/history/load`, {
                 method: 'POST',
@@ -919,6 +920,7 @@
             // Issue Time + log source). Called AFTER the server-side restore so
             // any unsent edits the user made before switching away win.
             await restoreDraftFor(window.__feedbackConversationId);
+            contextRestored = true;
 
             // Still analysing → show the in-flight question and follow the
             // live stream so progress catches up in real time.
@@ -940,6 +942,7 @@
         } finally {
             window.__avatarHistoryLoading--;
             window.refreshChatRecipientAvailability?.();
+            if (contextRestored) document.dispatchEvent(new Event('chatbot:context-restored'));
         }
     }
 

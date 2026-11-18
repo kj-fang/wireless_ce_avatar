@@ -15,12 +15,29 @@
             ? result.key_logs_status : 'legacy';
         const raw = status === 'selected' && typeof result.key_logs === 'string'
             ? result.key_logs : '';
+        const evidenceRows = new Map();
+        if (raw) {
+            for (const line of raw.split(/\r?\n/)) {
+                const match = line.match(/^\s*(\d+)\t/);
+                if (!match) continue;
+                const lineNumber = Number(match[1]);
+                if (Number.isSafeInteger(lineNumber) && lineNumber > 0 && !evidenceRows.has(lineNumber)) {
+                    evidenceRows.set(lineNumber, line);
+                }
+            }
+        }
+        const orderedEvidence = Array.from(evidenceRows.entries())
+            .sort(([left], [right]) => left - right);
+        const evidenceText = orderedEvidence.map(([, line]) => line).join('\n');
+        const evidenceLineNumbers = orderedEvidence.map(([lineNumber]) => lineNumber);
         const footer = document.createElement('div');
         footer.className = 'key-log-footer';
         const button = makeKeyLogButton('file-text', 'View filtered skill logs', '\u2637');
         button.setAttribute('aria-haspopup', 'dialog');
         button.addEventListener('click', () => {
-            if (window.ChatbotWorkspace?.active) window.ChatbotWorkspace.showEvidence(raw, button, status);
+            if (window.ChatbotWorkspace?.active) {
+                window.ChatbotWorkspace.showEvidence(evidenceText, button, status, evidenceLineNumbers);
+            }
             else openKeyLogModal(raw, button, status);
         });
         footer.appendChild(button);
@@ -194,6 +211,7 @@
         }));
         worker.postMessage({type: 'start', runId, source: dialog.__source, reuseCache: reuseWorker,
             rules, chunkSize: TAT_WORKER_CHUNK_BYTES,
+            sourceLineNumbers: dialog.__sourceLineNumbers,
             showOnlyFilteredLines: dialog.__showOnlyFilteredLines !== false});
     }
 
@@ -1149,6 +1167,7 @@
         dialog.__displayRunId = 0;
         dialog.__pendingRevealLine = null;
         dialog.__source = null;
+        dialog.__sourceLineNumbers = options.sourceLineNumbers || null;
         dialog.__virtualMode = false;
         dialog.__workerReady = false;
         dialog.__virtualSpacer = null;

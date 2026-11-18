@@ -526,8 +526,9 @@
     }
 
     function sendQuick(text) {
+        if (__chatStreaming || window.ChatbotSnippets?.busy || window.__echoChatBusy) return;
         document.getElementById('user-input').value = text;
-        sendMessage();
+        onSendBtnClick();
     }
 
     // ── Render agent steps with dynamic loading and auto-collapse ────

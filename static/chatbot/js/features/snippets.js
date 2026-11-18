@@ -20,11 +20,8 @@
 
     function recipient() { return window.__chatRecipient === 'echo' ? 'echo' : 'avatar'; }
     function setAnswerText(el, text) {
-        if (typeof marked !== 'undefined') {
-            el.innerHTML = marked.parse(text);
-        } else {
-            el.textContent = text;
-        }
+        el.textContent = text;
+        el.style.whiteSpace = 'pre-wrap';
     }
     function renderSkillMetadata(container, target, payload) {
         container.replaceChildren();

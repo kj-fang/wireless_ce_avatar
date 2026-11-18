@@ -109,6 +109,7 @@ async function scanSource(message, runId) {
     const showOnlyFilteredLines = message.showOnlyFilteredLines !== false;
     const nextRows = [];
     const nextHitCounts = new Array(rules.length).fill(0);
+    const sourceLineNumbers = Array.isArray(message.sourceLineNumbers) ? message.sourceLineNumbers : null;
     const decoder = new TextDecoder('utf-8');
     const chunkSize = Math.max(32 * 1024, Math.min(message.chunkSize || DEFAULT_CHUNK_BYTES, 1024 * 1024));
     let pending = '';
@@ -129,12 +130,14 @@ async function scanSource(message, runId) {
     function processLine(originalLine) {
         physicalLine++;
         if (physicalLine === 1 && originalLine.startsWith('# WCE_LOG_TZ_SHIFTED=')) return;
+        const lineNumber = sourceLineNumbers ? sourceLineNumbers[physicalLine - 1] : physicalLine;
+        if (sourceLineNumbers && (!Number.isSafeInteger(lineNumber) || lineNumber <= 0)) return;
         const line = originalLine.replace(/[\r\n]+$/, '');
         if (!line.trim()) return;
         candidateCount++;
         const lowerLine = line.toLowerCase();
         if (!rules.length) {
-            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: ''});
+            nextRows.push({text: originalLine, lineNumber, foreground: '', background: ''});
             return;
         }
         const wordIndex = (candidateCount - 1) >>> 5;
@@ -152,9 +155,9 @@ async function scanSource(message, runId) {
         });
         if (excluded) return;
         if (include) {
-            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: include.foreground, background: include.background});
+            nextRows.push({text: originalLine, lineNumber, foreground: include.foreground, background: include.background});
         } else if (!showOnlyFilteredLines) {
-            nextRows.push({text: originalLine, lineNumber: physicalLine, foreground: '', background: '', dimmed: true});
+            nextRows.push({text: originalLine, lineNumber, foreground: '', background: '', dimmed: true});
         }
     }
 

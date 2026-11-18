@@ -1243,10 +1243,14 @@ class AgentRoutes:
             return jsonify(success=False, error="Invalid snippet request."), 400
         if data.get("recipient") == "echo" and "echo_chat" not in self.profile.capabilities:
             return jsonify(success=False, error="Echo is not available for this profile."), 400
+        agent = self._get_configuration_agent()
+        active_log = str(getattr(agent, "current_log_path", "") or "")
+        blocked = check_ips_service.blocking_state(active_log or None)
+        if blocked:
+            return jsonify(blocked), 428
         try:
             if data.get("recipient", "avatar") == "avatar":
                 client, model = self._get_llm_client_model()
-                agent = self._get_configuration_agent()
                 skills = getattr(agent, "skills", {}) or {}
                 skill_catalog = []
                 if isinstance(skills, dict):

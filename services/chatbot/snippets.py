@@ -279,6 +279,9 @@ def _run_snippet_tools(selected_skills, selected_rows, disabled_tools):
             if output.lstrip().upper().startswith("ERROR:"):
                 records.append({"name": name, "status": "error", "detail": output[:500]})
                 return True
+            if output.startswith("INSUFFICIENT_DATA:"):
+                records.append({"name": name, "status": "insufficient_data", "detail": output[18:500]})
+                return True
             if name == "lookup_assert_code" and output.startswith("Invalid assert code format:"):
                 records.append({"name": name, "status": "error", "detail": f"Invalid assert code: {argument}."})
                 return True
@@ -290,8 +293,12 @@ def _run_snippet_tools(selected_skills, selected_rows, disabled_tools):
                 records.append({"name": name, "status": "limit", "detail": "Tool output limit reached; results are incomplete."})
                 return False
             output_chars += len(output)
-            detail = (f"Looked up {argument}." if name == "lookup_assert_code"
-                      else "Analyzed selected lines only; results may be incomplete.")
+            if name == "lookup_assert_code":
+                detail = f"Looked up {argument}."
+            elif name == "softAP_supported_channel":
+                detail = "Analyzed selected lines only, splitting contiguous groups; groups without their own MCC are marked insufficient."
+            else:
+                detail = "Analyzed selected lines only; results may be incomplete."
             records.append({"name": name, "status": "success", "detail": detail, "output": output})
         except Exception:
             records.append({"name": name, "status": "error", "detail": "Tool execution failed."})
@@ -306,7 +313,36 @@ def _run_snippet_tools(selected_skills, selected_rows, disabled_tools):
             except Exception:
                 records.append({"name": name, "status": "unavailable", "detail": "Tool could not be loaded."})
                 continue
-            run(name, selected_text, softAP_supported_channel)
+            groups = []
+            for row in selected_rows:
+                if groups and row["lineNumber"] == groups[-1][-1]["lineNumber"] + 1:
+                    groups[-1].append(row)
+                else:
+                    groups.append([row])
+            mcc_pattern = re.compile(r"\[prvLarStoreCurrentMcc\].*CurrMCC:", re.IGNORECASE)
+
+            def analyze_softap_groups(_):
+                results = []
+                missing = []
+                for group in groups:
+                    first_line = group[0]["lineNumber"]
+                    last_line = group[-1]["lineNumber"]
+                    group_text = "\n".join(row["text"].rstrip("\r\n") for row in group)
+                    if not any(mcc_pattern.search(row["text"]) for row in group):
+                        missing.append(f"L{first_line}-L{last_line}: insufficient data; no MCC in this contiguous group")
+                        continue
+                    output = softAP_supported_channel(group_text)
+                    if output.startswith("ERROR:"):
+                        missing.append(f"L{first_line}-L{last_line}: insufficient data; {output[6:]}")
+                    else:
+                        results.append(f"L{first_line}-L{last_line}:\n{output}")
+                if not results:
+                    return "INSUFFICIENT_DATA: " + "; ".join(missing)
+                if missing:
+                    results.append("Insufficient data for some selected groups: " + "; ".join(missing))
+                return "\n\n".join(results)
+
+            run(name, selected_text, analyze_softap_groups)
         elif name == "lookup_assert_code":
             codes = []
             seen_codes = set()

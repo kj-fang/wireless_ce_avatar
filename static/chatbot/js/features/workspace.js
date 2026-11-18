@@ -149,16 +149,24 @@
     window.ChatbotWorkspace = {
         get active() { return active; },
         showRaw,
-        showEvidence(raw, trigger, status) {
-            const viewer = openKeyLogModal(raw, trigger, status, {id: 'workspace-evidence-viewer', host: hosts.evidence});
+        showEvidence(raw, trigger, status, sourceLineNumbers) {
+            const viewer = openKeyLogModal(raw, trigger, status, {
+                id: 'workspace-evidence-viewer', host: hosts.evidence, sourceLineNumbers,
+            });
             setupLogDivider(viewer);
             selectView('evidence');
             return viewer;
         },
     };
     document.addEventListener('chatbot:context-changed', () => {
+        currentView = 'raw';
         rawPath = '';
         for (const host of Object.values(hosts)) if (host.firstElementChild) cleanupKeyLogModal(host.firstElementChild);
-        queueMicrotask(() => { if (active) showRaw(); });
+        queueMicrotask(() => {
+            if (active && !window.__avatarHistoryLoading) showRaw();
+        });
+    });
+    document.addEventListener('chatbot:context-restored', () => {
+        if (active) showRaw();
     });
 })();

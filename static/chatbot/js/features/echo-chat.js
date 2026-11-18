@@ -105,11 +105,8 @@
     }
 
     function setEchoAnswerText(answer, text) {
-        if (typeof marked !== 'undefined') {
-            answer.innerHTML = marked.parse(text);
-        } else {
-            answer.textContent = text;
-        }
+        answer.textContent = text;
+        answer.style.whiteSpace = 'pre-wrap';
     }
 
     window.sendEchoMessage = async function () {

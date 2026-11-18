@@ -105,8 +105,13 @@
     }
 
     function setEchoAnswerText(answer, text) {
-        answer.textContent = text;
-        answer.style.whiteSpace = 'pre-wrap';
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            answer.innerHTML = DOMPurify.sanitize(marked.parse(text), {USE_PROFILES: {html: true}});
+            answer.style.whiteSpace = '';
+        } else {
+            answer.textContent = text;
+            answer.style.whiteSpace = 'pre-wrap';
+        }
     }
 
     window.sendEchoMessage = async function () {

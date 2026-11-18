@@ -20,8 +20,13 @@
 
     function recipient() { return window.__chatRecipient === 'echo' ? 'echo' : 'avatar'; }
     function setAnswerText(el, text) {
-        el.textContent = text;
-        el.style.whiteSpace = 'pre-wrap';
+        if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
+            el.innerHTML = DOMPurify.sanitize(marked.parse(text), {USE_PROFILES: {html: true}});
+            el.style.whiteSpace = '';
+        } else {
+            el.textContent = text;
+            el.style.whiteSpace = 'pre-wrap';
+        }
     }
     function renderSkillMetadata(container, target, payload) {
         container.replaceChildren();

@@ -44,7 +44,7 @@ def own_mailbox() -> str:
 def identity() -> dict:
     """{"owner_name", "mailbox", "role", "signed_in"} as of now.
 
-    owner_name is the IPS sign-in Beacon already holds for this PC; it is ""
+    owner_name is the IPS sign-in Muse already holds for this PC; it is ""
     until that sign-in has succeeded. Never starts an interactive sign-in."""
     owner, state = "", "signed_out"
     try:
@@ -65,7 +65,7 @@ def identity() -> dict:
 
 
 def start_silent_sign_in(retry_failed: bool = False) -> None:
-    """Ask Beacon to resolve the IPS identity in the background when it has
+    """Ask Muse to resolve the IPS identity in the background when it has
     not yet (cookie file / Windows SSO - never a visible browser). A sign-in
     that already failed is tried again only when the user asks."""
     try:

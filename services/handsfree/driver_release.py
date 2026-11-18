@@ -12,7 +12,7 @@ Source of truth: the PAE Wi-Fi Dashboard on the Power BI Report Server
 (REPORT_URL), page "Wi-Fi Kits Map Sustain", table
     WW | Year | Release | WiFi_Core | Version_Quality | TIC | Status | QSR_TA | Distribution | WU
 The report's data is an imported PostgreSQL model (no direct access), so the
-Beacon SERVER reads the rendered table through the app's SSO Chrome profile
+Muse SERVER reads the rendered table through the app's SSO Chrome profile
 (Windows integrated auth happens in Chrome; Python has no NTLM/Kerberos),
 once a day and on demand, and stores the result in the shared config:
 

@@ -5,7 +5,7 @@ The routes are a thin JSON layer over ``services.handsfree.orchestrator`` and
 the ``HandsfreeStore`` draft queue; both are patched at point of use so no
 background run starts and nothing is written anywhere.
 
-The store is the SHARED network folder that the Beacon server and every
+The store is the SHARED network folder that the Muse server and every
 client read live (``services.handsfree.queue.open_store``), and the routes
 reach it through ``handsfree_routes._store``. That function is what these
 tests patch. A test that forgot to would change the team's real settings and
@@ -481,7 +481,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         """approve tells the orchestrator where the approval came from (usage tracking).
 
         Input: POST /handsfree/queue/d-1/approve with via in the body; with no
-        via but a Referer of the Beacon page / the home page; with a via the
+        via but a Referer of the Muse page / the home page; with a via the
         route does not know and no Referer.
         Expected: via="home_dashboard" / "beacon_page" from the body, the
         same two derived from the Referer, and no via argument at all when

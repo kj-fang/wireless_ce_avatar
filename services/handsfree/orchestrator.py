@@ -1,5 +1,5 @@
 """
-Beacon (handsfree replyer) orchestration: check-now runs and approve-and-post.
+Muse (handsfree replyer) orchestration: check-now runs and approve-and-post.
 
 One check run at a time (module lock). All state the UI needs lives in
 `run_state` (thread-safe copies via get_run_state) and the HandsfreeStore
@@ -655,7 +655,7 @@ def start_case_run(case_nbr: str) -> dict:
 def _thread_folders(watch_folder: str = "") -> tuple:
     """Where a case's email thread is collected: the watched folder first
     (thread() does not descend into subfolders, so a watch folder such as
-    'Inbox/Beacon' must be named or the triggering mail itself is missed),
+    'Inbox/Muse' must be named or the triggering mail itself is missed),
     then the Inbox and Sent Items."""
     out: list = []
     for name in (str(watch_folder or "").strip(), "Inbox", "Sent Items"):
@@ -1139,7 +1139,7 @@ def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
                 posted_plain: Optional[str] = None) -> None:
     """Usage record of an approval that reached a posting backend: who
     posted, from which page, with what outcome, and the text that went out
-    next to the text Beacon suggested (gather_service.record_handsfree_post).
+    next to the text Muse suggested (gather_service.record_handsfree_post).
     Reads the draft as it stands after the post. Never raises and never
     delays the answer - the write runs on the Gather service's own thread,
     and a build with collection switched off records nothing."""
@@ -1220,7 +1220,7 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
     while the retry is still posting.
 
     via says where the approval came from, for usage tracking only (one of
-    POST_VIAS: the Beacon page, the Avatar home dashboard, the server's
+    POST_VIAS: the Muse page, the Avatar home dashboard, the server's
     automatic first response; anything else counts as "api")."""
     attempt = _clean_attempt_id(attempt_id)
     with _post_lock:

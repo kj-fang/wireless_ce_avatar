@@ -1,5 +1,5 @@
 @echo off
-rem Starts the Beacon SERVER: IntelAvatar in the server role (scheduled analysis rounds, live view).
+rem Starts the Muse SERVER: IntelAvatar in the server role (scheduled analysis rounds, live view).
 rem The exe name carries the build version, so pick whichever IntelAvatar_Server_v*.exe sits next to this file.
 setlocal
 set "EXE="

@@ -1,4 +1,4 @@
-/* Beacon assistant page. Loaded after /static/chatbot/css/base.css, which
+/* Muse assistant page. Loaded after /static/chatbot/css/base.css, which
    supplies the shell (top bar, sidebar, chat window, bubbles, input row).
    Everything here is prefixed as- so it cannot collide with that sheet. */
 
@@ -18,7 +18,12 @@
 .assistant-page [hidden] { display: none !important; }
 
 /* ── Top bar ── */
-.as-logo { font-size: 1.4rem; }
+.as-logo { display: inline-flex; }
+.as-logo .as-mark { width: 26px; height: 26px; }
+.as-mark { width: 1em; height: 1em; display: block; }
+.assistant-page .welcome-msg .big-icon { display: flex; justify-content: center; color: var(--accent-border); }
+.assistant-page .welcome-msg .big-icon .as-mark { width: 56px; height: 56px; }
+.assistant-page .avatar-icon .as-mark { width: 20px; height: 20px; }
 .as-spacer { flex: 1; }
 .as-icon-btn {
     background: none; border: none; color: white; font-size: 1.2rem;

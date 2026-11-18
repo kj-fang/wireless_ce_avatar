@@ -114,7 +114,7 @@ from utils import check_ips_utils
 # only, and changes the meaning of no existing field. The collector accepts
 # records with and without execution_mode, and reads the flat root as "exe".
 #
-# Beacon (Handsfree) post events do not bump it either: they are a NEW record
+# Muse (Handsfree) post events do not bump it either: they are a NEW record
 # kind in a folder of its own (<root>/handsfree_posts/<user>/<id>.json), no
 # existing record changes, and the kind versions itself with
 # `handsfree_post_version` (see record_handsfree_post).
@@ -122,7 +122,7 @@ GATHER_SCHEMA_VERSION = 6
 
 # Version of the "handsfree_post" record, independent of the schema above.
 #   v1 - who posted which draft from which page, with what outcome; the text
-#        Beacon suggested, the text that was posted, and a line-level summary
+#        Muse suggested, the text that was posted, and a line-level summary
 #        of the reviewer's edit.
 HANDSFREE_POST_VERSION = 1
 
@@ -139,7 +139,7 @@ _MAX_INVOCATIONS = 500        # bounded feature ledger per case workflow
 _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 # A full-analysis draft with its Echo section runs to ~21,000 characters on
 # real cases; the cap is a guard against a runaway text, not a trim.
-_MAX_POST_CHARS = 60000       # cap each stored Beacon draft text (suggested / posted)
+_MAX_POST_CHARS = 60000       # cap each stored Muse draft text (suggested / posted)
 _MAX_EDIT_LINES = 200         # cap the removed / added line lists of an edit summary
 _MAX_EDIT_LINE_CHARS = 500    # cap one line in those lists
 
@@ -2034,8 +2034,8 @@ def record_feedback_submit(
 
 
 # ---------------------------------------------------------------------------
-# Beacon (Handsfree) posts: who posted what, and how it differs from what
-# Beacon suggested
+# Muse (Handsfree) posts: who posted what, and how it differs from what
+# Muse suggested
 # ---------------------------------------------------------------------------
 
 # Where an approval came from. Anything else is recorded as "api".
@@ -2049,7 +2049,7 @@ def _post_lines(text: Any) -> list[str]:
 
 
 def summarise_edit(suggested: Any, posted: Any) -> dict:
-    """What a reviewer did to Beacon's suggestion before it went out, line by
+    """What a reviewer did to Muse's suggestion before it went out, line by
     line: how alike the two texts are, which suggested lines were dropped and
     which lines were written in. This is the learning signal - the dropped
     lines are what reviewers do NOT pass on to a customer. Blank lines and
@@ -2089,7 +2089,7 @@ def _post_text(text: Any) -> dict:
 
 
 def _do_record_handsfree_post(event: dict) -> None:
-    """Write one Beacon post event; idempotent per post_event_id."""
+    """Write one Muse post event; idempotent per post_event_id."""
     user = _current_user()
     try:
         path = _handsfree_post_path(event["post_event_id"], user)
@@ -2134,15 +2134,15 @@ def record_handsfree_post(
     edit_baseline_plain: Any = None,
     post_event_id: str = "",
 ) -> str:
-    """Record one Beacon approval that reached a posting backend.
+    """Record one Muse approval that reached a posting backend.
 
     Answers two questions for later analysis:
 
       * usage - who posted (Windows user, IPS reviewer), from which page
-        (`via`: the Beacon page, the Avatar home dashboard, the server's
+        (`via`: the Muse page, the Avatar home dashboard, the server's
         automatic first response, or another caller), to which backend, as an
         internal or a customer-visible comment, and whether it went through;
-      * content - the text Beacon suggested, the text that was actually
+      * content - the text Muse suggested, the text that was actually
         posted, and a line-level summary of the difference (summarise_edit),
         so we can learn which parts of a suggestion reviewers keep.
 
@@ -2717,7 +2717,7 @@ def compute_aggregates() -> dict:
 
 
 def iter_handsfree_posts() -> Iterator[dict]:
-    """Yield Beacon post events (record_handsfree_post)."""
+    """Yield Muse post events (record_handsfree_post)."""
     try:
         root = _resolve_root()
     except Exception:
@@ -2738,7 +2738,7 @@ def iter_handsfree_posts() -> Iterator[dict]:
 
 
 def _handsfree_stats() -> dict:
-    """Rollup of the Beacon post events: how many posts, by whom, from which
+    """Rollup of the Muse post events: how many posts, by whom, from which
     page, with what visibility, and how often the suggestion was edited."""
     by_via: Counter = Counter()
     by_visibility: Counter = Counter()

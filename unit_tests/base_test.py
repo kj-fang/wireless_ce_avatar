@@ -81,8 +81,8 @@ class BaseTestCase(unittest.TestCase):
                 cls._start_patch(patch.object(module, "app_config", cls.mock_app_config))
                 cls.rebound_modules.append(name)
 
-        # The Handsfree (Beacon) store is NOT under avatarfiles_dir: it is one
-        # shared network folder that the Beacon server and every client read
+        # The Handsfree (Muse) store is NOT under avatarfiles_dir: it is one
+        # shared network folder that the Muse server and every client read
         # live (settings, review queue, case requests). A route test that
         # forgets to mock the store would change the team's real settings, so
         # make the folder unreachable for every test: open_store() resolves it

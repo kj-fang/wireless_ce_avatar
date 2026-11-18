@@ -619,11 +619,11 @@ def set_up(socketio):
     # socketio
     app_config.set_socketio(socketio)
 
-    # Beacon assistant: the clock behind its scheduled tasks ("at 2 pm do X").
+    # Muse assistant: the clock behind its scheduled tasks ("at 2 pm do X").
     # Started here, after avatarfiles_dir is known (the task list lives under
     # it) and only in the running app - importing the blueprint starts nothing.
     try:
         from services.assistant import tasks as assistant_tasks
         assistant_tasks.start_ticker()
     except Exception as e:
-        print(f"⚠️  Beacon assistant task clock not started: {type(e).__name__}: {e}")
+        print(f"⚠️  Muse assistant task clock not started: {type(e).__name__}: {e}")

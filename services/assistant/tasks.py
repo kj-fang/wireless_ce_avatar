@@ -19,7 +19,7 @@ One that came due while it was closed (or more than LATE_S late for any other
 reason) is not run behind the user's back hours later - it is marked "missed"
 and the page offers Run now / Skip.
 
-A scheduled run cannot schedule or cancel tasks, and can start a Beacon
+A scheduled run cannot schedule or cancel tasks, and can start a Muse
 analysis only for a case number written in its own instruction (see
 connectors/cases). It never posts and never sends: no connector does.
 """

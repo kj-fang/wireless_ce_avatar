@@ -1,4 +1,4 @@
-{# Beacon assistant: one chat page over Beacon's data.
+{# Muse assistant: one chat page over Muse's data.
 
    A page of its own rather than a profile of templates/chatbot/page.html:
    that shell and its scripts are built around a loaded log file (issue time,
@@ -9,19 +9,24 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Beacon Assistant</title>
+    <title>Muse Assistant</title>
+    <link rel="icon" type="image/svg+xml" href="/static/muse.svg">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link href="/static/chatbot/css/base.css" rel="stylesheet">
     <link href="/static/assistant/assistant.css?v={{ asset_version }}" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 </head>
 <body class="assistant-page">
+{# The Muse mark (same drawing as /static/muse.svg), inline so it takes the
+   colour of where it sits. assistant.js carries its own copy for the rows it
+   builds. #}
+{% set muse_mark %}<svg class="as-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.5 5 C11.1 10.1 13.9 12.9 19 13.5 C13.9 14.1 11.1 16.9 10.5 22 C9.9 16.9 7.1 14.1 2 13.5 C7.1 12.9 9.9 10.1 10.5 5 Z"/><path d="M18.5 2 C18.75 4.1 19.9 5.25 22 5.5 C19.9 5.75 18.75 6.9 18.5 9 C18.25 6.9 17.1 5.75 15 5.5 C17.1 5.25 18.25 4.1 18.5 2 Z"/></svg>{% endset %}
 
 <div class="top-bar">
     <button type="button" class="as-icon-btn" id="sidebar-toggle" title="Show / hide sidebar"
             aria-label="Toggle sidebar">☰</button>
-    <span class="as-logo" aria-hidden="true">🛰️</span>
-    <h1>Beacon Assistant</h1>
+    <span class="as-logo" aria-hidden="true">{{ muse_mark }}</span>
+    <h1>Muse Assistant</h1>
     <span class="badge-model">Cases · Mail · Echo · Tasks</span>
     <span class="as-spacer"></span>
     <div class="as-bell-wrap">
@@ -37,7 +42,7 @@
         </div>
     </div>
     <span class="as-identity" id="identity-chip" title="IPS sign-in of this PC">…</span>
-    <a class="as-top-link" href="/handsfree/">Beacon queue</a>
+    <a class="as-top-link" href="/handsfree/">Muse queue</a>
     <a class="as-top-link" href="/">← Back to Avatar</a>
 </div>
 
@@ -86,8 +91,8 @@
         <div id="banner" class="as-banner" hidden></div>
         <div id="chat-window">
             <div class="welcome-msg" id="welcome-msg">
-                <div class="big-icon">🛰️</div>
-                <strong>Beacon Assistant</strong><br>
+                <div class="big-icon">{{ muse_mark }}</div>
+                <strong>Muse Assistant</strong><br>
                 Ask about your IPS cases, today's mail, or a technical question for Echo.<br>
                 I look things up and start analyses. I never post to IPS and never send mail.
             </div>

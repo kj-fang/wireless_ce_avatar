@@ -125,7 +125,7 @@ def bundled_role(base: Optional[str] = None) -> str:
 
 
 def running_role(instance_url: str, timeout: float = 5.0) -> str:
-    """The Beacon role of the Avatar already running at instance_url, asked
+    """The Muse role of the Avatar already running at instance_url, asked
     over its own /handsfree/auto: "server", "client", or "" when it cannot
     be asked (an older build without roles, or still starting)."""
     import json
@@ -143,18 +143,18 @@ def role_mismatch(wanted: str, running: str, instance_url: str = "") -> str:
     """Why the Avatar that is already running cannot stand in for the one
     being started, or "" when it can. The role is fixed per process, and
     only a SERVER serves the clients' case requests and runs the scheduled
-    rounds — so starting the Beacon Server while a client (or an older
+    rounds — so starting the Muse Server while a client (or an older
     build) is running must not just open that instance's page and exit:
     nothing would be served. A client start is content with any instance."""
     if str(wanted or "").lower() != "server" or str(running or "").lower() == "server":
         return ""
-    what = (f"as the Beacon {str(running).upper()}" if running
-            else "without the Beacon server role (an older build, or still starting)")
+    what = (f"as the Muse {str(running).upper()}" if running
+            else "without the Muse server role (an older build, or still starting)")
     where = f" at {instance_url}" if instance_url else ""
-    return (f"Avatar is already running{where} {what}, so the Beacon SERVER was not started: "
+    return (f"Avatar is already running{where} {what}, so the Muse SERVER was not started: "
             "case requests and scheduled rounds would stay unserved. The role is fixed per "
             "process - stop that Avatar first (its tray icon > Exit, or close its console "
-            "window), then start the Beacon Server again.")
+            "window), then start the Muse Server again.")
 
 
 def can_schedule_here() -> bool:
@@ -379,10 +379,10 @@ def cli_running_message(last_status: str) -> str:
 
 
 def scheduled_in_app_here(cfg: dict) -> str:
-    """Non-empty when the Beacon page schedules the rounds on THIS machine
+    """Non-empty when the Muse page schedules the rounds on THIS machine
     (the CLI round must then stay out of the way): the reason text."""
     if cfg.get("auto_check_enabled") and _runs_here(cfg) and cfg.get("auto_check_host"):
-        return (f"the Beacon page schedules the rounds on this server (host "
+        return (f"the Muse page schedules the rounds on this server (host "
                 f"{cfg.get('auto_check_host')}, {MODES.get(cfg.get('auto_check_mode') or 'nightly', '')}): "
                 "stop it there before running the CLI round, or disable this scheduled task "
                 "— one scheduler per server")
@@ -453,8 +453,8 @@ def save_settings(max_cases=None, source=None, list_view=None, list_views=None,
                           **email))
 
 
-CLIENT_CANNOT_SCHEDULE = ("this PC runs Beacon as a client: scheduled rounds are started "
-                          "on the Handsfree server (start Beacon there with --server / "
+CLIENT_CANNOT_SCHEDULE = ("this PC runs Muse as a client: scheduled rounds are started "
+                          "on the Handsfree server (start Muse there with --server / "
                           "app.py --handsfree-role server)")
 
 

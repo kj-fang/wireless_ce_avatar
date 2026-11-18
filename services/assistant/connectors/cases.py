@@ -1,21 +1,21 @@
 """
-Case connectors: the user's IPS cases, joined with what Beacon did with them.
+Case connectors: the user's IPS cases, joined with what Muse did with them.
 
     list_my_cases         which of my cases moved since <when>, and where each stands
-    get_case              one case: IPS state, latest comments, Beacon's latest draft
-    start_case_analysis   have Beacon analyse one case (a draft for review; no post)
+    get_case              one case: IPS state, latest comments, Muse's latest draft
+    start_case_analysis   have Muse analyse one case (a draft for review; no post)
     analysis_status       is that analysis queued / running / done
 
 IPS is read live over the user's own session (services/handsfree/ips_client);
-Beacon's side comes from the shared store (drafts and case requests). The
+Muse's side comes from the shared store (drafts and case requests). The
 store sits on a network share where every access costs about a second, so a
 listing reads it once - one draft listing, one request listing - and joins in
 memory. When the share is unreachable the IPS half is still returned, with a
 warning.
 
-Nothing here writes to IPS. start_case_analysis only asks Beacon to analyse:
+Nothing here writes to IPS. start_case_analysis only asks Muse to analyse:
 on the server PC it runs there, on a client it becomes a request file the
-server picks up, exactly as the Beacon page's "Analyze this case" does.
+server picks up, exactly as the Muse page's "Analyze this case" does.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def clear_cache() -> None:
 # ---- shared helpers ------------------------------------------------------------
 
 def _not_signed_in() -> dict:
-    """The result when Beacon holds no IPS identity yet: kick the silent
+    """The result when Muse holds no IPS identity yet: kick the silent
     sign-in (never a visible browser) and say what to do."""
     try:
         from services.assistant import runner
@@ -89,7 +89,7 @@ def _not_signed_in() -> dict:
         pass
     return {"error": "not_signed_in",
             "message": "This PC is not signed in to IPS yet. A silent sign-in has been started; "
-                       "ask again in a moment. If it keeps failing, sign in on the Beacon queue page."}
+                       "ask again in a moment. If it keeps failing, sign in on the Muse queue page."}
 
 
 def named_in(text: str, case_nbr: str) -> bool:
@@ -139,23 +139,23 @@ def _requests_by_case(store) -> dict[str, dict]:
 
 def beacon_view(draft: Optional[dict], request: Optional[dict], now: datetime,
                 last_customer_comment: Optional[datetime] = None) -> dict:
-    """Where Beacon stands on one case, as {"state", "text", ...}.
+    """Where Muse stands on one case, as {"state", "text", ...}.
 
     state: needs_review | posted | post_failed | rejected | skipped |
            analysis_failed | running | requested | not_analysed"""
     req_status = str((request or {}).get("status") or "")
     if req_status == "running":
-        return {"state": "running", "text": "Beacon is analysing it now"
+        return {"state": "running", "text": "Muse is analysing it now"
                 + (f" (on {request.get('host')})" if request.get("host") else "")}
     if req_status == "pending":
         return {"state": "requested",
                 "text": "Analysis requested " + timeutil.label(request.get("requested_at"), now)
-                        + "; waiting for the Beacon server"}
+                        + "; waiting for the Muse server"}
     if not draft:
         if req_status == "done" and request.get("ok") is False:
             return {"state": "analysis_failed",
                     "text": "Requested analysis failed: " + str(request.get("error") or "")[:160]}
-        return {"state": "not_analysed", "text": "Not analysed by Beacon"}
+        return {"state": "not_analysed", "text": "Not analysed by Muse"}
 
     status, mode = str(draft.get("status") or ""), str(draft.get("mode") or "")
     updated = timeutil.parse_stamp(draft.get("updated_at"))
@@ -168,9 +168,9 @@ def beacon_view(draft: Optional[dict], request: Optional[dict], now: datetime,
             view[key] = str(draft[key])[:240]
     if status == "skipped":
         view.update(state="skipped",
-                    text="Beacon skipped it: " + str(draft.get("skip_reason") or "")[:160])
+                    text="Muse skipped it: " + str(draft.get("skip_reason") or "")[:160])
     elif mode == "error":
-        view.update(state="analysis_failed", text=f"Beacon's analysis failed ({when})")
+        view.update(state="analysis_failed", text=f"Muse's analysis failed ({when})")
     elif status == "posted":
         how = " automatically" if draft.get("auto_posted") else ""
         view.update(state="posted", text=f"Reply posted{how} ({when})")
@@ -230,12 +230,12 @@ def build_case_list(owner: str, mailbox: str, start: datetime, now: datetime, *,
     drafts: dict[str, dict] = {}
     requests: dict[str, dict] = {}
     try:
-        emit("⏳ Reading the Beacon queue ...")
+        emit("⏳ Reading the Muse queue ...")
         store = _store()
         drafts = latest_drafts(store)
         requests = _requests_by_case(store)
     except Exception as e:
-        warnings.append("The Beacon shared folder could not be read, so Beacon's status is "
+        warnings.append("The Muse shared folder could not be read, so Muse's status is "
                         f"missing from this list ({type(e).__name__}: {str(e)[:160]}).")
 
     rows, quiet = [], []
@@ -258,7 +258,7 @@ def build_case_list(owner: str, mailbox: str, start: datetime, now: datetime, *,
             why.append(f"{len(from_intel)} Intel comment(s), latest "
                        + timeutil.label(from_intel[0]["at"], now))
         if draft_at and draft_at >= start:
-            why.append("Beacon draft " + timeutil.label(draft_at, now))
+            why.append("Muse draft " + timeutil.label(draft_at, now))
         if case["closed"] and (timeutil.parse_stamp(case["closed_date"]) or start) >= start:
             why.append("closed " + timeutil.label(case["closed_date"], now))
         if not why and modified and modified >= start:
@@ -279,7 +279,7 @@ def build_case_list(owner: str, mailbox: str, start: datetime, now: datetime, *,
             "_rank": _rank(beacon, bool(from_customer)),
         })
 
-    # Beacon drafts of mine that moved in the window but whose case IPS did
+    # Muse drafts of mine that moved in the window but whose case IPS did
     # not list (owner changed, or a draft made from a mail thread).
     for nbr, draft in drafts.items():
         if nbr in seen:
@@ -295,7 +295,7 @@ def build_case_list(owner: str, mailbox: str, start: datetime, now: datetime, *,
         rows.append({
             "case": nbr, "subject": str(draft.get("subject") or "")[:110],
             "ips_status": f"({source})",
-            "updated_because": ["Beacon draft " + timeutil.label(draft_at, now)],
+            "updated_because": ["Muse draft " + timeutil.label(draft_at, now)],
             "beacon": beacon, "_last": draft_at, "_rank": _rank(beacon, False),
         })
 
@@ -384,7 +384,7 @@ def _get_case(args: dict, ctx: Ctx) -> dict:
         if record:
             out["beacon_draft"] = _draft_digest(record)
     except Exception as e:
-        warnings.append("The Beacon shared folder could not be read: "
+        warnings.append("The Muse shared folder could not be read: "
                         f"{type(e).__name__}: {str(e)[:160]}")
     if warnings:
         out["warnings"] = warnings
@@ -393,7 +393,7 @@ def _get_case(args: dict, ctx: Ctx) -> dict:
 
 
 def _draft_digest(record: dict) -> dict:
-    """The parts of a Beacon draft worth a model's attention. The Echo section
+    """The parts of a Muse draft worth a model's attention. The Echo section
     of the draft text is left out: Echo content reaches an answer only through
     the Echo connectors, which mark it internal."""
     from services.handsfree.composer import strip_echo_section
@@ -429,7 +429,7 @@ def _draft_digest(record: dict) -> dict:
 # ---- start_case_analysis / analysis_status ---------------------------------------
 
 def start_analysis(case_nbr: str, requested_by: str = "") -> dict:
-    """Have Beacon analyse one case. On the server PC the run starts here; on
+    """Have Muse analyse one case. On the server PC the run starts here; on
     a client it is queued on the share for the server. Never posts."""
     case_nbr = _normalise(case_nbr)
     if not case_nbr:
@@ -439,18 +439,18 @@ def start_analysis(case_nbr: str, requested_by: str = "") -> dict:
         res = _start_local_run(case_nbr) or {}
         if not res.get("ok"):
             return {"error": str(res.get("error") or "the run could not be started")}
-        return {"started": True, "case": case_nbr, "where": "this PC (Beacon server)",
+        return {"started": True, "case": case_nbr, "where": "this PC (Muse server)",
                 "message": f"Analysis of {case_nbr} started on this PC. The draft will appear in "
-                           "the Beacon queue for review; nothing is posted."}
+                           "the Muse queue for review; nothing is posted."}
     import socket
     who = requested_by or f"{os.environ.get('USERNAME', '?')}@{socket.gethostname()}"
     req = _store().request_case(case_nbr, requested_by=f"{who} (assistant)") or {}
     if req.get("status") == "running":
-        return {"started": True, "case": case_nbr, "where": "Beacon server",
-                "message": f"The Beacon server is already analysing {case_nbr}."}
-    return {"started": True, "case": case_nbr, "where": "queued for the Beacon server",
-            "message": f"Analysis of {case_nbr} is queued for the Beacon server. The draft will "
-                       "appear in the Beacon queue for review; nothing is posted."}
+        return {"started": True, "case": case_nbr, "where": "Muse server",
+                "message": f"The Muse server is already analysing {case_nbr}."}
+    return {"started": True, "case": case_nbr, "where": "queued for the Muse server",
+            "message": f"Analysis of {case_nbr} is queued for the Muse server. The draft will "
+                       "appear in the Muse queue for review; nothing is posted."}
 
 
 actions.register(START_KIND, lambda params: start_analysis(params.get("case_nbr"),
@@ -470,7 +470,7 @@ def _start_case_analysis(args: dict, ctx: Ctx) -> dict:
     # The number came from somewhere other than the user's message (a list
     # the assistant read, a mail, a comment): the user confirms with a click.
     action = actions.propose(
-        START_KIND, f"Have Beacon analyse case {case_nbr} (a draft for review; nothing is posted)",
+        START_KIND, f"Have Muse analyse case {case_nbr} (a draft for review; nothing is posted)",
         {"case_nbr": case_nbr, "requested_by": ctx.owner_name}, confirm_label="Start analysis")
     ctx.pending_actions.append(action)
     return {"needs_confirmation": True, "case": case_nbr,
@@ -515,7 +515,7 @@ def _analysis_status(args: dict, ctx: Ctx) -> dict:
             slim = latest_drafts(store).get(case_nbr)
             out["beacon"] = beacon_view(slim, _requests_by_case(store).get(case_nbr), now)
     except Exception as e:
-        out["warnings"] = ["The Beacon shared folder could not be read: "
+        out["warnings"] = ["The Muse shared folder could not be read: "
                            f"{type(e).__name__}: {str(e)[:160]}"]
     if not out.get("requests") and not out.get("this_pc") and not out.get("beacon"):
         out["message"] = "No analysis is queued or running."
@@ -533,8 +533,8 @@ def connectors() -> list[Connector]:
             name="list_my_cases",
             description=(
                 "List the engineer's own IPS cases that were updated since a point in time, each "
-                "with why it counts as updated (customer comment, Intel comment, Beacon draft, "
-                "closed) and where Beacon's handling stands (draft waiting for review, reply "
+                "with why it counts as updated (customer comment, Intel comment, Muse draft, "
+                "closed) and where Muse's handling stands (draft waiting for review, reply "
                 "posted, analysing, not analysed ...). Cases the customer is waiting on come "
                 "first. Use it for 'which of my cases were updated today', 'what is waiting for "
                 "my review', morning overviews."),
@@ -552,7 +552,7 @@ def connectors() -> list[Connector]:
             name="get_case",
             description=(
                 "Details of one IPS case: its IPS status and owner, the latest comments (who, "
-                "when, text), and Beacon's latest draft for it - the issue as understood, "
+                "when, text), and Muse's latest draft for it - the issue as understood, "
                 "missing information, driver check, analysis findings, the next action and the "
                 "draft reply text. Use it before answering anything about a specific case."),
             parameters=object_schema({
@@ -564,8 +564,8 @@ def connectors() -> list[Connector]:
         Connector(
             name="start_case_analysis",
             description=(
-                "Ask Beacon to analyse one IPS case now: it reads the case, downloads and "
-                "analyses the logs and writes a DRAFT reply into the Beacon review queue. "
+                "Ask Muse to analyse one IPS case now: it reads the case, downloads and "
+                "analyses the logs and writes a DRAFT reply into the Muse review queue. "
                 "Nothing is posted to IPS. Takes several minutes; check with analysis_status. "
                 "Only call it when the engineer asked for an analysis."),
             parameters=object_schema({"case_nbr": _CASE_NBR}, ["case_nbr"]),
@@ -573,7 +573,7 @@ def connectors() -> list[Connector]:
         Connector(
             name="analysis_status",
             description=(
-                "Whether a Beacon analysis is queued, running or finished: for one case when "
+                "Whether a Muse analysis is queued, running or finished: for one case when "
                 "case_nbr is given, otherwise every request of the last week."),
             parameters=object_schema({"case_nbr": _CASE_NBR}),
             run=_analysis_status, timeout_s=60),

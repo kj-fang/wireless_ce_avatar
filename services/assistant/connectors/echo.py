@@ -100,10 +100,10 @@ def _run_ask_echo(args: dict, ctx: Ctx) -> dict:
 
 
 def _run_about_case(args: dict, ctx: Ctx) -> dict:
-    """Echo's view on one case. Beacon already asks Echo "what next?" while
+    """Echo's view on one case. Muse already asks Echo "what next?" while
     it analyses a case; with no question of the user's own, that stored
     answer is returned (no second minute of waiting). Otherwise the question
-    is built from Beacon's understanding of the case and asked now."""
+    is built from Muse's understanding of the case and asked now."""
     from services.assistant.connectors import cases
     case_nbr = cases._normalise(args.get("case_nbr"))
     if not case_nbr:
@@ -113,12 +113,12 @@ def _run_about_case(args: dict, ctx: Ctx) -> dict:
     try:
         record = cases.latest_draft(case_nbr)
     except Exception as e:
-        note = f"Beacon's analysis could not be read ({type(e).__name__}: {str(e)[:120]})."
+        note = f"Muse's analysis could not be read ({type(e).__name__}: {str(e)[:120]})."
     analysis = (record or {}).get("analysis") or {}
     advice = analysis.get("echo_advice") or {}
     if not question and str(advice.get("answer") or "").strip():
         out = _result(str(advice["answer"]).strip(), cached=True, elapsed=0.0)
-        out.update(case=case_nbr, origin="asked by Beacon while it analysed the case",
+        out.update(case=case_nbr, origin="asked by Muse while it analysed the case",
                    summary=f"Echo's stored advice for case {case_nbr}")
         return out
 
@@ -139,7 +139,7 @@ def _run_about_case(args: dict, ctx: Ctx) -> dict:
         except Exception:
             pass
         if not subject and not question:
-            return {"error": f"Beacon has not analysed case {case_nbr} and IPS gave no subject, so "
+            return {"error": f"Muse has not analysed case {case_nbr} and IPS gave no subject, so "
                              "there is nothing to ask Echo about. Start an analysis first, or ask "
                              "Echo a complete question with ask_echo." + (" " + note if note else "")}
         built = build_next_steps_question(subject=subject)
@@ -207,9 +207,9 @@ def connectors() -> list[Connector]:
             name="ask_echo_about_case",
             description=(
                 "Ask Echo about one IPS case: recommended next steps, what to request from the "
-                "customer, known similar issues. The question is built from Beacon's analysis of "
+                "customer, known similar issues. The question is built from Muse's analysis of "
                 "the case, so you only pass the case number (and optionally the engineer's own "
-                "extra question). Returns Beacon's stored Echo advice at once when there is one "
+                "extra question). Returns Muse's stored Echo advice at once when there is one "
                 "and no extra question; otherwise takes about a minute. The answer is "
                 "Intel-internal."),
             parameters=object_schema(

@@ -1,5 +1,5 @@
 """
-Headless per-case analysis pipeline for Beacon (the handsfree replyer).
+Headless per-case analysis pipeline for Muse (the handsfree replyer).
 
 Replays the full avatar user journey without the web UI:
 

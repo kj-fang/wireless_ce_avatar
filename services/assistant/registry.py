@@ -65,7 +65,7 @@ class Ctx:
     user_text: str = ""                       # the user's own words this turn
     owner_name: str = ""                      # signed-in IPS user ("" when not signed in)
     mailbox: str = ""                         # this PC's mail address
-    role: str = "client"                      # Beacon role of this process
+    role: str = "client"                      # Muse role of this process
     headless: bool = False                    # a scheduled task, nobody watching
     cancel_event: threading.Event = field(default_factory=threading.Event)
     # Short ids the model sees ("m3") -> the real reference behind them

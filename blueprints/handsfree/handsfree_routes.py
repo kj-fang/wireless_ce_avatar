@@ -1,5 +1,5 @@
 """
-Beacon (handsfree replyer) routes — manual trigger + review queue.
+Muse (handsfree replyer) routes — manual trigger + review queue.
 
 v1 rules enforced here and in the orchestrator:
   * Posting happens ONLY via the explicit Approve endpoint.
@@ -352,7 +352,7 @@ def save_draft(draft_id: str):
 def _approval_via(body: dict) -> str:
     """Which page an approval came from, for usage tracking: what the page
     says in the body ("beacon_page", "home_dashboard"), else what the
-    Referer shows (the Beacon page lives under /handsfree/, the dashboard on
+    Referer shows (the Muse page lives under /handsfree/, the dashboard on
     the home page). "" when neither tells - the orchestrator then files the
     post as "api" (a script, an older page)."""
     said = str(body.get("via") or "").strip().lower()
@@ -606,7 +606,7 @@ def config():
 
 @handsfree_bp.route("/latest_driver/refresh", methods=["POST"])
 def latest_driver_refresh():
-    """Ask the Beacon server to re-read the PAE Wi-Fi Dashboard now. Works
+    """Ask the Muse server to re-read the PAE Wi-Fi Dashboard now. Works
     from any PC: the request is a timestamp in the shared config that the
     server's next scheduler tick (<= 30 s) honours; no Chrome runs here."""
     from datetime import datetime

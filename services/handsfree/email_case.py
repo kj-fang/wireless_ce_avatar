@@ -1,5 +1,5 @@
 """
-An email thread as a case — stage 1 of Beacon's Outlook intake.
+An email thread as a case — stage 1 of Muse's Outlook intake.
 
 Every mail that names an IPS case number forms the thread; the earliest one
 is the description, the later ones the comments, their files the uploads.
@@ -61,7 +61,7 @@ class EmailMessage:
     sender_email: str
     received: str                       # ISO, local clock
     body: str = ""                      # plain text
-    is_own: bool = False                # sent by the Beacon user (Sent Items / own address)
+    is_own: bool = False                # sent by the Muse user (Sent Items / own address)
     conversation_id: str = ""
     attachments: list = field(default_factory=list)   # [{name, path, size, is_image}]
 

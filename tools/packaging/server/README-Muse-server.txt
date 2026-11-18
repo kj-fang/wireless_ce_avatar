@@ -1,9 +1,9 @@
-Beacon Server - trial build (IntelAvatar_Server)
+Muse Server - trial build (IntelAvatar_Server)
 =================================================
 
 What it is
-  IntelAvatar in the Beacon SERVER role: the one machine that runs the
-  scheduled analysis rounds for the team. Its Beacon page has everything
+  IntelAvatar in the Muse SERVER role: the one machine that runs the
+  scheduled analysis rounds for the team. Its Muse page has everything
   the client has, plus "Start automatic analysis" with the full settings
   (source, frequency, Start/Stop) and the live panel that shows each round
   while it runs. It also serves the "Analyze this case" requests that the
@@ -13,7 +13,7 @@ What it is
 
 Before you start
   - Windows 11 on the Intel network (or VPN): the app reads and writes the
-    shared Beacon queue and config on
+    shared Muse queue and config on
     \\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\handsfree.
   - Google Chrome installed. The rounds read IPS with the session signed
     in on this machine ("Sign in to IPS" on the page, Intel SSO in Chrome);
@@ -28,10 +28,10 @@ Before you start
     when the in-app schedule is ON for this host.
 
 Start
-  Double-click "Beacon Server.bat"
+  Double-click "Muse Server.bat"
   (same as running IntelAvatar_Server_v*.exe; double-clicking the exe
   does the same, the role is built in).
-  The first start takes about a minute, then the Beacon page opens in its
+  The first start takes about a minute, then the Muse page opens in its
   own Chrome window with a SERVER badge. A console window stays open in
   the background; close it to stop the app and the schedule with it.
 

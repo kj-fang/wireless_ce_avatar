@@ -13,7 +13,7 @@
 
 param(
     [string]$Branch = "main",
-    # none (default): one IntelAvatar build, as CI makes it — the Beacon role
+    # none (default): one IntelAvatar build, as CI makes it — the Muse role
     # is decided at start (--handsfree-role / INTELAVATAR_HANDSFREE_ROLE).
     # client | server | both: one package per role, IntelAvatar_Client and/or
     # IntelAvatar_Server, with the role baked in (handsfree_role.txt in
@@ -186,7 +186,7 @@ VSVersionInfo(
 Set-Content -Path "version_info.txt" -Value $versionInfoContent -Encoding UTF8
 Write-Host "version_info.txt updated successfully!" -ForegroundColor Green
 
-# Build with PyInstaller — one variant (CI-style) or one package per Beacon role
+# Build with PyInstaller — one variant (CI-style) or one package per Muse role
 Write-Host "`nBuilding with PyInstaller (HandsfreeRole: $HandsfreeRole)..." -ForegroundColor Yellow
 
 $variants = switch ($HandsfreeRole) {
@@ -208,7 +208,7 @@ try {
         # Read by IntelAvatar.spec: the exe/folder name and the baked-in role.
         $env:AVATAR_BUILD_NAME = $name
         $env:AVATAR_HANDSFREE_ROLE = $v.Role
-        $roleNote = if ($v.Role) { " (Beacon role: $($v.Role))" } else { "" }
+        $roleNote = if ($v.Role) { " (Muse role: $($v.Role))" } else { "" }
         Write-Host "`nRunning PyInstaller for $name$roleNote..." -ForegroundColor Yellow
         pyinstaller IntelAvatar.spec --noconfirm --workpath "build/$name"
         if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed for $name (exit $LASTEXITCODE)" }

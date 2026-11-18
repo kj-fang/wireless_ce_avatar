@@ -1,16 +1,16 @@
-Beacon Client - trial build (IntelAvatar_Client)
+Muse Client - trial build (IntelAvatar_Client)
 =================================================
 
 What it is
-  IntelAvatar with the Beacon (Handsfree) review page, for a case owner's
+  IntelAvatar with the Muse (Handsfree) review page, for a case owner's
   own PC. It lists the AI-drafted IPS replies for YOUR cases, lets you edit
   them, and posts the one you approve to IPS under your own account.
-  The analysis rounds themselves run on the Beacon server; this client
+  The analysis rounds themselves run on the Muse server; this client
   never schedules them.
 
 Before you start
   - Windows 11 on the Intel network (or VPN): the app reads the shared
-    Beacon queue and keys from \\infs089b.iil.intel.com\HOME\WirelessCE.
+    Muse queue and keys from \\infs089b.iil.intel.com\HOME\WirelessCE.
   - Google Chrome installed. The app signs you in to IPS (Salesforce) with
     Intel SSO through Chrome; the matching ChromeDriver is downloaded on
     first start.
@@ -18,10 +18,10 @@ Before you start
     Do not run the exe from inside the zip.
 
 Start
-  Double-click "Beacon Client.bat"
+  Double-click "Muse Client.bat"
   (same as running IntelAvatar_Client_v*.exe --handsfree).
   The first start takes about a minute: it fetches keys, Chrome driver and
-  skills, then opens the Beacon page in its own Chrome window. A console
+  skills, then opens the Muse page in its own Chrome window. A console
   window stays open in the background; close it to stop the app.
 
 On the page
@@ -31,7 +31,7 @@ On the page
   - The queue shows only the cases IPS lists under your name. Tick
     "everyone's cases" to see all owners.
   - "Analyze this case": type a case number and the request goes to the
-    Beacon server, which runs the analysis. The line under the button
+    Muse server, which runs the analysis. The line under the button
     follows the request (pending / running / done) and the draft appears
     in your queue when it is finished.
   - Open a draft and edit the text if needed. Under the text, "Post as"

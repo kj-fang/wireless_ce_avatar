@@ -381,7 +381,7 @@
     async function resetCase() {
         if (!draft || element('reset').disabled) return;
         const caseNbr = draft.case_nbr;
-        const message = 'Reset Beacon history of case ' + caseNbr + '?\n\n' +
+        const message = 'Reset Muse history of case ' + caseNbr + '?\n\n' +
             'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
             'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
             (isDirty() ? 'Unsaved changes to this draft will be discarded.\n\n' : '') +

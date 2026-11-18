@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Avatar Beacon</title>
+  <title>Avatar Muse</title>
+  <link rel="icon" type="image/svg+xml" href="/static/muse.svg">
   <style>
     :root {
       --bg: #0a0d12;
@@ -352,14 +353,12 @@
 <div class="page-grid">
 <header>
   <span class="mark" aria-hidden="true">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.8" stroke-linecap="round">
-      <path d="M4.5 10.5a11 11 0 0 1 15 0" />
-      <path d="M7.5 13.8a7 7 0 0 1 9 0" />
-      <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+      <path d="M10.5 5 C11.1 10.1 13.9 12.9 19 13.5 C13.9 14.1 11.1 16.9 10.5 22 C9.9 16.9 7.1 14.1 2 13.5 C7.1 12.9 9.9 10.1 10.5 5 Z" />
+      <path d="M18.5 2 C18.75 4.1 19.9 5.25 22 5.5 C19.9 5.75 18.75 6.9 18.5 9 C18.25 6.9 17.1 5.75 15 5.5 C17.1 5.25 18.25 4.1 18.5 2 Z" />
     </svg>
   </span>
-  <h1>Avatar Beacon</h1>
+  <h1>Avatar Muse</h1>
   <div class="sub">Hands-free IPS case replies — detect newly assigned cases → analyze → review → post Private-to-Intel</div>
 </header>
 
@@ -400,11 +399,11 @@
             <option value="auto">auto</option>
           </select>
         </label>
-        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Beacon server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
+        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Muse server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
           <input type="text" id="cfg-latest-driver" style="width: 120px;" placeholder="empty = use the report">
         </label>
-        <span class="status-line" id="cfg-latest-driver-auto" title="What the Beacon server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
-        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Beacon server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
+        <span class="status-line" id="cfg-latest-driver-auto" title="What the Muse server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
+        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Muse server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
         <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
@@ -554,7 +553,7 @@
         </label>
         <label>folder
           <input type="text" id="auto-email-folder" value="Inbox" style="width: 150px; font-family: var(--mono); font-size: 12.5px;"
-                 title="Inbox, or a subfolder of it such as Inbox/Beacon"></label>
+                 title="Inbox, or a subfolder of it such as Inbox/Muse"></label>
         <label>mail from the last
           <input type="number" id="auto-email-days" min="1" max="60" step="1" value="7" style="width: 54px;"> days</label>
         <label>max
@@ -662,7 +661,7 @@
       <button class="ghost" id="draft-avatar-btn" onclick="openInAvatar(currentDraftCase, currentDraftId, this)"
               title="Opens this case in Avatar to continue by hand">Open in Avatar analysis</button>
       <button class="ghost" onclick="resetCase(currentDraftCase)"
-              title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
+              title="Forget this case's Muse history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -956,7 +955,7 @@
     return bits.join(' · ');
   }
 
-  // "Refresh now": ask the Beacon server to re-read the PAE Wi-Fi Dashboard,
+  // "Refresh now": ask the Muse server to re-read the PAE Wi-Fi Dashboard,
   // then follow the shared config until the server has fetched (<= 2 min).
   async function refreshLatestDriver() {
     const btn = document.getElementById('latest-driver-refresh-btn');
@@ -967,7 +966,7 @@
       const r = await fetch('/handsfree/latest_driver/refresh', {method: 'POST'});
       const res = await r.json();
       if (!r.ok || res.ok === false) throw new Error(res.error || ('HTTP ' + r.status));
-      out.textContent = 'refresh requested — the Beacon server reads the dashboard on its next tick…';
+      out.textContent = 'refresh requested — the Muse server reads the dashboard on its next tick…';
       const t0 = Date.now();
       while (Date.now() - t0 < 120000) {
         await new Promise(res => setTimeout(res, 5000));
@@ -977,7 +976,7 @@
           return;
         }
       }
-      out.textContent = 'no fetch yet — is the Beacon server running? ' + latestDriverAutoText(before);
+      out.textContent = 'no fetch yet — is the Muse server running? ' + latestDriverAutoText(before);
     } catch (e) {
       out.textContent = 'refresh failed: ' + e;
     } finally {
@@ -1547,7 +1546,7 @@
           : '') +
         `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}"${it.log_dir ? '' : ' disabled'}>Avatar</button> ` +
         (firstOfCase.has(it.case_nbr) ? '' :
-          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Muse history so the next run starts fresh">Reset</button>`) +
         `</td>`;
       firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
@@ -1601,7 +1600,7 @@
 
   async function resetCase(caseNbr) {
     if (!caseNbr) return;
-    const purge = confirm('Reset Beacon history of case ' + caseNbr + '?\n\n' +
+    const purge = confirm('Reset Muse history of case ' + caseNbr + '?\n\n' +
       'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
       'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
       'OK = reset (keep downloaded files)\nCancel = do nothing');

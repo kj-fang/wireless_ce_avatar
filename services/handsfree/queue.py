@@ -1,5 +1,5 @@
 """
-Review queue + processed-case ledger for Beacon (the handsfree replyer).
+Review queue + processed-case ledger for Muse (the handsfree replyer).
 
 Lives on the shared folder (configs.path_configs.HANDSFREE_DIR) so the
 analysis server and every reviewer's Avatar see the same queue:
@@ -653,7 +653,7 @@ class HandsfreeStore:
             "confidence": confidence,
             "draft_plain": draft_plain,
             "draft_html": draft_html,
-            # What Beacon SUGGESTED, kept as it was generated: draft_plain is
+            # What Muse SUGGESTED, kept as it was generated: draft_plain is
             # rewritten by the reviewer's edits and by what finally posts, and
             # usage tracking compares the two (gather_service.record_handsfree_post)
             # to learn which parts reviewers really pass on.

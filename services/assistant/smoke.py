@@ -1,5 +1,5 @@
 """
-Offline smoke test of the Beacon assistant.
+Offline smoke test of the Muse assistant.
 
     python -m services.assistant.smoke
 
@@ -491,7 +491,7 @@ def a5_echo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# [A3] cases: IPS joined with the Beacon store      [A6] actions need the user
+# [A3] cases: IPS joined with the Muse store      [A6] actions need the user
 # ---------------------------------------------------------------------------
 
 def _sf(dt: datetime) -> str:
@@ -768,7 +768,7 @@ def a3_cases_and_a6_actions() -> None:
         # -- get_case --------------------------------------------------------
         detail = run_connector(registry.get("get_case"), {"case_nbr": "1000001"}, ctx)
         digest = detail.get("beacon_draft", {})
-        check("A3.f get_case joins IPS, the latest comments and Beacon's draft",
+        check("A3.f get_case joins IPS, the latest comments and Muse's draft",
               detail.get("case") == "01000001" and detail["ips"]["status"] == "In Progress"
               and len(detail["latest_comments"]) == 2 and detail["beacon"]["state"] == "needs_review"
               and digest.get("driver_check") == "outdated"
@@ -799,12 +799,12 @@ def a3_cases_and_a6_actions() -> None:
             echo._ask = lambda q: (asked.append(q), "Fresh Echo answer.")[1]
             ectx = Ctx(owner_name="Test Engineer")
             stored = run_connector(registry.get("ask_echo_about_case"), {"case_nbr": "01000001"}, ectx)
-            check("A5.g Echo advice Beacon already has is returned without asking again",
+            check("A5.g Echo advice Muse already has is returned without asking again",
                   stored.get("answer", "").startswith("Echo advises") and stored["internal"] is True
                   and stored["cached"] is True and not asked and ectx.internal_used is True)
             fresh = run_connector(registry.get("ask_echo_about_case"),
                                   {"case_nbr": "01000001", "question": "Is 24.90 a fix?"}, Ctx())
-            check("A5.g a specific question is asked with Beacon's understanding of the case",
+            check("A5.g a specific question is asked with Muse's understanding of the case",
                   fresh.get("answer") == "Fresh Echo answer." and len(asked) == 1
                   and "Wi-Fi drops after every resume" in asked[0] and "Is 24.90 a fix?" in asked[0]
                   and "Regression version" in asked[0])
@@ -823,7 +823,7 @@ def a3_cases_and_a6_actions() -> None:
                               Ctx(owner_name="Test Engineer", user_text="請幫我分析 1000005 這個 case"))
         pending = [r for r in store.list_requests() if r["case_nbr"] == "01000005"]
         check("A6.a a case the user named in their own message is queued for the server at once",
-              named.get("started") is True and "queued for the Beacon server" in named["where"]
+              named.get("started") is True and "queued for the Muse server" in named["where"]
               and len(pending) == 1 and pending[0]["status"] == "pending"
               and pending[0]["requested_by"] == "Test Engineer (assistant)", str(named))
         check("A6.a and the answer says nothing is posted", "nothing is posted" in named["message"])
@@ -845,7 +845,7 @@ def a3_cases_and_a6_actions() -> None:
               and not [r for r in store.list_requests() if r["case_nbr"] == "01000009"])
         confirmed = actions.confirm(pctx.pending_actions[0]["id"])
         check("A6.c the user's click starts it",
-              confirmed["success"] is True and "queued for the Beacon server" in confirmed["message"]
+              confirmed["success"] is True and "queued for the Muse server" in confirmed["message"]
               and len([r for r in store.list_requests() if r["case_nbr"] == "01000004"]) == 1,
               str(confirmed))
         twice = actions.confirm(pctx.pending_actions[0]["id"])
@@ -874,8 +874,8 @@ def a3_cases_and_a6_actions() -> None:
         local = run_connector(start_conn, {"case_nbr": "01000001"}, Ctx(user_text="run 01000001"))
         cases._start_local_run = lambda nbr: {"ok": False, "error": "a run is already in progress"}
         busy = run_connector(start_conn, {"case_nbr": "01000001"}, Ctx(user_text="run 01000001"))
-        check("A6.e on the Beacon server the run starts on this PC; a busy server says so",
-              local.get("where") == "this PC (Beacon server)" and ran == ["01000001"]
+        check("A6.e on the Muse server the run starts on this PC; a busy server says so",
+              local.get("where") == "this PC (Muse server)" and ran == ["01000001"]
               and busy.get("error") == "a run is already in progress")
         cases._can_run_here = lambda: False
 

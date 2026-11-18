@@ -1,4 +1,4 @@
-"""Headless Beacon (handsfree replyer) runner.
+"""Headless Muse (handsfree replyer) runner.
 
 Examples:
     python -m services.handsfree.cli --owner "Charles P Chu" --once
@@ -30,7 +30,7 @@ from typing import Optional
 _SSO_REFRESH_WAIT_S = 120
 
 # Exit code of an owner / list-view round that stepped aside because the
-# Beacon page schedules the rounds on this machine (see main()).
+# Muse page schedules the rounds on this machine (see main()).
 EXIT_SCHEDULED_IN_APP = 3
 
 
@@ -82,7 +82,7 @@ def _build_parser() -> argparse.ArgumentParser:
     targets.add_argument(
         "--schedule-check",
         action="store_true",
-        help="Only read the shared settings: exit 3 when the Beacon page schedules the rounds on this machine (a CLI round must then not start, not even its sign-in check), else 0.",
+        help="Only read the shared settings: exit 3 when the Muse page schedules the rounds on this machine (a CLI round must then not start, not even its sign-in check), else 0.",
     )
     parser.add_argument(
         "--interval",
@@ -153,7 +153,7 @@ def _sso_login() -> int:
 
 
 def _schedule_check() -> int:
-    """Does the Beacon page schedule the rounds on this machine right now?
+    """Does the Muse page schedule the rounds on this machine right now?
     Reads the shared config and nothing else — no services, no Chrome — so a
     scheduled task can ask BEFORE its sign-in check opens the SSO Chrome
     profile that the in-app scheduler is using."""
@@ -167,7 +167,7 @@ def _schedule_check() -> int:
     if reason:
         print(f"[handsfree-cli] round skipped: {reason}", file=sys.stderr)
         return EXIT_SCHEDULED_IN_APP
-    print("[handsfree-cli] the Beacon page does not schedule the rounds on this machine")
+    print("[handsfree-cli] the Muse page does not schedule the rounds on this machine")
     return 0
 
 
@@ -224,7 +224,7 @@ def _wait_for_run() -> dict:
 
 def _refresh_latest_driver_if_due(store=None) -> bool:
     """Keep the latest released driver current from a CLI run. In the app
-    the Beacon server's scheduler does this once a day; a server that runs
+    the Muse server's scheduler does this once a day; a server that runs
     only this CLI (Task Scheduler, --interval) has no such thread, so on a
     fresh share the drafts' driver check stayed "skipped" and a stored value
     went stale. Called before every scan: reads the shared settings, and
@@ -301,7 +301,7 @@ def _load_owners(args) -> list[str]:
     if args.owner is not None:
         owners = [args.owner.strip()]
     else:
-        # One reader for the file, shared with the Beacon page's "owners
+        # One reader for the file, shared with the Muse page's "owners
         # file" source (scheduler.read_owners_file).
         from .scheduler import read_owners_file
         owners = read_owners_file(args.owners_file)
@@ -401,7 +401,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
     if args.case_number is None:
         # One scheduler per server: an owner / list-view round steps aside
-        # while the Beacon page (app.py --handsfree-role server) schedules the
+        # while the Muse page (app.py --handsfree-role server) schedules the
         # rounds on this machine. A single explicit --case-number run is manual
         # and always allowed.
         from .scheduler import scheduled_in_app_here
@@ -459,7 +459,7 @@ def _poll(run_round, store, interval: float, *, rounds=None, sleep=time.sleep) -
 
     One scheduler per server holds for a long-lived CLI too: the startup
     check in main() only covers the moment the process started, so the
-    shared config is read again before EVERY round. While the Beacon page
+    shared config is read again before EVERY round. While the Muse page
     schedules the rounds on this machine the round is skipped; the loop keeps
     polling and resumes by itself once that schedule is switched off.
     `rounds` / `sleep` exist for the smoke test."""

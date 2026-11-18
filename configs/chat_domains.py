@@ -80,7 +80,7 @@ DOMAINS: tuple[ChatDomain, ...] = (
         history_prefix="linux-",
         feedback_prefix="linux_",
     ),
-    # The Beacon assistant (services/assistant): conversations about the
+    # The Muse assistant (services/assistant): conversations about the
     # user's cases and mail, not about a log.
     ChatDomain(
         key="assistant",

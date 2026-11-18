@@ -1,5 +1,5 @@
 @echo off
-rem Starts the Beacon CLIENT: IntelAvatar on the Beacon review page (your own IPS cases).
+rem Starts the Muse CLIENT: IntelAvatar on the Muse review page (your own IPS cases).
 rem The exe name carries the build version, so pick whichever IntelAvatar_Client_v*.exe sits next to this file.
 setlocal
 set "EXE="

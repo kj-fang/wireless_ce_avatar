@@ -1,4 +1,4 @@
-/* Beacon assistant page.
+/* Muse assistant page.
 
    One conversation at a time on screen. A turn is POSTed to /assistant/chat
    and comes back as Server-Sent Events: any number of "step" frames (what the
@@ -11,6 +11,11 @@
     'use strict';
 
     const API = '/assistant';
+    // The Muse mark, the same drawing as /static/muse.svg and the page's own
+    // inline copy; here for the rows this script builds.
+    const MUSE_MARK = '<svg class="as-mark" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
+        '<path d="M10.5 5 C11.1 10.1 13.9 12.9 19 13.5 C13.9 14.1 11.1 16.9 10.5 22 C9.9 16.9 7.1 14.1 2 13.5 C7.1 12.9 9.9 10.1 10.5 5 Z"/>' +
+        '<path d="M18.5 2 C18.75 4.1 19.9 5.25 22 5.5 C19.9 5.75 18.75 6.9 18.5 9 C18.25 6.9 17.1 5.75 15 5.5 C17.1 5.25 18.25 4.1 18.5 2 Z"/></svg>';
     const $ = (id) => document.getElementById(id);
     const chatWindow = $('chat-window');
     const input = $('user-input');
@@ -106,7 +111,7 @@
         const welcome = document.createElement('div');
         welcome.className = 'welcome-msg';
         welcome.id = 'welcome-msg';
-        welcome.innerHTML = '<div class="big-icon">🛰️</div><strong>Beacon Assistant</strong><br>' +
+        welcome.innerHTML = '<div class="big-icon">' + MUSE_MARK + '</div><strong>Muse Assistant</strong><br>' +
             'Ask about your IPS cases, today\'s mail, or a technical question for Echo.<br>' +
             'I look things up and start analyses. I never post to IPS and never send mail.';
         chatWindow.appendChild(welcome);
@@ -131,7 +136,7 @@
         const row = document.createElement('div');
         row.className = 'msg-row assistant';
         row.innerHTML =
-            '<div class="avatar-icon">🛰️</div>' +
+            '<div class="avatar-icon">' + MUSE_MARK + '</div>' +
             '<div class="msg-body">' +
             '  <div class="agent-process-card" hidden>' +
             '    <div class="agent-process-header"><span class="as-steps-title">Working…</span>' +
@@ -517,7 +522,7 @@
             chip.textContent = 'IPS: not signed in · retry';
             chip.classList.add('warn');
             chip.title = 'Case lookups need the IPS sign-in. Click to retry the silent sign-in; ' +
-                'if it keeps failing, sign in on the Beacon queue page.';
+                'if it keeps failing, sign in on the Muse queue page.';
         }
     }
 
@@ -648,7 +653,7 @@
         const count = $('bell-count');
         count.textContent = String(unread);
         count.hidden = unread === 0;
-        document.title = (unread ? '(' + unread + ') ' : '') + 'Beacon Assistant';
+        document.title = (unread ? '(' + unread + ') ' : '') + 'Muse Assistant';
         const list = $('bell-list');
         list.innerHTML = '';
         for (const note of (data && data.items) || []) {
@@ -926,7 +931,7 @@
     });
 
     // For the page checks (and for stage add-ons loaded after this file).
-    window.BeaconAssistant = { send, newChat, openConversation, safeHtml, state, postJson, getJson,
+    window.MuseAssistant = { send, newChat, openConversation, safeHtml, state, postJson, getJson,
                                loadTasks, loadNotifications, loadVoice, voice };
     loadVoice();
 

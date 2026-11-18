@@ -1,4 +1,4 @@
-"""Unit tests for the Beacon assistant blueprint
+"""Unit tests for the Muse assistant blueprint
 (blueprints/assistant/assistant_routes.py).
 
 The model is a scripted fake, the history store and the usage recorder are

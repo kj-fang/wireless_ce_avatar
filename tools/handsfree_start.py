@@ -1,5 +1,5 @@
 """
-One-click start for Beacon (handsfree replyer) testing (dev mode, live source).
+One-click start for Muse (handsfree replyer) testing (dev mode, live source).
 
 Starts the Avatar app from this checkout when it is not already running,
 waits for it to boot, then points the app's own Chrome window at the
@@ -46,8 +46,8 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 START_PATH = "/handsfree"
-SHORTCUT_NAME = "Beacon (dev).lnk"
-SERVER_SHORTCUT_NAME = "Beacon Server (dev).lnk"
+SHORTCUT_NAME = "Muse (dev).lnk"
+SERVER_SHORTCUT_NAME = "Muse Server (dev).lnk"
 OLD_SHORTCUT_NAMES = ("Handsfree Replyer (dev).lnk",)   # removed on --install-shortcut
 REGISTER_TIMEOUT_S = 60     # instance file is written before the heavy boot
 BOOT_TIMEOUT_S = 360        # set_up(): key share, ChromeDriver, skills, agents
@@ -235,13 +235,13 @@ def shortcut_script() -> str:
         "$d = [Environment]::GetFolderPath('Desktop'); "
         + "".join(f"Remove-Item -LiteralPath (Join-Path $d '{ps(n)}') -ErrorAction SilentlyContinue; "
                   for n in OLD_SHORTCUT_NAMES)
-        + one(SHORTCUT_NAME, "", "Start Avatar from source and open the Beacon page")
+        + one(SHORTCUT_NAME, "", "Start Avatar from source and open the Muse page")
         + one(SERVER_SHORTCUT_NAME, " --server",
               "Start Avatar from source as the Handsfree server (scheduled rounds run here)"))
 
 
 def install_shortcut() -> int:
-    """Both Desktop shortcuts: Beacon (dev) and Beacon Server (dev)."""
+    """Both Desktop shortcuts: Muse (dev) and Muse Server (dev)."""
     script = shortcut_script()
     encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     r = subprocess.run(["powershell", "-NoProfile", "-EncodedCommand", encoded],
@@ -260,7 +260,7 @@ def main() -> int:
     ap.add_argument("--install-shortcut", action="store_true",
                     help="create both Desktop shortcuts instead of starting the app")
     ap.add_argument("--server", action="store_true",
-                    help="start (or expect) the app as the Handsfree SERVER: the Beacon "
+                    help="start (or expect) the app as the Handsfree SERVER: the Muse "
                          "page can start the scheduled rounds, which run in this app")
     args = ap.parse_args()
     if args.install_shortcut:

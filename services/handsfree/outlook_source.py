@@ -1,5 +1,5 @@
 """
-Outlook intake for Beacon (the handsfree replyer): mail that names an IPS
+Outlook intake for Muse (the handsfree replyer): mail that names an IPS
 case goes through the case pipeline, and the reviewed reply is saved as an
 Outlook DRAFT (never sent).
 
@@ -306,8 +306,8 @@ class Outlook:
     # -- folders -----------------------------------------------------------
 
     def folder(self, path: str = "Inbox"):
-        """'Inbox' (default) or a path under it like 'Inbox/Beacon' or
-        'Beacon' (both mean the Inbox subfolder named Beacon)."""
+        """'Inbox' (default) or a path under it like 'Inbox/Muse' or
+        'Muse' (both mean the Inbox subfolder named Muse)."""
         parts = [p.strip() for p in re.split(r"[\\/]", str(path or "Inbox")) if p.strip()]
         try:
             folder = self._ns.GetDefaultFolder(OL_FOLDER_INBOX)

@@ -57,7 +57,7 @@ def _outlook():
 
 
 def _my_case_numbers(owner: str) -> set:
-    """Case numbers of the user's Beacon drafts - a cheap way to know "this
+    """Case numbers of the user's Muse drafts - a cheap way to know "this
     mail is about one of MY cases" without another IPS query. Empty when the
     share cannot be read."""
     if not owner:

@@ -1,5 +1,5 @@
 """
-Beacon assistant routes - the chat page and its API.
+Muse assistant routes - the chat page and its API.
 
     GET  /assistant/                 the page
     POST /assistant/chat             one turn, streamed as Server-Sent Events
@@ -53,7 +53,7 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 # ---------- guard ----------
 
 def _cross_origin(req) -> bool:
-    """A browser sent this from another site's page (same rule as Beacon's
+    """A browser sent this from another site's page (same rule as Muse's
     routes): its Origin names a host other than the one the request went to."""
     origin = (req.headers.get("Origin") or "").strip()
     if not origin or origin == "null":
@@ -194,7 +194,7 @@ def state():
 @assistant_bp.route("/sign_in", methods=["POST"])
 def sign_in():
     """Retry the silent IPS sign-in (never opens a browser; the visible
-    sign-in lives on the Beacon page)."""
+    sign-in lives on the Muse page)."""
     runner.start_silent_sign_in(retry_failed=True)
     return jsonify({"success": True, "identity": runner.identity()})
 

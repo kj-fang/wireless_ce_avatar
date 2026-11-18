@@ -1,5 +1,5 @@
 """
-Headless Beacon (handsfree replyer) simulation — run real IPS cases through the full
+Headless Muse (handsfree replyer) simulation — run real IPS cases through the full
 pipeline WITHOUT launching the Avatar web app.
 
 Boots app_config exactly like the app (configs.set_up_app.set_up with a no-op

@@ -3,7 +3,7 @@ One scheduled Handsfree round on the server (run it from Task Scheduler).
 
     python tools/handsfree_server_run.py --owners-file C:\\path\\owners.txt
 
-0. --schedule-check: if the Beacon page schedules the rounds on this server,
+0. --schedule-check: if the Muse page schedules the rounds on this server,
    stop here (exit 4) before any Chrome is opened.
 1. --sso-check: does Salesforce + esft sign-in work unattended? (the saved
    --sso-login profile if there is one, else the Windows account)
@@ -16,9 +16,9 @@ overwrites last_status.txt there (a skipped run, exit 4, writes
 last_skipped.txt instead: it ran no round and must not count as CLI
 activity). Logs older than 30 days are deleted.
 Exit code: 0 ok, 1 scan failed, 2 sign-in failed, 3 bad owners file,
-4 skipped because the Beacon page schedules the rounds on this server.
+4 skipped because the Muse page schedules the rounds on this server.
 
-Alternative: the Beacon page itself schedules the rounds when the app runs
+Alternative: the Muse page itself schedules the rounds when the app runs
 as the Handsfree server (tools/handsfree_start.py --server, i.e. app.py
 --handsfree-role server) — every setting in "Start automatic analysis" and
 the live panel are then available. One scheduler per server, enforced both
@@ -72,13 +72,13 @@ def _cli(log, *args: str) -> int:
                           cwd=REPO, stdout=log, stderr=subprocess.STDOUT).returncode
 
 
-_SKIPPED = (4, "SKIPPED - the Beacon page schedules the rounds on this server; "
+_SKIPPED = (4, "SKIPPED - the Muse page schedules the rounds on this server; "
                "disable this scheduled task while that is ON")
 
 
 def _round(owners_file: Path, log) -> tuple[int, str]:
     # Ask FIRST, before any Chrome starts: the sign-in check below opens the
-    # saved SSO Chrome profile, which the in-app scheduler of the Beacon page
+    # saved SSO Chrome profile, which the in-app scheduler of the Muse page
     # uses too. A lock inside one process cannot keep two processes apart, so
     # an overlapping round would fail with "profile in use" instead of being
     # skipped. --schedule-check only reads the shared settings.
@@ -125,7 +125,7 @@ def main(argv: list[str] | None = None) -> int:
 def _record(log_dir: Path, started: datetime, code: int, status: str, log_path: Path) -> Path:
     """Write the one-line result of this run and return the file written.
 
-    last_status.txt is the CLI-ACTIVITY marker: the Beacon page reads it
+    last_status.txt is the CLI-ACTIVITY marker: the Muse page reads it
     (scheduler.cli_last_run) and, while it is younger than 24 hours, refuses
     to start its own schedule and warns that both schedulers ran. A run that
     was skipped because the page schedules the rounds (exit 4) ran no round,

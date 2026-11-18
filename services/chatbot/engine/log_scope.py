@@ -50,6 +50,7 @@ class LogScopeMixin:
 
         try:
             self._raw_log_cache = helpers.read_log_file(self.current_log_path)
+            self._raw_log_source_line_numbers = list(range(1, len(self._raw_log_cache) + 1))
             self._raw_log_cache_path = self.current_log_path
             self._original_wrapped_lines = {}
             # A different file means all derived caches are stale.
@@ -221,13 +222,17 @@ class LogScopeMixin:
         start_re = re.compile(r'^\s*<?(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
         merged: List[str] = []
         originals: List[str] = []
+        merged_line_numbers: List[int] = []
+        source_line_numbers = getattr(self, "_raw_log_source_line_numbers", [])
         wrapped = 0
-        for line in lines:
+        for index, line in enumerate(lines):
+            line_number = source_line_numbers[index] if index < len(source_line_numbers) else index + 1
             if not line.strip() or not merged or start_re.match(line):
                 # Blank lines and entry-start lines pass through unchanged;
                 # blanks are never treated as continuations.
                 merged.append(line)
                 originals.append(line)
+                merged_line_numbers.append(line_number)
             else:
                 merged[-1] = merged[-1].rstrip("\r\n") + " " + line.strip()
                 originals[-1] += line
@@ -235,6 +240,7 @@ class LogScopeMixin:
         if wrapped:
             self._original_wrapped_lines = dict(zip(merged, originals))
             self._raw_log_cache = merged
+            self._raw_log_source_line_numbers = merged_line_numbers
             print(f"[PreScan] 🔗 Merged {wrapped} wrapped continuation line(s) "
                   f"in time-only log (now {len(merged)} entries).")
 

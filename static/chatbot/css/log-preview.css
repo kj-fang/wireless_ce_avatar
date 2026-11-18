@@ -116,7 +116,7 @@
         .key-log-filter-actions { display: flex; gap: 2px; justify-content: flex-end; padding: 1px 4px; }
         .key-log-filter-row-action { width: 16px; height: 16px; padding: 0; }
         .key-log-filter-row-action svg { width: 11px; height: 11px; }
-        .key-log-filter-editor {
+        .key-log-filter-editor:not([hidden]) {
             display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center;
             padding: 6px 10px; border-bottom: 1px solid #d6dbe1; background: #f9fafb; font-size: 0.72rem;
         }
@@ -156,3 +156,5 @@
         .key-log-line-number { display: inline-block; position: sticky; left: 0; width: 64px; padding-right: 10px; text-align: right; color: #7a8088; background: #f4f6f8; font: inherit; user-select: none; }
         .key-log-line-text { font: inherit; }
         .key-log-virtual-row.is-selected { box-shadow: inset 0 0 0 1px #0071c5; background: #ddecf8 !important; }
+        .key-log-virtual-row.is-active { outline: 1px solid #005a9e; outline-offset: -1px; }
+        .key-log-content:focus-visible { outline: 2px solid #0071c5; outline-offset: -2px; }

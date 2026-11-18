@@ -10,46 +10,69 @@ from datetime import datetime
 class SkillAnalysisMixin:
     """SkillAnalysis behavior for the composed agent."""
 
-    def _compact_original_skill_lines(self, lines):
+    def _compact_original_skill_rows(self, rows):
         retained = []
         previous_pattern = None
         run = []
-        for line in lines:
+        for row in rows:
+            line = row["text"]
             message = self._normalize_time_message(line)[2]
             pattern = re.sub(r"0x[0-9a-fA-F]+|\b\d+\b", "*", message)
             if pattern != previous_pattern and run:
                 retained.extend(run if len(run) <= 2 else [run[0], run[-1]])
                 run = []
             previous_pattern = pattern
-            run.append(line)
+            run.append(row)
         retained.extend(run if len(run) <= 2 else [run[0], run[-1]])
         limit = self.MAX_SKILL_FOCUS_LINES
         if len(retained) > limit:
             retained = retained[:limit // 2] + retained[-(limit - limit // 2):]
         selected = []
         used = 0
-        for line in retained:
+        for row in retained:
+            line = row["text"]
             if used + len(line) > self.MAX_SKILL_FOCUS_CHARS:
                 break
-            selected.append(line)
+            selected.append(row)
             used += len(line)
         return selected
+
+    def _compact_original_skill_lines(self, lines):
+        return [row["text"] for row in self._compact_original_skill_rows(
+            [{"text": line} for line in lines])]
 
     def _remember_turn_skill_logs(self, skill_name, lines):
         if not hasattr(self, "_turn_skill_log_lines"):
             self._turn_skill_log_lines = {}
+        if not hasattr(self, "_turn_skill_log_rows"):
+            self._turn_skill_log_rows = {}
         originals = getattr(self, "_original_wrapped_lines", {})
-        self._turn_skill_log_lines[skill_name] = self._compact_original_skill_lines(
-            [originals.get(line, line) for line in lines])
+        source_lines = getattr(self, "_raw_log_cache", []) or []
+        source_numbers = getattr(self, "_raw_log_source_line_numbers", [])
+        line_numbers = {
+            id(line): source_numbers[index] if index < len(source_numbers) else index + 1
+            for index, line in enumerate(source_lines)
+        }
+        rows = [
+            {"lineNumber": line_numbers[id(line)], "text": originals.get(line, line)}
+            for line in lines if id(line) in line_numbers
+        ]
+        compacted = self._compact_original_skill_rows(rows)
+        self._turn_skill_log_rows[skill_name] = compacted
+        self._turn_skill_log_lines[skill_name] = [row["text"] for row in compacted]
 
     def _attach_summary_key_logs(self, result):
         sections = []
+        evidence_rows = {}
         for skill_name, lines in getattr(self, "_turn_skill_log_lines", {}).items():
             if not lines:
                 continue
             skill = self.skills.get(skill_name)
             sections.append(f"=== {skill.name if skill else skill_name} ===\n" + "".join(lines))
+            for row in getattr(self, "_turn_skill_log_rows", {}).get(skill_name, []):
+                evidence_rows.setdefault(row["lineNumber"], row)
         return {**result, "key_logs": "\n".join(sections),
+                "key_log_rows": [evidence_rows[number] for number in sorted(evidence_rows)],
                 "key_logs_basis": "skill_filtered_compact",
                 "key_logs_status": "selected" if sections else "no_evidence"}
 
@@ -130,6 +153,9 @@ class SkillAnalysisMixin:
                 if not hasattr(self, "_turn_skill_log_lines"):
                     self._turn_skill_log_lines = {}
                 self._turn_skill_log_lines[skill_name] = list(cached_originals)
+                if not hasattr(self, "_turn_skill_log_rows"):
+                    self._turn_skill_log_rows = {}
+                self._turn_skill_log_rows[skill_name] = list(cached.get("original_rows", []))
             elif not getattr(self, "_turn_skill_log_lines", {}).get(skill_name):
                 self._get_filtered_log_lines(skill_name, apply_output_limit=False)
             export_path = self._export_assembled_log_file()
@@ -233,6 +259,7 @@ class SkillAnalysisMixin:
             "line_count": len(compact_lines),
             "lines": compact_lines,
             "original_lines": list(self._turn_skill_log_lines.get(skill_name, [])),
+            "original_rows": list(self._turn_skill_log_rows.get(skill_name, [])),
             "created_at": datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%SZ'),
         }
 

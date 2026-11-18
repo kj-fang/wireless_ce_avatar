@@ -1,5 +1,22 @@
     const LOG_PREVIEW_API = (window.CHATBOT && window.CHATBOT.api) || '/log_chatbot';
     document.addEventListener('chatbot:result-rendered', event => attachKeyLogsToLastCard(event.detail));
+    document.addEventListener('click', event => {
+        const button = event.target.closest('[data-key-log-trigger]');
+        if (!button) return;
+        const raw = button.dataset.keyLogs || '';
+        const status = button.dataset.keyLogStatus || 'legacy';
+        let rows = [];
+        try { rows = JSON.parse(button.dataset.keyLogRows || '[]'); } catch (error) { rows = []; }
+        rows = rows.filter(row => row && Number.isSafeInteger(row.lineNumber)
+            && row.lineNumber > 0 && typeof row.text === 'string');
+        if (window.ChatbotWorkspace?.active) {
+            window.ChatbotWorkspace.showEvidence(
+                rows.map(row => row.text.replace(/[\r\n]+$/, '')).join('\n'),
+                button, status, rows.map(row => row.lineNumber));
+        } else {
+            openKeyLogModal(raw, button, status);
+        }
+    });
     document.addEventListener('chatbot:context-changed', () => {
         const dialog = document.getElementById('key-log-modal');
         if (!dialog) return;
@@ -16,7 +33,13 @@
         const raw = status === 'selected' && typeof result.key_logs === 'string'
             ? result.key_logs : '';
         const evidenceRows = new Map();
-        if (raw) {
+        if (Array.isArray(result.key_log_rows)) {
+            for (const row of result.key_log_rows) {
+                if (!row || !Number.isSafeInteger(row.lineNumber) || row.lineNumber <= 0
+                        || typeof row.text !== 'string' || evidenceRows.has(row.lineNumber)) continue;
+                evidenceRows.set(row.lineNumber, row.text);
+            }
+        } else if (raw) {
             for (const line of raw.split(/\r?\n/)) {
                 const match = line.match(/^\s*(\d+)\t/);
                 if (!match) continue;
@@ -28,18 +51,14 @@
         }
         const orderedEvidence = Array.from(evidenceRows.entries())
             .sort(([left], [right]) => left - right);
-        const evidenceText = orderedEvidence.map(([, line]) => line).join('\n');
-        const evidenceLineNumbers = orderedEvidence.map(([lineNumber]) => lineNumber);
         const footer = document.createElement('div');
         footer.className = 'key-log-footer';
         const button = makeKeyLogButton('file-text', 'View filtered skill logs', '\u2637');
         button.setAttribute('aria-haspopup', 'dialog');
-        button.addEventListener('click', () => {
-            if (window.ChatbotWorkspace?.active) {
-                window.ChatbotWorkspace.showEvidence(evidenceText, button, status, evidenceLineNumbers);
-            }
-            else openKeyLogModal(raw, button, status);
-        });
+        button.dataset.keyLogTrigger = 'true';
+        button.dataset.keyLogs = raw;
+        button.dataset.keyLogStatus = status;
+        button.dataset.keyLogRows = JSON.stringify(orderedEvidence.map(([lineNumber, text]) => ({lineNumber, text})));
         footer.appendChild(button);
         card.appendChild(footer);
         refreshKeyLogIcons();
@@ -163,6 +182,8 @@
                 dialog.__lastVirtualRange = '';
                 dialog.__selectionStart = null;
                 dialog.__selectionEnd = null;
+                dialog.__activeRowIndex = null;
+                content.removeAttribute('aria-activedescendant');
                 if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = true;
                 if (dialog.__copySelectionButton) dialog.__copySelectionButton.disabled = true;
                 dialog.__virtualSpacer.style.height = `${message.rowCount * TAT_VIRTUAL_ROW_HEIGHT}px`;
@@ -234,11 +255,15 @@
         const spacer = dialog.__virtualSpacer;
         spacer.replaceChildren();
         rows.forEach((row, offset) => {
+            const rowIndex = start + offset;
             const element = document.createElement('div');
             element.className = 'key-log-virtual-row';
-            element.dataset.rowIndex = String(start + offset);
+            element.id = `${dialog.id}-row-${rowIndex}`;
+            element.dataset.rowIndex = String(rowIndex);
             element.dataset.lineNumber = String(row.lineNumber);
-            element.style.top = `${(start + offset) * TAT_VIRTUAL_ROW_HEIGHT}px`;
+            element.setAttribute('role', 'option');
+            element.setAttribute('aria-selected', 'false');
+            element.style.top = `${rowIndex * TAT_VIRTUAL_ROW_HEIGHT}px`;
             const number = document.createElement('span');
             number.className = 'key-log-line-number';
             number.textContent = String(row.lineNumber);
@@ -269,9 +294,18 @@
     function updateKeyLogSelection(dialog) {
         const start = dialog.__selectionStart;
         const end = dialog.__selectionEnd;
+        const content = dialog.querySelector('.key-log-content');
+        content.removeAttribute('aria-activedescendant');
         dialog.querySelectorAll('.key-log-virtual-row').forEach(element => {
             const index = Number(element.dataset.rowIndex);
-            element.classList.toggle('is-selected', start !== null && start !== undefined && index >= Math.min(start, end) && index <= Math.max(start, end));
+            const selected = start !== null && start !== undefined
+                && index >= Math.min(start, end) && index <= Math.max(start, end);
+            element.classList.toggle('is-selected', selected);
+            element.classList.toggle('is-active', index === dialog.__activeRowIndex);
+            element.setAttribute('aria-selected', String(selected));
+            if (index === dialog.__activeRowIndex) {
+                content.setAttribute('aria-activedescendant', element.id);
+            }
         });
         const noSelection = start === null || start === undefined;
         if (dialog.__addSelectionButton) dialog.__addSelectionButton.disabled = noSelection;
@@ -307,11 +341,46 @@
         const copySelection = () => requestSelection('copy');
         add.addEventListener('click', addSelection);
         copy.addEventListener('click', copySelection);
+        content.setAttribute('role', 'listbox');
+        content.setAttribute('aria-label', 'Filtered log lines');
+        content.setAttribute('aria-multiselectable', 'true');
+        content.addEventListener('keydown', event => {
+            if (!dialog.__workerReady || !dialog.__rowCount) return;
+            if (event.key === 'Enter') {
+                if (dialog.__selectionStart !== null && dialog.__selectionStart !== undefined) {
+                    event.preventDefault();
+                    addSelection();
+                }
+                return;
+            }
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            const direction = event.key === 'ArrowDown' ? 1 : -1;
+            const hasSelection = dialog.__selectionStart !== null && dialog.__selectionStart !== undefined;
+            const current = Number.isInteger(dialog.__activeRowIndex)
+                ? dialog.__activeRowIndex : hasSelection ? dialog.__selectionEnd : (direction > 0 ? -1 : dialog.__rowCount);
+            const next = Math.max(0, Math.min(dialog.__rowCount - 1, current + direction));
+            if (event.shiftKey && hasSelection) {
+                dialog.__selectionEnd = next;
+            } else {
+                dialog.__selectionStart = next;
+                dialog.__selectionEnd = next;
+            }
+            dialog.__activeRowIndex = next;
+            const top = next * TAT_VIRTUAL_ROW_HEIGHT;
+            const bottom = top + TAT_VIRTUAL_ROW_HEIGHT;
+            if (top < content.scrollTop) content.scrollTop = top;
+            else if (bottom > content.scrollTop + content.clientHeight) content.scrollTop = bottom - content.clientHeight;
+            updateKeyLogSelection(dialog);
+            requestVisibleLogRows(dialog);
+            event.preventDefault();
+        });
         document.addEventListener('keydown', event => {
             if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'c') return;
             if (!dialog.isConnected) return;
             if (!dialog.open && dialog.offsetParent === null) return;
             if (dialog.__selectionStart === null || dialog.__selectionStart === undefined) return;
+            const textSelection = document.getSelection();
+            if (textSelection && !textSelection.isCollapsed) return;
             const target = event.target;
             if (target && /^(input|textarea)$/i.test(target.tagName)
                     && target.selectionStart !== target.selectionEnd) return;
@@ -337,6 +406,7 @@
             if (!row) return;
             const index = Number(row.dataset.rowIndex);
             event.preventDefault();
+            content.focus({preventScroll: true});
             // PointerEvent.detail is always 0 in Chromium, so track repeat clicks manually.
             const repeat = !event.shiftKey && lastDown.index === index && event.timeStamp - lastDown.time < 500;
             lastDown = repeat ? {time: 0, index: -1} : {time: event.timeStamp, index};
@@ -348,6 +418,7 @@
                 return;
             }
             if (repeat && isSelected(index)) return;
+            dialog.__activeRowIndex = index;
             restorable = !event.shiftKey && isSelected(index) && dialog.__selectionStart !== dialog.__selectionEnd
                 ? {index, start: dialog.__selectionStart, end: dialog.__selectionEnd} : null;
             if (!event.shiftKey || dialog.__selectionStart === null) dialog.__selectionStart = index;
@@ -363,6 +434,13 @@
             if (index !== dialog.__selectionEnd) restorable = null;
             dialog.__selectionEnd = index;
             updateKeyLogSelection(dialog);
+        });
+        content.addEventListener('focus', () => {
+            if (!Number.isInteger(dialog.__activeRowIndex)
+                    && Number.isInteger(dialog.__selectionEnd) && dialog.__rowCount) {
+                dialog.__activeRowIndex = dialog.__selectionEnd;
+                requestVisibleLogRows(dialog);
+            }
         });
         document.addEventListener('pointerup', () => { dialog.__selecting = false; });
     }

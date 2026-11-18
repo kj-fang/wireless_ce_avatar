@@ -119,6 +119,7 @@
     });
     document.addEventListener('chatbot:recipient-changed', refresh);
     document.addEventListener('chatbot:context-changed', () => {
+        if (pendingAnswer?.isConnected) setAnswerText(pendingAnswer, 'Fragment explanation cancelled.');
         generation++;
         if (controller) controller.abort();
         selected = null;

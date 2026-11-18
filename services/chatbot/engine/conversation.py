@@ -269,6 +269,7 @@ class ConversationMixin:
         # Fresh turn — token counters describe THIS turn only.
         self._reset_turn_usage()
         self._turn_skill_log_lines = {}
+        self._turn_skill_log_rows = {}
 
         result = self._chat_with_tools(user_message, max_steps, temperature=temperature, step_callback=step_callback)
         return self._attach_summary_key_logs(result)

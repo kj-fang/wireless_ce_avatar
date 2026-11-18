@@ -260,7 +260,6 @@ def _run_snippet_tools(selected_skills, selected_rows, disabled_tools):
     requested = _requested_tools(selected_skills)
     if not requested:
         return []
-    selected_text = "\n".join(row["text"].rstrip("\r\n") for row in selected_rows)
     records = []
     calls = 0
     output_chars = 0
@@ -321,28 +320,26 @@ def _run_snippet_tools(selected_skills, selected_rows, disabled_tools):
                     groups.append([row])
             mcc_pattern = re.compile(r"\[prvLarStoreCurrentMcc\].*CurrMCC:", re.IGNORECASE)
 
-            def analyze_softap_groups(_):
-                results = []
-                missing = []
-                for group in groups:
-                    first_line = group[0]["lineNumber"]
-                    last_line = group[-1]["lineNumber"]
-                    group_text = "\n".join(row["text"].rstrip("\r\n") for row in group)
-                    if not any(mcc_pattern.search(row["text"]) for row in group):
-                        missing.append(f"L{first_line}-L{last_line}: insufficient data; no MCC in this contiguous group")
-                        continue
-                    output = softAP_supported_channel(group_text)
-                    if output.startswith("ERROR:"):
-                        missing.append(f"L{first_line}-L{last_line}: insufficient data; {output[6:]}")
-                    else:
-                        results.append(f"L{first_line}-L{last_line}:\n{output}")
-                if not results:
-                    return "INSUFFICIENT_DATA: " + "; ".join(missing)
-                if missing:
-                    results.append("Insufficient data for some selected groups: " + "; ".join(missing))
-                return "\n\n".join(results)
+            for group in groups:
+                first_line = group[0]["lineNumber"]
+                last_line = group[-1]["lineNumber"]
+                group_text = "\n".join(row["text"].rstrip("\r\n") for row in group)
+                if not any(mcc_pattern.search(row["text"]) for row in group):
+                    records.append({
+                        "name": name,
+                        "status": "insufficient_data",
+                        "detail": f"L{first_line}-L{last_line}: no MCC in this contiguous group.",
+                    })
+                    continue
 
-            run(name, selected_text, analyze_softap_groups)
+                def analyze_group(text):
+                    output = softAP_supported_channel(text)
+                    if output.startswith("ERROR:"):
+                        return "INSUFFICIENT_DATA: " + output[6:]
+                    return f"L{first_line}-L{last_line}:\n{output}"
+
+                if not run(name, group_text, analyze_group):
+                    break
         elif name == "lookup_assert_code":
             codes = []
             seen_codes = set()

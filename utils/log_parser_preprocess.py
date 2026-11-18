@@ -43,6 +43,7 @@ def extract_enabled_filter_rules_from_filter_file(filter_file_path: str) -> List
             "text": text,
             "excluding": element.get("excluding", "n").lower() == "y",
             "regex": element.get("regex", "n").lower() == "y",
+            "case_sensitive": element.get("case_sensitive", "n").lower() == "y",
         })
     return rules
 
@@ -55,21 +56,24 @@ def filter_log_by_filters(log_lines: List[str], filters: List[dict]) -> List[str
         text = str(rule.get("text") or "").strip()
         if not text:
             continue
+        case_sensitive = bool(rule.get("case_sensitive"))
         matcher = None
         if rule.get("regex"):
             try:
-                matcher = re.compile(text, re.IGNORECASE)
+                matcher = re.compile(text, 0 if case_sensitive else re.IGNORECASE)
             except re.error:
                 continue
         target = excludes if rule.get("excluding") else includes
-        target.append((text.lower(), matcher))
+        target.append((text if case_sensitive else text.lower(), matcher, case_sensitive))
 
     if not includes:
         return []
 
     def matches(line: str, rule) -> bool:
-        text, matcher = rule
-        return bool(matcher.search(line)) if matcher else text in line.lower()
+        text, matcher, case_sensitive = rule
+        if matcher:
+            return bool(matcher.search(line))
+        return text in (line if case_sensitive else line.lower())
 
     return [line for line in log_lines
             if any(matches(line, rule) for rule in includes)

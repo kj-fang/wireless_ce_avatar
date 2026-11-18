@@ -12,6 +12,7 @@
     let rawPath = '';
     let currentView = 'raw';
     let sidebarWasCollapsed = false;
+    let evidenceSelection = null;
 
     function setupLogDivider(viewer) {
         const logLayout = viewer.querySelector('.key-log-layout');
@@ -48,6 +49,18 @@
         currentView = name;
         for (const [key, host] of Object.entries(hosts)) host.hidden = key !== name;
         pane.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.view === name)));
+        if (name === 'evidence' && !evidenceSelection) {
+            const buttons = document.querySelectorAll('#chat-window [data-key-log-trigger]');
+            const latest = buttons[buttons.length - 1];
+            if (latest) {
+                openKeyLogsFromCard(latest);
+                return;
+            }
+            const viewer = openKeyLogModal('', toggle, 'no_evidence', {
+                id: 'workspace-evidence-viewer', host: hosts.evidence,
+            });
+            setupLogDivider(viewer);
+        }
         const viewer = hosts[name].firstElementChild;
         if (viewer) {
             viewer.__lastVirtualRange = '';
@@ -149,10 +162,15 @@
     window.ChatbotWorkspace = {
         get active() { return active; },
         showRaw,
+        evidenceUpdated() {
+            evidenceSelection = null;
+            if (active && currentView === 'evidence') selectView('evidence');
+        },
         showEvidence(raw, trigger, status, sourceLineNumbers) {
             const viewer = openKeyLogModal(raw, trigger, status, {
                 id: 'workspace-evidence-viewer', host: hosts.evidence, sourceLineNumbers,
             });
+            evidenceSelection = trigger;
             setupLogDivider(viewer);
             selectView('evidence');
             return viewer;
@@ -161,6 +179,7 @@
     document.addEventListener('chatbot:context-changed', () => {
         currentView = 'raw';
         rawPath = '';
+        evidenceSelection = null;
         for (const host of Object.values(hosts)) if (host.firstElementChild) cleanupKeyLogModal(host.firstElementChild);
         queueMicrotask(() => {
             if (active && !window.__avatarHistoryLoading) showRaw();

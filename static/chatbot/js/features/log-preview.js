@@ -3,6 +3,16 @@
     document.addEventListener('click', event => {
         const button = event.target.closest('[data-key-log-trigger]');
         if (!button) return;
+        openKeyLogsFromCard(button);
+    });
+    document.addEventListener('chatbot:context-changed', () => {
+        const dialog = document.getElementById('key-log-modal');
+        if (!dialog) return;
+        if (dialog.open) dialog.close();
+        else cleanupKeyLogModal(dialog);
+    });
+
+    function openKeyLogsFromCard(button) {
         const raw = button.dataset.keyLogs || '';
         const status = button.dataset.keyLogStatus || 'legacy';
         let rows = [];
@@ -16,13 +26,7 @@
         } else {
             openKeyLogModal(raw, button, status);
         }
-    });
-    document.addEventListener('chatbot:context-changed', () => {
-        const dialog = document.getElementById('key-log-modal');
-        if (!dialog) return;
-        if (dialog.open) dialog.close();
-        else cleanupKeyLogModal(dialog);
-    });
+    }
 
     function attachKeyLogsToLastCard(result) {
         const row = document.getElementById('chat-window').lastElementChild;
@@ -62,6 +66,7 @@
         footer.appendChild(button);
         card.appendChild(footer);
         refreshKeyLogIcons();
+        window.ChatbotWorkspace?.evidenceUpdated();
     }
 
     async function openTatPreviewFromSidebar(trigger, options = {}) {

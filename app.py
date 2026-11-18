@@ -53,7 +53,7 @@ from configs.version import __version__, BUILD_DATE, GIT_HASH, GIT_BRANCH
 #from blueprints.main import main_bp
 #from blueprints.attachment import attachment_bp
 #from blueprints.log_analysis import log_bp
-from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp, check_ips_bp, linux_chatbot_bp # , attachment_bp, log_bp,
+from blueprints import automation_bp, main_bp, llm_bp, download_bp, analysis_etl_bp, bsod_bp, log_parser_bp, log_chatbot_bp, bt_chatbot_bp, nw_analysis_bp, feedback_bp, handsfree_bp, check_ips_bp, linux_chatbot_bp, assistant_bp # , attachment_bp, log_bp,
 import blueprints.download.download_routes
 import blueprints.llm.llm_routes
 
@@ -247,6 +247,7 @@ def create_app():
     app.register_blueprint(feedback_bp)
     app.register_blueprint(handsfree_bp)
     app.register_blueprint(check_ips_bp)
+    app.register_blueprint(assistant_bp)
 
     # Register socketio
     blueprints.download.download_routes.register_socketio_handlers(socketio)

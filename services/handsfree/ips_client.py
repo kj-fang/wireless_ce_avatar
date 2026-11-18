@@ -194,6 +194,70 @@ def build_customer_updates_soql(case_ids: list[str], since_iso: str,
     )
 
 
+_SOQL_DATETIME_RE = re.compile(
+    r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$")
+
+MY_CASE_FIELDS = ("Id, CaseNumber, Subject, Status, CreatedDate, LastModifiedDate, "
+                  "IsClosed, ClosedDate, Owner.Name")
+
+
+def build_my_cases_soql(owner_name: str, since_iso: str, limit: int = 200) -> str:
+    """The cases of `owner_name` that can have moved since `since_iso` (an
+    ISO-8601 UTC datetime): every open one, and the ones modified since then
+    whatever their state - a case closed this morning is still "updated
+    today". Most recently modified first. Pure.
+
+    The time is passed in rather than written as SOQL's TODAY: TODAY is the
+    day of the Salesforce user's time zone setting, not of the PC asking."""
+    if not _SOQL_DATETIME_RE.match(since_iso or ""):
+        raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
+    return (
+        f"SELECT {MY_CASE_FIELDS} FROM Case "
+        f"WHERE Owner.Name = '{_soql_quote(owner_name)}' "
+        f"AND (IsClosed = false OR LastModifiedDate >= {since_iso}) "
+        "ORDER BY LastModifiedDate DESC "
+        f"LIMIT {int(limit)}"
+    )
+
+
+def build_case_lookup_soql(case_nbr: str) -> str:
+    """One case by its number, whoever owns it. Pure."""
+    return (f"SELECT {MY_CASE_FIELDS} FROM Case "
+            f"WHERE CaseNumber = '{_soql_quote(case_nbr)}' LIMIT 1")
+
+
+def build_comment_activity_soql(case_ids: list[str], since_iso: str) -> str:
+    """Every comment on the given cases created at or after `since_iso`, by
+    anyone (build_customer_updates_soql is the customer-only variant the scan
+    uses). Bounded by case ids AND time; no LIMIT - the caller pages. Pure."""
+    if not _SOQL_DATETIME_RE.match(since_iso or ""):
+        raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
+    ids = ", ".join(f"'{_soql_quote(i)}'" for i in case_ids)
+    return (
+        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c, "
+        "Core_IPS_Case_Comment_Type__c "
+        "FROM Core_IPS_Case_Comments__c "
+        f"WHERE Core_IPS_Case__c IN ({ids}) AND CreatedDate >= {since_iso} "
+        "ORDER BY CreatedDate DESC"
+    )
+
+
+def parse_my_case(rec: dict) -> dict:
+    """One Case record of the MY_CASE_FIELDS queries as a plain dict. Pure."""
+    rec = rec or {}
+    return {
+        "case_nbr": str(rec.get("CaseNumber") or ""),
+        "case_id": str(rec.get("Id") or ""),
+        "subject": str(rec.get("Subject") or ""),
+        "status": str(rec.get("Status") or ""),
+        "created": str(rec.get("CreatedDate") or ""),
+        "last_modified": str(rec.get("LastModifiedDate") or ""),
+        "closed": bool(rec.get("IsClosed")),
+        "closed_date": str(rec.get("ClosedDate") or ""),
+        "owner_name": str((rec.get("Owner") or {}).get("Name") or ""),
+    }
+
+
 class IpsClient:
     """Thin REST layer over the existing CaseService Salesforce session."""
 
@@ -445,6 +509,68 @@ class IpsClient:
                 url = None if d.get("done", True) else d.get("nextRecordsUrl")
                 params = None
         return latest
+
+    # ------------------------------------------------------------------
+    # "what moved" queries (read-only; used by the assistant)
+    # ------------------------------------------------------------------
+
+    def _query_all(self, soql: str, timeout: int = 60) -> list[dict]:
+        """Every record of a query, following nextRecordsUrl."""
+        out: list[dict] = []
+        url: Optional[str] = "/services/data/v{ver}/query"
+        params: Optional[dict] = {"q": soql}
+        while url:
+            resp = self._request("GET", url, params=params, timeout=timeout)
+            resp.raise_for_status()
+            d = resp.json()
+            out.extend(d.get("records", []))
+            url = None if d.get("done", True) else d.get("nextRecordsUrl")
+            params = None
+        return out
+
+    def find_my_cases(self, owner_name: str, since_iso: str, limit: int = 200) -> list[dict]:
+        """`owner_name`'s open cases plus the ones modified since `since_iso`
+        (see build_my_cases_soql), as parse_my_case dicts, most recently
+        modified first."""
+        resp = self._request("GET", "/services/data/v{ver}/query",
+                             params={"q": build_my_cases_soql(owner_name, since_iso, limit)},
+                             timeout=60)
+        resp.raise_for_status()
+        return [parse_my_case(r) for r in resp.json().get("records", [])]
+
+    def find_case(self, case_nbr: str) -> dict:
+        """One case by number as a parse_my_case dict, {} when IPS has none."""
+        resp = self._request("GET", "/services/data/v{ver}/query",
+                             params={"q": build_case_lookup_soql(case_nbr)}, timeout=30)
+        resp.raise_for_status()
+        recs = resp.json().get("records", [])
+        return parse_my_case(recs[0]) if recs else {}
+
+    def find_comment_activity(self, case_ids: list[str], since_iso: str) -> dict[str, list[dict]]:
+        """{case_id: [{"at", "author_type", "customer", "visibility"}, ...]}
+        for the comments created since `since_iso`, newest first per case.
+        `visibility` is the comment-type picklist as IPS shows it ("Private to
+        Intel", "Public to Customers"): in this org that picklist, not the
+        Core_IPS_Public__c flag, says who can read a comment. Cases without a
+        comment in the window are absent. Chunked like find_customer_updates."""
+        out: dict[str, list[dict]] = {}
+        ids = [i for i in case_ids if i]
+        for start in range(0, len(ids), 150):
+            soql = build_comment_activity_soql(ids[start:start + 150], since_iso)
+            for rec in self._query_all(soql):
+                cid = str(rec.get("Core_IPS_Case__c") or "")
+                if not cid:
+                    continue
+                author = str(rec.get("Core_IPS_Comment_Author_Type__c") or "")
+                out.setdefault(cid, []).append({
+                    "at": str(rec.get("CreatedDate") or ""),
+                    "author_type": author,
+                    "customer": author in CUSTOMER_AUTHOR_TYPES,
+                    "visibility": str(rec.get("Core_IPS_Case_Comment_Type__c") or ""),
+                })
+        for rows in out.values():
+            rows.sort(key=lambda r: r["at"], reverse=True)
+        return out
 
     def get_case_rich_description(self, case_id: str) -> dict:
         """The case's rich-text description (Core_Issue_Description__c — the

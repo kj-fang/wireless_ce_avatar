@@ -80,11 +80,20 @@ DOMAINS: tuple[ChatDomain, ...] = (
         history_prefix="linux-",
         feedback_prefix="linux_",
     ),
+    # The Beacon assistant (services/assistant): conversations about the
+    # user's cases and mail, not about a log.
+    ChatDomain(
+        key="assistant",
+        aliases=("assistant",),
+        history_folder="assistant_history",
+        history_prefix="assistant-",
+        feedback_prefix="assistant_",
+    ),
 )
 
 # The agent labels Gather accepts. "Which agent ran" and "whose files are
 # these" are different questions, so this set is kept apart from DOMAINS.
-AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux"})
+AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux", "assistant"})
 
 # A third question, and the one that is easiest to get wrong: which agents
 # tell you what TECHNOLOGY the case is about?

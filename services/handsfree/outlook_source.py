@@ -400,6 +400,114 @@ class Outlook:
                 case_nbrs=extract_case_numbers(subject, body)))
         return out
 
+    # -- read-only listing (the assistant) ----------------------------------
+
+    def list_mail(self, folder_path: str, since: datetime, *, max_items: int = 60,
+                  preview_chars: int = 300) -> list[dict]:
+        """Mail received since `since` in a folder, newest first, as plain
+        dicts - what a reader needs to decide what matters, nothing written:
+
+            entry_id, store_id, subject, sender_name, sender_email, received
+            (ISO, local clock), unread, importance (0 low / 1 normal / 2 high),
+            flagged, to, cc, conversation_id, attachments (count), preview
+            (first `preview_chars` of the body), case_nbrs
+
+        Own mail is included (the caller knows the mailbox). Unlike scan(),
+        this neither skips anything nor touches the scan state. Every property
+        is read defensively: a missing one becomes its neutral value."""
+        folder = self._named_folder(folder_path)
+        store_id = str(getattr(folder, "StoreID", "") or "")
+        items = folder.Items
+        try:
+            items.Sort("[ReceivedTime]", True)
+        except Exception:
+            pass
+        try:
+            items = items.Restrict(f"[ReceivedTime] >= '{_restrict_stamp(since)}'")
+        except Exception:
+            pass                                 # filtered by hand below
+        floor = since.replace(tzinfo=None)
+        out: list[dict] = []
+        count = int(getattr(items, "Count", 0) or 0)
+        for i in range(1, min(count, max(max_items, 1) * SCAN_EXAMINE_FACTOR) + 1):
+            if len(out) >= max_items:
+                break
+            try:
+                item = items.Item(i)
+            except Exception:
+                continue
+            if int(getattr(item, "Class", OL_MAIL_ITEM) or OL_MAIL_ITEM) != OL_MAIL_ITEM:
+                continue
+            received = _to_datetime(getattr(item, "ReceivedTime", None)
+                                    or getattr(item, "SentOn", None))
+            if received is not None and received < floor:
+                continue
+            row = self._mail_dict(item, store_id, received, preview_chars)
+            row.pop("_body", None)
+            out.append(row)
+        return out
+
+    @staticmethod
+    def _mail_dict(item, store_id: str, received, body_chars: int) -> dict:
+        def _get(name, default=""):
+            try:
+                value = getattr(item, name, default)
+            except Exception:
+                return default
+            return default if value is None else value
+
+        subject = str(_get("Subject"))
+        body = str(_get("Body"))[:MAX_BODY_CHARS]
+        try:
+            attachments = int(getattr(_get("Attachments", None), "Count", 0) or 0)
+        except Exception:
+            attachments = 0
+        try:
+            importance = int(_get("Importance", 1))
+        except (TypeError, ValueError):
+            importance = 1
+        try:
+            flagged = int(_get("FlagStatus", 0) or 0) == 2 or bool(_get("IsMarkedAsTask", False))
+        except (TypeError, ValueError):
+            flagged = False
+        return {
+            "entry_id": str(_get("EntryID")),
+            "store_id": store_id,
+            "subject": subject,
+            "sender_name": str(_get("SenderName")),
+            "sender_email": _sender_email(item),
+            "received": received.isoformat(timespec="seconds") if received else "",
+            "unread": bool(_get("UnRead", False)),
+            "importance": importance,
+            "flagged": flagged,
+            "to": str(_get("To")),
+            "cc": str(_get("CC")),
+            "conversation_id": str(_get("ConversationID")),
+            "attachments": attachments,
+            "preview": " ".join(body[:max(0, body_chars) * 3].split())[:max(0, body_chars)],
+            "case_nbrs": extract_case_numbers(subject, body),
+            "_body": body,
+        }
+
+    def read_item(self, entry_id: str, store_id: str = "", *, max_chars: int = 4000) -> dict:
+        """One mail by its Outlook id, as a list_mail dict plus "body" (the
+        first `max_chars` of its text). Read-only: the mail is not marked
+        read, moved or changed."""
+        try:
+            item = (self._ns.GetItemFromID(entry_id, store_id) if store_id
+                    else self._ns.GetItemFromID(entry_id))
+        except Exception as e:
+            raise OutlookUnavailable(
+                "the mail could not be opened in Outlook (moved or deleted?) "
+                f"({type(e).__name__}: {e})") from e
+        received = _to_datetime(getattr(item, "ReceivedTime", None)
+                                or getattr(item, "SentOn", None))
+        out = self._mail_dict(item, store_id, received, 300)
+        body = out.pop("_body")
+        out["body"] = body[:max_chars]
+        out["body_cut"] = len(body) > max_chars
+        return out
+
     # -- reply draft -------------------------------------------------------
 
     def save_reply_draft(self, ref: dict, html_fragment: str, *,

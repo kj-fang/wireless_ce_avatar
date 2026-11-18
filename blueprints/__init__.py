@@ -12,6 +12,7 @@ from .chatbot import bt_chatbot_bp, linux_chatbot_bp, log_chatbot_bp
 from .feedback import feedback_bp
 from .handsfree import handsfree_bp
 from .check_ips import check_ips_bp
+from .assistant import assistant_bp
 
 __all__ = [
     "main_bp",
@@ -28,4 +29,5 @@ __all__ = [
     "feedback_bp",
     "handsfree_bp",
     "check_ips_bp",
+    "assistant_bp",
 ]

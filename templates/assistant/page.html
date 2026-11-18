@@ -1,0 +1,110 @@
+{# Beacon assistant: one chat page over Beacon's data.
+
+   A page of its own rather than a profile of templates/chatbot/page.html:
+   that shell and its scripts are built around a loaded log file (issue time,
+   skill cards, feedback), none of which exists here. It borrows the chatbot
+   stylesheet so the two look like the same product. #}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Beacon Assistant</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link href="/static/chatbot/css/base.css" rel="stylesheet">
+    <link href="/static/assistant/assistant.css?v={{ asset_version }}" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body class="assistant-page">
+
+<div class="top-bar">
+    <button type="button" class="as-icon-btn" id="sidebar-toggle" title="Show / hide sidebar"
+            aria-label="Toggle sidebar">☰</button>
+    <span class="as-logo" aria-hidden="true">🛰️</span>
+    <h1>Beacon Assistant</h1>
+    <span class="badge-model">Cases · Mail · Echo · Tasks</span>
+    <span class="as-spacer"></span>
+    <div class="as-bell-wrap">
+        <button type="button" class="as-bell" id="bell-btn" title="Notifications" aria-label="Notifications">
+            🔔<span class="as-bell-count" id="bell-count" hidden>0</span>
+        </button>
+        <div class="as-bell-panel" id="bell-panel" hidden>
+            <div class="as-bell-head">
+                <span>Notifications</span>
+                <button type="button" id="bell-read-all">Mark all read</button>
+            </div>
+            <div id="bell-list" class="as-bell-list"></div>
+        </div>
+    </div>
+    <span class="as-identity" id="identity-chip" title="IPS sign-in of this PC">…</span>
+    <a class="as-top-link" href="/handsfree/">Beacon queue</a>
+    <a class="as-top-link" href="/">← Back to Avatar</a>
+</div>
+
+<div class="main-layout">
+
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-section">
+            <button type="button" class="as-new-chat" id="new-chat-btn">＋ New chat</button>
+        </div>
+
+        <div class="sidebar-section">
+            <h6>Try asking</h6>
+            <div id="quick-questions" class="as-quick">
+                <button type="button" class="as-quick-btn" data-prompt="List every IPS case of mine that was updated today, with its status.">📋 My cases updated today</button>
+                <button type="button" class="as-quick-btn" data-prompt="Look at today's mail and tell me what I need to handle first.">✉️ What needs me first in today's mail</button>
+                <button type="button" class="as-quick-btn" data-prompt="At 2 pm, list the cases that were updated since this morning.">⏰ Do something at 2 pm</button>
+                <button type="button" class="as-quick-btn" data-prompt="Ask Echo: what are the usual root causes of Wi-Fi disconnects right after resume from Modern Standby, and what should I collect?">📡 Ask Echo a Wi-Fi question</button>
+            </div>
+        </div>
+
+        <div class="sidebar-section">
+            <h6>Scheduled <span class="as-muted" id="task-clock"></span></h6>
+            <div id="task-list" class="as-tasks"><span class="as-muted">Nothing scheduled.</span></div>
+            <form id="task-form" class="as-task-form" autocomplete="off">
+                <input id="task-when" type="text" maxlength="60" placeholder="When: 2pm · 下午2點 · in 30 min"
+                       aria-label="When">
+                <input id="task-what" type="text" maxlength="2000" placeholder="What to do then"
+                       aria-label="What to do">
+                <button type="submit">Add</button>
+            </form>
+            <div id="task-error" class="as-task-error" hidden></div>
+        </div>
+
+        <div class="sidebar-section">
+            <h6>Connectors</h6>
+            <div id="connector-list" class="as-connectors"><span class="as-muted">Loading…</span></div>
+        </div>
+
+        <div class="sidebar-section as-grow">
+            <h6>History</h6>
+            <div id="history-list" class="as-history"><span class="as-muted">Loading…</span></div>
+        </div>
+    </div>
+
+    <div class="chat-area">
+        <div id="banner" class="as-banner" hidden></div>
+        <div id="chat-window">
+            <div class="welcome-msg" id="welcome-msg">
+                <div class="big-icon">🛰️</div>
+                <strong>Beacon Assistant</strong><br>
+                Ask about your IPS cases, today's mail, or a technical question for Echo.<br>
+                I look things up and start analyses. I never post to IPS and never send mail.
+            </div>
+        </div>
+
+        <div id="voice-hint" class="as-voice-hint" hidden></div>
+        <div class="input-row">
+            <button id="mic-btn" type="button" class="as-mic" title="Voice input" aria-label="Voice input"
+                    hidden>🎤</button>
+            <textarea id="user-input" rows="1" maxlength="8000"
+                      placeholder="Ask about your cases, your mail, or a wireless question…"></textarea>
+            <button id="send-btn" type="button">Send ↑</button>
+        </div>
+    </div>
+
+</div>
+
+<script src="/static/assistant/assistant.js?v={{ asset_version }}"></script>
+</body>
+</html>

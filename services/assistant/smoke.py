@@ -1489,7 +1489,7 @@ class _FakeWhisper:
     def transcribe(self, audio, **kwargs):
         if self.fail:
             raise self.fail
-        self.calls.append({"bytes": audio.read(), "type": type(audio).__name__, **kwargs})
+        self.calls.append({"samples": len(audio), "type": type(audio).__name__, **kwargs})
         language = kwargs.get("language") or self.spoken
         text = self.text
         if language == "zh":
@@ -1504,7 +1504,8 @@ def a9_voice() -> None:
 
     from services.assistant import voice
 
-    saved = (voice._package_installed, voice.models_dir, voice._load_model, voice._fetch_model)
+    saved = (voice._package_installed, voice.models_dir, voice._load_model, voice._fetch_model,
+             voice._decode)
     tmp = tempfile.TemporaryDirectory()
     root = Path(tmp.name) / "models"
     try:
@@ -1568,6 +1569,18 @@ def a9_voice() -> None:
               and st["available"] is True and st["download_error"] == ""
               and voice.start_download()["state"] == "ready")
 
+        # The decoder is replaced here (its real form is checked at the end):
+        # every clip "holds" clip_seconds of sound.
+        decoded: list = []
+        clip = {"seconds": 3.2, "fail": None}
+
+        def fake_decode(audio):
+            decoded.append(audio)
+            if clip["fail"]:
+                raise clip["fail"]
+            return [0.0] * int(clip["seconds"] * voice.SAMPLE_RATE)
+
+        voice._decode = fake_decode
         loads: list = []
         english = _FakeWhisper("en")
         voice._load_model = lambda: (loads.append(1), english)[1]
@@ -1578,8 +1591,9 @@ def a9_voice() -> None:
               and out["seconds"] == 3.2 and len(english.calls) == 1
               and english.calls[0]["language"] is None and english.calls[0]["initial_prompt"] is None
               and english.calls[0]["vad_filter"] is True, str(out))
-        check("A9.d the audio is decoded from memory: nothing is written to disk",
-              english.calls[0]["type"] == "BytesIO" and english.calls[0]["bytes"].startswith(b"\x1aE")
+        check("A9.d the clip is decoded from memory and handed over as samples: nothing is written to disk",
+              decoded == [b"\x1aE\xdf\xa3webm-bytes"]
+              and english.calls[0]["samples"] == int(3.2 * voice.SAMPLE_RATE)
               and sorted(p.name for p in Path(tmp.name).rglob("*")) == before)
         voice.transcribe(b"again")
         check("A9.d the model is loaded once and kept", loads == [1] and voice.status()["loaded"])
@@ -1603,26 +1617,71 @@ def a9_voice() -> None:
                 voice.transcribe(audio)
             except voice.VoiceUnavailable as e:
                 codes.append(e.code)
-        long_clip = _FakeWhisper("en", duration=400)
+        unused = _FakeWhisper("en")
         voice.unload()
-        voice._load_model = lambda: long_clip
+        voice._load_model = lambda: unused
+        clip["seconds"] = 400
         try:
             voice.transcribe(b"clip")
         except voice.VoiceUnavailable as e:
             codes.append(e.code + ":" + str(e))
-        long_clip.fail = ValueError("Invalid data found when processing input")
+        clip.update(seconds=3.2, fail=ValueError("Invalid data found when processing input"))
         try:
             voice.transcribe(b"not audio")
         except voice.VoiceUnavailable as e:
             codes.append(e.code + ":" + str(e))
+        clip.update(seconds=0.1, fail=None)
+        blip = voice.transcribe(b"a click")
         check("A9.f an empty, oversized, overlong or unreadable clip is refused with a reason",
               codes[:2] == ["bad_audio", "bad_audio"] and "longer than 120 seconds" in codes[2]
               and "could not be read" in codes[3] and "Invalid data" in codes[3], str(codes))
+        check("A9.f none of those, nor a clip too short to hold a word, reaches the model",
+              blip["text"] == "" and blip["seconds"] == 0.1 and unused.calls == []
+              and voice.status()["loaded"] is False, str(blip))
+        clip.update(seconds=3.2)
+        unused.fail = RuntimeError("out of memory")
+        try:
+            voice.transcribe(b"clip")
+            failed = ""
+        except voice.VoiceUnavailable as e:
+            failed = str(e)
+        check("A9.f a recogniser failure is reported as such",
+              "recognition failed" in failed and "out of memory" in failed, failed)
         check("A9.f a failed clip does not leave the recogniser locked",
               voice._lock.acquire(timeout=1))
         voice._lock.release()
+
+        # The real decoder, when PyAV is installed (it comes with the optional
+        # faster-whisper): one second of 8 kHz stereo WAV built in memory.
+        import importlib.util
+        if importlib.util.find_spec("av") is not None:
+            import io as _io
+            import math
+            import struct
+            import wave
+            buffer = _io.BytesIO()
+            with wave.open(buffer, "wb") as wav:
+                wav.setnchannels(2)
+                wav.setsampwidth(2)
+                wav.setframerate(8000)
+                wav.writeframes(b"".join(
+                    struct.pack("<hh", int(12000 * math.sin(2 * math.pi * 440 * n / 8000)), 0)
+                    for n in range(8000)))
+            samples = saved[4](buffer.getvalue())
+            check("A9.g the real decoder turns a clip into mono 16 kHz samples between -1 and 1",
+                  abs(len(samples) - voice.SAMPLE_RATE) < 400 and str(samples.dtype) == "float32"
+                  and 0.05 < float(abs(samples).max()) <= 1.0, f"{len(samples)} {samples.dtype}")
+            unreadable = ""
+            try:
+                saved[4](b"definitely not an audio container")
+            except Exception as e:
+                unreadable = type(e).__name__
+            check("A9.g and raises on bytes that are not audio", unreadable != "", unreadable)
+        else:
+            print("SKIP A9.g the real decoder (PyAV is not installed: voice input is optional)")
     finally:
-        voice._package_installed, voice.models_dir, voice._load_model, voice._fetch_model = saved
+        (voice._package_installed, voice.models_dir, voice._load_model, voice._fetch_model,
+         voice._decode) = saved
         voice.unload()
         voice._download.update(state="idle", error="")
         tmp.cleanup()

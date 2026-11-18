@@ -687,7 +687,14 @@
     const voice = { status: null, recorder: null, chunks: [], stream: null, startedAt: 0,
                     timer: null, pressAt: 0, cancelled: false };
     const micBtn = $('mic-btn');
+    const micLang = $('mic-lang');
     const HOLD_MS = 500;
+    // Which language the user speaks is their own habit: remembered in this
+    // browser only. The page works the same when storage is unavailable.
+    try { micLang.value = window.localStorage.getItem('assistant.micLang') || ''; } catch (e) { /* ignore */ }
+    micLang.addEventListener('change', () => {
+        try { window.localStorage.setItem('assistant.micLang', micLang.value); } catch (e) { /* ignore */ }
+    });
 
     function voiceHint(text, opts) {
         const el = $('voice-hint');
@@ -719,6 +726,7 @@
         }
         try { voice.status = await getJson('/voice/status'); } catch (e) { return; }
         micBtn.hidden = false;
+        micLang.hidden = !voice.status.available;
         micBtn.classList.toggle('setup', !voice.status.available);
         micBtn.title = voice.status.available
             ? 'Voice input: click to start, click again to stop (or hold while speaking)'
@@ -812,7 +820,8 @@
         micState('working');
         voiceHint('Recognising…');
         try {
-            const res = await fetch(API + '/transcribe', {
+            const lang = micLang.value;
+            const res = await fetch(API + '/transcribe' + (lang ? '?lang=' + encodeURIComponent(lang) : ''), {
                 method: 'POST', headers: { 'Content-Type': type || 'audio/webm' }, body: blob,
             });
             const data = await res.json();

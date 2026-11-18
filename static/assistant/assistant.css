@@ -144,6 +144,10 @@ body.as-sidebar-collapsed .sidebar { width: 0; min-width: 0; opacity: 0; overflo
     font-size: 1.1rem; cursor: pointer; flex-shrink: 0;
 }
 .as-mic:hover { border-color: var(--accent); }
+.as-mic-lang {
+    height: 44px; border-radius: 10px; border: 1px solid #ddd; background: white; color: #444;
+    font-family: inherit; font-size: 0.78rem; padding: 0 4px; flex-shrink: 0; margin-left: -4px;
+}
 .as-mic.setup { opacity: 0.55; }
 .as-mic.recording { background: #dc2626; border-color: #dc2626; color: white; animation: as-pulse 1.2s infinite; }
 .as-mic.working { opacity: 0.6; cursor: progress; }

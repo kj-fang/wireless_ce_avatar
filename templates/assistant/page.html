@@ -97,6 +97,12 @@
         <div class="input-row">
             <button id="mic-btn" type="button" class="as-mic" title="Voice input" aria-label="Voice input"
                     hidden>🎤</button>
+            <select id="mic-lang" class="as-mic-lang" title="Spoken language. Choosing it skips the language detection (about 2 seconds faster)."
+                    aria-label="Spoken language" hidden>
+                <option value="">Auto</option>
+                <option value="zh">中文</option>
+                <option value="en">EN</option>
+            </select>
             <textarea id="user-input" rows="1" maxlength="8000"
                       placeholder="Ask about your cases, your mail, or a wireless question…"></textarea>
             <button id="send-btn" type="button">Send ↑</button>

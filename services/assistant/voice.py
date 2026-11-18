@@ -35,6 +35,8 @@ MODEL_REPO = "Systran/faster-whisper-small"
 MODEL_SIZE_MB = 480
 MAX_AUDIO_BYTES = 12 * 1024 * 1024
 MAX_SECONDS = 120
+MIN_SECONDS = 0.3              # shorter than this holds no word
+SAMPLE_RATE = 16000
 # Whisper writes Chinese in whichever script its prompt leans to; this leans
 # it to Traditional and to the terms the user is likely to say.
 ZH_PROMPT = "以下是繁體中文的句子，可能夾雜英文技術名詞，例如 Wi-Fi、Bluetooth、IPS case、driver、Echo。"
@@ -69,9 +71,13 @@ def models_dir() -> Path:
 
 
 def _load_model():
+    import os
     from faster_whisper import WhisperModel
+    # Eight threads measured about a quarter faster than the library's default
+    # of four on a 16-thread laptop; beyond eight it no longer helps.
     return WhisperModel(MODEL_NAME, device="cpu", compute_type="int8",
-                        download_root=str(models_dir()), local_files_only=True)
+                        download_root=str(models_dir()), local_files_only=True,
+                        cpu_threads=max(1, min(8, os.cpu_count() or 4)))
 
 
 DOWNLOAD_PROXY = "http://proxy-dmz.intel.com:912"     # the app's proxy for outside downloads
@@ -177,6 +183,38 @@ def _get_model():
     return _model
 
 
+def _decode(audio: bytes):
+    """A recorded clip (WebM/Opus from the browser, or WAV, OGG, MP3 ...) as
+    mono 16 kHz float32 samples - what the recogniser takes directly.
+
+    Decoded here, from memory, with PyAV, instead of handing the container to
+    faster-whisper: its own decoder passes an option that current PyAV
+    releases no longer accept (found with faster-whisper 1.2.1 + av 19), and
+    this way the clip's length is known before the model is run."""
+    import av
+    import numpy as np
+
+    resampler = av.audio.resampler.AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+    chunks: list = []
+    with av.open(io.BytesIO(audio), mode="r") as container:
+        if not container.streams.audio:
+            raise ValueError("no audio in the recording")
+        try:
+            for frame in container.decode(audio=0):
+                for out in resampler.resample(frame):
+                    chunks.append(out.to_ndarray().reshape(-1))
+        except Exception:
+            # A clip cut off mid-frame (the recorder was stopped) still holds
+            # everything said before the cut; only an unreadable start fails.
+            if not chunks:
+                raise
+        for out in resampler.resample(None):            # what the resampler held back
+            chunks.append(out.to_ndarray().reshape(-1))
+    if not chunks:
+        return np.zeros(0, dtype=np.float32)
+    return np.concatenate(chunks).astype(np.float32) / 32768.0
+
+
 def _join(segments) -> str:
     text = "".join(str(getattr(s, "text", "") or "") for s in segments)
     return re.sub(r"\s+", " ", text).strip()
@@ -203,30 +241,36 @@ def transcribe(audio: bytes, language: Optional[str] = None) -> dict:
         language = None
     started = time.monotonic()
     with _lock:
+        try:
+            samples = _decode(audio)
+        except Exception as e:
+            raise VoiceUnavailable(
+                "bad_audio", f"the recording could not be read ({type(e).__name__}: {e})"[:300]) from e
+        seconds = len(samples) / SAMPLE_RATE
+        if seconds > MAX_SECONDS + 5:
+            raise VoiceUnavailable(
+                "bad_audio", f"the recording is longer than {MAX_SECONDS} seconds")
+        if seconds < MIN_SECONDS:
+            return {"text": "", "language": language or "", "seconds": round(seconds, 1),
+                    "took_s": round(time.monotonic() - started, 1)}
         model = _get_model()
         try:
             segments, info = model.transcribe(
-                io.BytesIO(audio), language=language, vad_filter=True, beam_size=5,
+                samples, language=language, vad_filter=True, beam_size=5,
                 condition_on_previous_text=False,
                 initial_prompt=ZH_PROMPT if language == "zh" else None)
             detected = str(getattr(info, "language", "") or language or "")
-            seconds = float(getattr(info, "duration", 0.0) or 0.0)
-            if seconds > MAX_SECONDS + 5:
-                raise VoiceUnavailable(
-                    "bad_audio", f"the recording is longer than {MAX_SECONDS} seconds")
             if language is None and detected == "zh":
                 # Detected Chinese: run it with the prompt that keeps the
                 # output in Traditional characters. The first pass has only
                 # detected the language so far (segments are produced lazily).
                 segments, info = model.transcribe(
-                    io.BytesIO(audio), language="zh", vad_filter=True, beam_size=5,
+                    samples, language="zh", vad_filter=True, beam_size=5,
                     condition_on_previous_text=False, initial_prompt=ZH_PROMPT)
             text = _join(segments)
-        except VoiceUnavailable:
-            raise
         except Exception as e:
             raise VoiceUnavailable(
-                "bad_audio", f"the recording could not be read ({type(e).__name__}: {e})"[:300]) from e
+                "bad_audio", f"recognition failed ({type(e).__name__}: {e})"[:300]) from e
     return {"text": text, "language": detected, "seconds": round(seconds, 1),
             "took_s": round(time.monotonic() - started, 1)}
 

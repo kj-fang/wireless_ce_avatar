@@ -50,7 +50,8 @@
         for (const [key, host] of Object.entries(hosts)) host.hidden = key !== name;
         pane.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-selected', String(button.dataset.view === name)));
         if (name === 'evidence' && !evidenceSelection) {
-            const buttons = document.querySelectorAll('#chat-window [data-key-log-trigger]');
+            const avatarWindow = window.getChatRecipientWindow?.('avatar') || document.getElementById('chat-window');
+            const buttons = avatarWindow.querySelectorAll('[data-key-log-trigger]');
             const latest = buttons[buttons.length - 1];
             if (latest) {
                 openKeyLogsFromCard(latest);

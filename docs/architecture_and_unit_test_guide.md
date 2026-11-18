@@ -18,7 +18,7 @@ create_app()
  ├─ download_routes.register_socketio_handlers(socketio)     /progress: start_download, cancel_download
  ├─ log_parser_routes.register_socketio_handlers(socketio)   /progress, /wpp_progress, /sendto-progress
  └─ automation_routes.register_socketio_handlers(socketio)   /progress: trigger_run_latest_etl
-__main__:  argparse (--silent-mode, --port, --tray-mode, SendTo paths) → app_config.silent_mode = args.silent_mode
+__main__:  argparse (--silent-mode, --port, --no-tray (tray is on by default), SendTo paths) → app_config.silent_mode = args.silent_mode
            set_up(socketio) → app_config.driver_manager.run_driver(...)   (Selenium/Chrome UI shell)
 ```
 

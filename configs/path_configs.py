@@ -9,6 +9,10 @@ LOAD_PATH_prim = rf"\\elitpts46.ger.corp.intel.com\BSOD_Dumps"
 # key
 KEY_PATH_prim = rf"\\pgsfls0101.gar.corp.intel.com\symstore\CMAttachments\JIRA\WIFI\Temp\KJ\Intel_WirelessCE_Avatar\key\keys.py"
 KEY_PATH_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\key\keys.py"
+# Per-path wait before get_load_path() gives up on a key share (primary then
+# backup, so worst case is 2x this). Bump down when diagnosing "no API key"
+# boot failures so a dead share fails fast instead of eating ~16s.
+KEY_SHARE_TIMEOUT_SEC = 8
 
 # llm 
 CLASSIFY_PATH = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\classification.py"

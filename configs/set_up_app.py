@@ -4,7 +4,7 @@ import shutil
 from typing import Optional
 
 from configs.path_configs import (
-    KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH,
+    KEY_PATH_prim, KEY_PATH_bkup, KEY_SHARE_TIMEOUT_SEC, CLASSIFY_PATH,
     LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup,
     LOCAL_LOG_PARSER_DATA_DIR,
     SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
@@ -254,7 +254,8 @@ def set_up(socketio):
 
 
     # key
-    key_path = helpers.get_load_path(KEY_PATH_prim, KEY_PATH_bkup, label="key")
+    key_path = helpers.get_load_path(
+        KEY_PATH_prim, KEY_PATH_bkup, timeout_sec=KEY_SHARE_TIMEOUT_SEC, label="key")
     if key_path != None:
         key = helpers.load_module(key_path, "key_moudle")
         app_config.set_key(key)

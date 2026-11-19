@@ -687,7 +687,8 @@ class TestSuggestIssueTimes(BtChatbotTestCase):
         self.assertEqual(resp.get_json(), {"success": True, "suggestions": []})
         self.build.assert_called_once_with(
             text="drops at noon", log_lines=["l1", "l2"], first_ts=self.first, last_ts=self.last,
-            llm_client="llm-client", llm_model="test-model", brief=ANY, event_log_events=[])
+            llm_client="llm-client", llm_model="test-model", brief=ANY, event_log_events=[],
+            log_format=ANY)
 
     def test_event_log_anchor_is_fetched_and_nearest_error_attached(self):
         """Event-log events are fetched and nearest errors linked to suggestions.

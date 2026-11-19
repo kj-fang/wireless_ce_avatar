@@ -1133,9 +1133,19 @@ class AgentRoutes:
                 extra["tz_label"] = format_tz_label(_tz_name) if _tz_name else ""
             if self.profile.event_log_anchor:
                 extra["event_log_events"] = event_log_events
+            # log_format answers "what shape are this log's timestamps" --
+            # independent of whether the profile has a domain-flavored focus.
+            # Detecting it for every profile (not just the ones with a focus)
+            # is what lets build_issue_time_suggestions() route an unanchored
+            # relative-time log (dmesg's "[55.510209] ..." with no boot
+            # anchor) to suggest_boot_elapsed() instead of treating the
+            # seconds-since-boot numbers as ordinary clock times -- a case
+            # Generic (no fixed marker lifecycle, no issue_time_focus) is
+            # exactly the profile most likely to meet.
+            if log_path:
+                extra["log_format"] = log_time_format.detect(log_path)
             if self.profile.issue_time_focus is not None and log_path:
                 extra["focus"] = self.profile.issue_time_focus
-                extra["log_format"] = log_time_format.detect(log_path)
 
             payload = build_issue_time_suggestions(
                 text=text,

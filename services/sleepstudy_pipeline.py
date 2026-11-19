@@ -28,10 +28,12 @@ from __future__ import annotations
 
 import copy
 from html import escape as html_escape, unescape as html_unescape
+import json
 import math
 import os
 import queue
 import re
+import shutil
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field, replace
@@ -101,7 +103,18 @@ _WIFI_ETL_FMT = "%m/%d/%Y-%H:%M:%S.%f"
 # by _anchored(), against the window they are being checked for.
 _BT_HCI_TS = re.compile(r"<(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?>")
 _BT_HCI_SUFFIX = ".hci.txt"
+# The BT decoder Avatar runs on ibtusb / ibtpci ETLs writes a full date on
+# every line instead:
+#   [0]0000.0000::01/12/2026-11:13:48.087 [ibtusb][UtilHCIDump][EVT] 3E B3 ...
+# and in the capture machine's clock -- it takes the time zone recorded in the
+# ETL, unlike tracefmt -- so it needs no anchoring and no shift.
+_BT_DATED_TS = re.compile(
+    r"^﻿?(?:\[\d+\][0-9A-Fa-f]+\.[0-9A-Fa-f]+::)?(\d{2}/\d{2}/\d{4}-\d{2}:\d{2}:\d{2}\.\d{3})\s?")
 _DATELESS_DAY = datetime(1900, 1, 1)
+
+# Decoding an ETL takes minutes (PDB download, tracefmt), so at most this many
+# are decoded for one time point before it is reported as not covered.
+MAX_ETL_DECODES = 3
 
 # A clock that runs backwards by more than this has crossed midnight; anything
 # smaller is a thread printing out of order.
@@ -123,6 +136,17 @@ class LogSegment:
     # True for a log that stamps the time of day but no date (BT HCI). Its
     # start/end sit on _DATELESS_DAY until _anchored() moves them.
     dateless: bool = False
+    # The clock the log's timestamps are in, as minutes east of UTC. None is
+    # the test machine's own clock, which is also the report's: WRT writes its
+    # logs there. A log decoded by tracefmt carries the clock of the machine
+    # that decoded it. `clock_guessed` marks a clock nobody recorded, so the
+    # coverage check may try the other likely ones (_align).
+    clock: Optional[int] = None
+    clock_from: str = "test machine"
+    clock_guessed: bool = False
+    # Added to every timestamp read from the file, to put it on the report's
+    # clock (in_report_clock). start/end already include it.
+    shift: timedelta = timedelta(0)
 
     def overlaps(self, lo: datetime, hi: datetime) -> bool:
         return self.start < hi and (self.end is None or self.end > lo)
@@ -144,7 +168,26 @@ class LogSegment:
             "end": _fmt(self.end),
             "start_from": self.start_from,
             "end_from": self.end_from,
+            "kind": self.kind,
+            "clock": self.clock_label(),
+            # start/end are on the report's (customer's) clock; when the log
+            # was in another one, its own times are kept for the page to show
+            # side by side with the converted ones.
+            "shifted": bool(self.shift),
+            "shift": _fmt_delta(self.shift) if self.shift else "",
+            "log_clock": _fmt_offset(self.clock) if self.clock is not None else "",
+            "log_clock_guessed": self.clock_guessed,
+            "log_start": _fmt(self.start - self.shift),
+            "log_end": _fmt(self.end - self.shift) if self.end is not None else "",
         }
+
+    def clock_label(self) -> str:
+        if self.clock is None:
+            return "test machine's clock" + (" (assumed)" if self.clock_guessed else "")
+        text = f"{_fmt_offset(self.clock)}, {self.clock_from}"
+        if self.shift:
+            text += f"; shifted {_fmt_delta(self.shift)} to the report's clock"
+        return text
 
 
 def _anchored(segments: list[LogSegment], day) -> list[LogSegment]:
@@ -156,6 +199,127 @@ def _anchored(segments: list[LogSegment], day) -> list[LogSegment]:
     capture are from the same machine, so that window is the only sane guess.
     """
     return [s.anchored(day) for s in segments]
+
+
+# ── Clocks ─────────────────────────────────────────────────────────────────────
+# The report gives every session in UTC and in the test machine's local time.
+# A WRT log is written on that machine, so it shares the report's clock. A
+# log decoded by tracefmt is stamped in the clock of the machine that decoded
+# it: a US report checked against a log decoded in Taiwan is 15 hours apart,
+# and would show "not covered" or line up with the wrong session.
+
+# Avatar's decoded Wi-Fi logs are in Taiwan time unless this tool decoded them
+# and recorded the clock (utils.timezone_utils works in the same frame).
+TAIWAN_UTC_OFFSET = 8 * 60
+# Written next to a log this tool decoded: {"utc_offset_minutes": <int>}.
+_CLOCK_SIDECAR = ".clock.json"
+
+
+def _fmt_offset(minutes: Optional[int]) -> str:
+    if minutes is None:
+        return "test machine's clock"
+    sign = "+" if minutes >= 0 else "-"
+    return f"UTC{sign}{abs(minutes) // 60:02d}:{abs(minutes) % 60:02d}"
+
+
+def _fmt_delta(delta: timedelta) -> str:
+    minutes = int(delta.total_seconds() // 60)
+    sign = "+" if minutes >= 0 else "-"
+    return f"{sign}{abs(minutes) // 60}h{abs(minutes) % 60:02d}m" if minutes % 60 else f"{sign}{abs(minutes) // 60}h"
+
+
+def local_utc_offset(at: Optional[datetime] = None) -> int:
+    """This machine's offset from UTC in minutes, with its DST rules at `at`."""
+    when = at or datetime.now()
+    return int(when.astimezone().utcoffset().total_seconds() // 60)
+
+
+def read_clock_sidecar(log_path: str) -> Optional[int]:
+    try:
+        with open(log_path + _CLOCK_SIDECAR, "r", encoding="utf-8") as fh:
+            return int(json.load(fh)["utc_offset_minutes"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def write_clock_sidecar(log_path: str, minutes: int) -> None:
+    try:
+        with open(log_path + _CLOCK_SIDECAR, "w", encoding="utf-8") as fh:
+            json.dump({"utc_offset_minutes": minutes,
+                       "note": "clock of the decoded log's timestamps (decoding machine)"}, fh)
+    except OSError:
+        pass
+
+
+def in_report_clock(segments: list[LogSegment], session_offset: Optional[int],
+                    log_clock: Optional[int] = None) -> list[LogSegment]:
+    """
+    Every segment on the report's clock for a session `session_offset`
+    minutes east of UTC. A segment on the test machine's clock is left as it
+    is; any other is shifted by the difference. `log_clock` overrides the
+    clock of decoded Wi-Fi logs (a person's choice, or a guess being tried).
+    """
+    out = []
+    for s in segments:
+        clock = log_clock if (log_clock is not None and s.kind == "wifi_etl") else s.clock
+        if clock is None or session_offset is None:
+            out.append(s)
+            continue
+        delta = timedelta(minutes=session_offset - clock)
+        out.append(replace(s, start=s.start + delta,
+                           end=None if s.end is None else s.end + delta,
+                           shift=s.shift + delta, clock=clock,
+                           clock_from=s.clock_from if log_clock is None else "tried"))
+    return out
+
+
+def _clock_candidates(segments: list[LogSegment], session_offset: Optional[int]) -> list[int]:
+    """The clocks a guessed decoded log was most likely stamped in."""
+    tried = {s.clock for s in segments if s.kind == "wifi_etl" and s.clock_guessed}
+    if None in tried:                 # the test machine's clock is the report's
+        tried.add(session_offset)
+    out = []
+    for c in (TAIWAN_UTC_OFFSET, local_utc_offset(), 0, session_offset):
+        if c is not None and c not in tried and c not in out:
+            out.append(c)
+    return out
+
+
+def _align(segments: list[LogSegment], lo: datetime, hi: datetime,
+           session_offset: Optional[int], log_clock: Optional[int] = None):
+    """
+    coverage_of() on the report's clock: (coverage, hits, clock_note).
+
+    A decoded log whose clock was never recorded is first read in its guessed
+    clock; when that covers nothing, the other likely clocks are tried, and
+    the note says which one lined up -- the person sees the assumption
+    instead of a silent "not covered" or a quietly shifted log.
+    """
+    aligned = in_report_clock(segments, session_offset, log_clock)
+    coverage, hits = coverage_of(aligned, lo, hi)
+    note = _clock_note(hits, session_offset)
+    if coverage != "none" or log_clock is not None or session_offset is None:
+        return coverage, hits, note
+    if not any(s.kind == "wifi_etl" and s.clock_guessed for s in segments):
+        return coverage, hits, note
+    for clock in _clock_candidates(segments, session_offset):
+        coverage, hits = coverage_of(in_report_clock(segments, session_offset, clock), lo, hi)
+        if coverage != "none":
+            return coverage, hits, (
+                f"Lined up only when the decoded log is read in {_fmt_offset(clock)} (the report is "
+                f"{_fmt_offset(session_offset)}); its time zone was not recorded, so check it was "
+                f"decoded in {_fmt_offset(clock)}.")
+    return "none", [], ""
+
+
+def _clock_note(hits: list[LogSegment], session_offset: Optional[int]) -> str:
+    shifted = [h for h in hits if h.shift]
+    if not shifted:
+        return ""
+    h = shifted[0]
+    guess = " (assumed: not recorded)" if h.clock_guessed else ""
+    return (f"Decoded log is in {_fmt_offset(h.clock)}{guess}; the report is "
+            f"{_fmt_offset(session_offset)}, so its times were shifted {_fmt_delta(h.shift)}.")
 
 
 def _wifilog_start(name: str) -> Optional[datetime]:
@@ -229,6 +393,64 @@ def _is_bt_hci(name: str) -> bool:
     return name.lower().endswith(_BT_HCI_SUFFIX)
 
 
+# The Wi-Fi driver ETL Avatar's decoder reads (wpp_ddd_parser.PARSERS_DICT:
+# "WifiDriver.*\.etl"), the autologger trace customers send; .etl.N are its
+# rolling parts. tracefmt writes the decoded text next to it as <etl>.log.
+_WIFI_DRIVER_ETL = re.compile(r"WifiDriver.*\.etl(?:\.\d+)?$")
+_DECODED_ETL_LOG = re.compile(r"\.etl(?:\.\d+)?\.log$", re.IGNORECASE)
+# Indexed under this key instead of a device: an ETL has no time span until
+# it is decoded, so it is a candidate to decode, not a log to cut.
+RAW_ETL_KEY = "wifi_etl_raw"
+
+
+def _is_wifi_driver_etl(name: str) -> bool:
+    return bool(_WIFI_DRIVER_ETL.search(name))
+
+
+def _capture_time(path: str) -> Optional[datetime]:
+    """The capture time in an autologger / WRT folder name
+    (<host>_DD-MM-YYYY_HH-MM-SS_...), on the test machine's clock: the time
+    the capture was collected, so it contains what happened before it. The
+    nearest dated folder up the path counts: autologger keeps older parts in
+    a WifiDriverIHVSession_History folder inside the capture."""
+    folder = os.path.dirname(path)
+    for _ in range(3):
+        m = re.search(r"(\d{2})-(\d{2})-(\d{4})_(\d{2})-(\d{2})-(\d{2})", os.path.basename(folder))
+        if m:
+            dd, mo, yy, hh, mi, ss = (int(g) for g in m.groups())
+            try:
+                return datetime(yy, mo, dd, hh, mi, ss)
+            except ValueError:
+                return None
+        parent = os.path.dirname(folder)
+        if parent == folder:
+            break
+        folder = parent
+    return None
+
+
+def _decoded_log_segment(path: str, alone: bool) -> Optional[LogSegment]:
+    """A decoded Wi-Fi ETL log, with the clock its timestamps are in: the one
+    this tool recorded when it decoded it, else a guess -- Taiwan time for an
+    Avatar-decoded <etl>.log, the test machine's for any other text log."""
+    first, last = _wifi_etl_range(path)
+    if first is None:
+        return None
+    clock = read_clock_sidecar(path)
+    if clock is not None:
+        return LogSegment(path, ssa.DEVICE_WIFI, "wifi_etl", first, last,
+                          "first timestamped line", "last timestamped line",
+                          clock=clock, clock_from="recorded when this tool decoded it")
+    if _DECODED_ETL_LOG.search(path):
+        return LogSegment(path, ssa.DEVICE_WIFI, "wifi_etl", first, last,
+                          "first timestamped line", "last timestamped line",
+                          clock=TAIWAN_UTC_OFFSET, clock_from="Avatar's decode clock",
+                          clock_guessed=True)
+    return LogSegment(path, ssa.DEVICE_WIFI, "wifi_etl", first, last,
+                      "first timestamped line", "last timestamped line",
+                      clock_from="not recorded", clock_guessed=alone)
+
+
 def _bt_hci_clock(line: str) -> Optional[datetime]:
     """The <HH:MM:SS.mmm> of one HCI line, on _DATELESS_DAY."""
     m = _BT_HCI_TS.search(line)
@@ -239,6 +461,28 @@ def _bt_hci_clock(line: str) -> Optional[datetime]:
         return None
     ms = int((m.group(4) or "0").ljust(3, "0")[:3])
     return _DATELESS_DAY.replace(hour=hh, minute=mi, second=ss, microsecond=ms * 1000)
+
+
+def _bt_dated_range(path: str) -> tuple[Optional[datetime], Optional[datetime]]:
+    """First and last timestamp of a dated BT HCI log, or (None, None) when
+    its opening lines carry no date (the older <HH:MM:SS> shape)."""
+    first = last = None
+    with open(path, "r", encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh):
+            m = _BT_DATED_TS.match(line)
+            if m:
+                first = datetime.strptime(m.group(1), _WIFI_ETL_FMT)
+                break
+            if i >= 200:
+                return None, None
+    if first is None:
+        return None, None
+    for line in reversed(_tail_lines(path)):
+        m = _BT_DATED_TS.match(line)
+        if m:
+            last = datetime.strptime(m.group(1), _WIFI_ETL_FMT)
+            break
+    return first, last
 
 
 def _bt_hci_range(path: str) -> tuple[Optional[datetime], Optional[datetime]]:
@@ -273,19 +517,26 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
       - WRT rolling Wi-Fi logs (WiFiLog--*.LOG), anywhere under the folder;
         a single WiFiLog file means its whole folder
       - a decoded Wi-Fi ETL log (MM/DD/YYYY-HH:MM:SS.mmm lines)
-      - a decoded Bluetooth HCI log (*.hci.txt), indexed dateless: it stamps
-        the time of day only, so _anchored() puts it on the window's day
+      - a decoded Bluetooth HCI log (*.hci.txt): Avatar's BT decoder dates
+        every line (MM/DD/YYYY-HH:MM:SS.mmm, the capture machine's clock);
+        the older <HH:MM:SS> shape is indexed dateless and _anchored() puts
+        it on the window's day
+      - Wi-Fi driver ETLs (WifiDriver*.etl[.N]): an already decoded
+        <etl>.log next to one is indexed as a decoded log; an undecoded one
+        goes under RAW_ETL_KEY, a candidate for decode_wifi_etl()
 
-    Returns ({device: [segments, oldest first]}, warnings).
+    Returns ({device: [segments, oldest first], RAW_ETL_KEY: [...]}, warnings).
     """
     warnings: list[str] = []
     found: dict[str, list[LogSegment]] = {}
     if not path or not os.path.exists(path):
         return found, [f"Driver log not found: {path}"]
 
-    # One WiFiLog picked in a file dialog stands for the capture it came from:
-    # a session usually falls in one of its siblings, not in that file.
-    if os.path.isfile(path) and _wifilog_start(os.path.basename(path)) is not None:
+    # One WiFiLog or Wi-Fi driver ETL picked in a file dialog stands for the
+    # capture it came from: a session usually falls in one of its siblings
+    # (another rolling file, or the ETL's decoded log), not in that file.
+    if os.path.isfile(path) and (_wifilog_start(os.path.basename(path)) is not None
+                                 or _is_wifi_driver_etl(os.path.basename(path))):
         path = os.path.dirname(path)
 
     if os.path.isdir(path):
@@ -295,17 +546,49 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
 
     wifilogs = []
     for f in files:
-        start = _wifilog_start(os.path.basename(f))
+        name = os.path.basename(f)
+        start = _wifilog_start(name)
         if start is not None:
             wifilogs.append((start, f))
+            continue
+        if _is_wifi_driver_etl(name):
+            # Decoded already: its <etl>.log is indexed on its own; one this
+            # tool decoded into the cache (a read-only folder) is indexed here.
+            cached = None if os.path.exists(f + ".log") else decoded_log_of(f)
+            if cached:
+                seg = _decoded_log_segment(cached, alone=False)
+                if seg is not None:
+                    found.setdefault(ssa.DEVICE_WIFI, []).append(seg)
+            elif not os.path.exists(f + ".log"):
+                captured = _capture_time(f)
+                found.setdefault(RAW_ETL_KEY, []).append(
+                    LogSegment(f, ssa.DEVICE_WIFI, RAW_ETL_KEY,
+                               captured or datetime.fromtimestamp(os.path.getmtime(f)), None,
+                               "unknown until decoded",
+                               "capture folder name" if captured else "file modified time"))
+            continue
+        if _DECODED_ETL_LOG.search(name):
+            seg = _decoded_log_segment(f, alone=not os.path.isdir(path))
+            if seg is None:
+                warnings.append(f"{name}: no timestamp this tool can read.")
+            else:
+                found.setdefault(ssa.DEVICE_WIFI, []).append(seg)
             continue
         if _is_bt_hci(os.path.basename(f)):
             # A decoded BT log sits next to the Wi-Fi ones in a WRT capture,
             # so it is picked up from a folder as well as when chosen alone.
+            first, last = _bt_dated_range(f)
+            if first is not None:
+                found.setdefault(ssa.DEVICE_BT, []).append(
+                    LogSegment(f, ssa.DEVICE_BT, "bt_hci_dated", first, last,
+                               "first timestamped line", "last timestamped line",
+                               clock_from="capture machine (the BT decoder uses the ETL's time zone)"))
+                continue
             first, last = _bt_hci_range(f)
             if first is None:
                 warnings.append(
-                    f"{os.path.basename(f)}: no <HH:MM:SS> line this tool can read.")
+                    f"{os.path.basename(f)}: no timestamp this tool can read "
+                    "(expected MM/DD/YYYY-HH:MM:SS.mmm or <HH:MM:SS> lines).")
                 continue
             found.setdefault(ssa.DEVICE_BT, []).append(
                 LogSegment(f, ssa.DEVICE_BT, "bt_hci", first, last,
@@ -314,15 +597,13 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
             continue
         if not os.path.isdir(path):
             # A single file that is neither must be a decoded Wi-Fi ETL log.
-            first, last = _wifi_etl_range(f)
-            if first is None:
+            seg = _decoded_log_segment(f, alone=True)
+            if seg is None:
                 warnings.append(
                     f"{os.path.basename(f)}: no timestamp this tool can read; expected a "
-                    "WRT WiFiLog, a decoded Wi-Fi ETL log, or a decoded BT *.hci.txt.")
+                    "WRT WiFiLog, a Wi-Fi driver ETL or its decoded log, or a decoded BT *.hci.txt.")
                 continue
-            found.setdefault(ssa.DEVICE_WIFI, []).append(
-                LogSegment(f, ssa.DEVICE_WIFI, "wifi_etl", first, last,
-                           "first timestamped line", "last timestamped line"))
+            found.setdefault(ssa.DEVICE_WIFI, []).append(seg)
 
     # Rolling files hand over to each other, so each one runs until the next
     # one opens. Only the newest has to be read to know where it ends.
@@ -339,7 +620,7 @@ def discover_driver_logs(path: str) -> tuple[dict[str, list[LogSegment]], list[s
                        "file name", end_from))
 
     if os.path.isdir(path) and not found:
-        warnings.append(f"No WiFiLog--*.LOG or *.hci.txt files under {path}.")
+        warnings.append(f"No WiFiLog--*.LOG, WifiDriver*.etl or *.hci.txt files under {path}.")
     for segments in found.values():
         segments.sort(key=lambda s: s.start)
     return found, warnings
@@ -361,24 +642,189 @@ def coverage_of(segments: list[LogSegment], lo: datetime, hi: datetime) -> tuple
     return ("full" if full else "partial"), hits
 
 
-def check_driver_log(path: str, device: str, window_start: str, window_end: str) -> dict:
+def _decoded_copy_path(etl_path: str) -> str:
+    """Where an ETL's decoded log goes when its own folder is read-only (a
+    share): a per-file cache, so later points and runs find it again."""
+    try:
+        st = os.stat(etl_path)
+        stamp = f"{os.path.abspath(etl_path).lower()}|{st.st_size}|{int(st.st_mtime)}"
+    except OSError:
+        stamp = os.path.abspath(etl_path).lower()
+    import hashlib
+    digest = hashlib.sha1(stamp.encode("utf-8", "replace")).hexdigest()[:16]
+    return os.path.join(tempfile.gettempdir(), "sleepstudy_etl_decoded", digest,
+                        os.path.basename(etl_path) + ".log")
+
+
+def decoded_log_of(etl_path: str) -> Optional[str]:
+    """The ETL's decoded log, next to it or in the cache, if it exists."""
+    for candidate in (etl_path + ".log", _decoded_copy_path(etl_path)):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
+
+def decode_wifi_etl(etl_path: str) -> tuple[Optional[str], str]:
+    """
+    Decode a Wi-Fi driver ETL with Avatar's Wi-Fi decoder (tracefmt with the
+    PDBs of the driver build the ETL names), and return (decoded log, error).
+
+    The decoder writes <etl>.log next to the ETL; when it cannot (a read-only
+    share) the text is copied from its workspace into a cache instead. The
+    decoding machine's UTC offset is recorded beside the log, since tracefmt
+    stamps every line in that machine's local time.
+    """
+    done = decoded_log_of(etl_path)
+    if done:
+        return done, ""
+    try:
+        from services.etl_parser.wpp_ddd_parser import DECODE_LOCK, WppParser, parse_single_binary
+        from utils.helpers import to_long_path
+    except Exception as exc:          # noqa: BLE001 -- reported to the user
+        return None, f"Avatar's Wi-Fi ETL decoder is unavailable here ({type(exc).__name__}: {exc})."
+
+    parser = None
+    # The decoder chdir()s the whole process into its workspace and works
+    # with relative paths, so decodes run one at a time across every entry
+    # point (DECODE_LOCK), and the directory is put back before the lock is
+    # released.
+    with DECODE_LOCK:
+        done = decoded_log_of(etl_path)       # decoded while this one waited
+        if done:
+            return done, ""
+        previous_headless = os.environ.get("AVATAR_HEADLESS_DECODE")
+        # One decode per ETL must not open a TextAnalysisTool and an Explorer
+        # window each, as the interactive Wi-Fi flow does.
+        os.environ["AVATAR_HEADLESS_DECODE"] = "1"
+        cwd = os.getcwd()
+        try:
+            parser = WppParser(to_long_path(etl_path), False, False)
+            parse_single_binary(parser)
+        except Exception as exc:          # noqa: BLE001 -- reported to the user
+            return None, f"Decoding {os.path.basename(etl_path)} failed: {type(exc).__name__}: {exc}"
+        finally:
+            if previous_headless is None:
+                os.environ.pop("AVATAR_HEADLESS_DECODE", None)
+            else:
+                os.environ["AVATAR_HEADLESS_DECODE"] = previous_headless
+            try:
+                os.chdir(cwd)
+            except OSError:
+                pass
+
+    log_path = etl_path + ".log"
+    if not os.path.exists(log_path):
+        parsed = os.path.join(parser.workspace, parser.parsed_txt_name) if parser else ""
+        if not parsed or not os.path.exists(parsed):
+            return None, f"Decoding {os.path.basename(etl_path)} produced no log."
+        log_path = _decoded_copy_path(etl_path)
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        shutil.copyfile(parsed, log_path)
+    write_clock_sidecar(log_path, local_utc_offset())
+    return log_path, ""
+
+
+def etl_candidates(raw: list[LogSegment], lo: datetime, hi: datetime,
+                   start: Optional[datetime] = None,
+                   end: Optional[datetime] = None) -> list[LogSegment]:
+    """
+    The undecoded Wi-Fi driver ETLs that may hold the session in window
+    [lo, hi), most likely first. Judged against the session itself
+    (session_span: the window minus its padding, or `start`/`end`), since a
+    capture holds what happened before it was collected:
+      - collected before the session started: cannot hold it, dropped
+      - collected after it ended: can hold all of it; the soonest after is
+        the likeliest (the rule Avatar's issue-time pick uses)
+      - collected while it ran: holds at most its start; the latest first
+      - no capture time in the folder name: last
+    Within one capture, its rolling part last written soonest after the window.
+    """
+    s_lo, s_hi = session_span(lo, hi, start, end)
+
+    def key(s: LogSegment):
+        captured = s.start if s.end_from == "capture folder name" else None
+        written = datetime.fromtimestamp(os.path.getmtime(s.path)) if os.path.exists(s.path) else s.start
+        if captured is None:
+            group, when = 2, 0.0
+        elif captured >= s_hi:
+            group, when = 0, captured.timestamp()
+        else:
+            group, when = 1, -captured.timestamp()
+        return (group, when, written < hi, written)
+    keep = [s for s in raw if not (s.end_from == "capture folder name" and s.start < s_lo)]
+    return sorted(keep, key=key)
+
+
+def session_span(lo: datetime, hi: datetime, start: Optional[datetime] = None,
+                 end: Optional[datetime] = None) -> tuple[datetime, datetime]:
+    """The session itself inside its window: the window minus WINDOW_PAD on
+    each side, unless the session's own start/end are known."""
+    s_lo = start or (lo + WINDOW_PAD)
+    s_hi = end or (hi - WINDOW_PAD)
+    return (s_lo, s_hi) if s_hi > s_lo else (lo, hi)
+
+
+def covers_session(hits: list[LogSegment], s_lo: datetime, s_hi: datetime) -> bool:
+    """Whether any overlapping log reaches the session itself, not only the
+    margin padded around it (a log that ends as standby begins covers the
+    window "partially" yet holds nothing of the standby)."""
+    return any(h.overlaps(s_lo, s_hi) for h in hits)
+
+
+def outside_session_note(hits: list[LogSegment], s_lo: datetime, s_hi: datetime) -> str:
+    first = min(h.start for h in hits)
+    ends = [h.end for h in hits if h.end is not None]
+    last = max(ends) if ends else None
+    session = f"the session ({_fmt(s_lo)} → {_fmt(s_hi)[11:]})"
+    if last is not None and last <= s_lo:
+        return (f"The driver log ends at {_fmt(last)}, before {session} starts: only the "
+                "margin before it is logged, nothing of the standby itself.")
+    if first >= s_hi:
+        return (f"The driver log starts at {_fmt(first)}, after {session} ended: only the "
+                "margin after it is logged, nothing of the standby itself.")
+    return f"The driver log does not reach {session}, only the margin around it."
+
+
+def check_driver_log(path: str, device: str, window_start: str, window_end: str,
+                     utc_offset: Optional[int] = None, log_clock: Optional[int] = None) -> dict:
     """
     Whether one driver log covers a time point's window, and what time span
     each overlapping file covers and where that span was read from. For the
-    page to show under a path the user typed or picked.
+    page to show under a path the user typed or picked. `utc_offset` is the
+    session's (TimePoint.utc_offset_minutes): logs in another clock are
+    compared on the report's. With no decoded log covering a Wi-Fi window,
+    the Wi-Fi driver ETLs that may hold it are listed ("etl").
     """
     lo = datetime.strptime(window_start, "%m/%d/%Y %H:%M:%S")
     hi = datetime.strptime(window_end, "%m/%d/%Y %H:%M:%S")
     index, warnings = discover_driver_logs(path)
     segments = _anchored(index.get(device, []), lo.date())
-    coverage, hits = coverage_of(segments, lo, hi)
+    coverage, hits, note = _align(segments, lo, hi, utc_offset, log_clock)
+    # A log that reaches only the margin padded around the session holds
+    # nothing of the standby: reported as not covering it, with why.
+    gap = ""
+    s_lo, s_hi = session_span(lo, hi)
+    if hits and not covers_session(hits, s_lo, s_hi):
+        gap = outside_session_note(hits, s_lo, s_hi)
+        coverage, hits = "none", []
+    etls = []
+    if coverage == "none" and device == ssa.DEVICE_WIFI:
+        etls = etl_candidates(index.get(RAW_ETL_KEY, []), lo, hi)
+        if etls:
+            coverage = "etl"
+    shown = in_report_clock(segments, utc_offset, log_clock)
     return {
         "coverage": coverage,
         "files": [s.describe() for s in hits],
+        "etl_candidates": [{"file": os.path.basename(s.path), "path": s.path,
+                            "captured": _fmt(s.start), "captured_from": s.end_from}
+                           for s in etls[:MAX_ETL_DECODES]],
+        "clock_note": note,
+        "gap_note": gap,
         # When nothing overlaps, the span the log does cover says how far off it is.
-        "log_span": ({"start": _fmt(segments[0].start), "end": _fmt(segments[-1].end)}
-                     if segments else None),
-        "warnings": warnings,
+        "log_span": ({"start": _fmt(shown[0].start), "end": _fmt(shown[-1].end)}
+                     if shown else None),
+        "warnings": warnings if not etls else [],
     }
 
 
@@ -455,6 +901,19 @@ def _iter_bt_hci(seg: LogSegment) -> Iterator[tuple[Optional[datetime], str]]:
             yield dt, (line[:m.start()] + line[m.end():]).strip(" -:|\t")
 
 
+def _iter_bt_dated(seg: LogSegment) -> Iterator[tuple[Optional[datetime], str]]:
+    """Yield (timestamp, message) for each line of a dated BT HCI log; the
+    "[cpu]pid.tid::" prefix and the timestamp are dropped from the message."""
+    with open(seg.path, "r", encoding="utf-8", errors="replace") as fh:
+        for raw in fh:
+            line = raw.rstrip("\r\n")
+            m = _BT_DATED_TS.match(line)
+            if not m:
+                yield None, line
+                continue
+            yield datetime.strptime(m.group(1), _WIFI_ETL_FMT), line[m.end():]
+
+
 def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_path: str) -> dict:
     """
     Copy every line logged in [lo, hi] into `out_path`, written in the decoded
@@ -464,7 +923,7 @@ def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_pa
     kept = 0
     first = last = None
     sources = []
-    readers = {"wrt_wifilog": _iter_wifilog, "bt_hci": _iter_bt_hci}
+    readers = {"wrt_wifilog": _iter_wifilog, "bt_hci": _iter_bt_hci, "bt_hci_dated": _iter_bt_dated}
     with open(out_path, "w", encoding="utf-8", newline="\n") as out:
         for seg in sorted(_anchored(segments, lo.date()), key=lambda s: s.start):
             reader = readers.get(seg.kind, _iter_wifi_etl)
@@ -476,6 +935,9 @@ def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_pa
                     if in_window and msg:
                         out.write(msg + "\n")
                     continue
+                # A log in another clock is cut and written on the report's,
+                # so the agent's timestamps match the Sleep Study's.
+                dt = dt + seg.shift
                 if dt > hi:
                     break
                 in_window = dt >= lo
@@ -510,6 +972,10 @@ class TimePoint:
     window_start: Optional[datetime] = None
     window_end: Optional[datetime] = None
     window_truncated: bool = False
+    # The session's local time minus UTC, from the report: start/end and the
+    # window are on this clock, and a log on another is shifted onto it.
+    utc_offset_minutes: Optional[int] = None
+    log_clock_note: str = ""
     status: str = ""
     coverage: str = ""
     message: str = ""
@@ -518,6 +984,9 @@ class TimePoint:
     issue_description: str = ""
     driver_log_path: str = ""     # suggested by plan(), confirmed by the user
     driver_log_files: list = field(default_factory=list)   # LogSegment.describe() of the hits
+    # The Wi-Fi driver ETLs the plan would decode for this point, likeliest
+    # first (shown on the page; the run looks them up again under the path).
+    etl_candidates: list = field(default_factory=list)
     excerpt_path: str = ""
     excerpt_lines: int = 0
     driver_log_sources: list = field(default_factory=list)
@@ -543,6 +1012,10 @@ class TimePoint:
         for key in ("start", "end", "window_start", "window_end"):
             d[key] = _fmt(d[key])
         d["issue_time"] = _fmt(self.issue_time)
+        # The clock every time of this point is shown in: the customer
+        # machine's, as the report records it.
+        d["utc_offset_label"] = (_fmt_offset(self.utc_offset_minutes)
+                                 if self.utc_offset_minutes is not None else "")
         d["device_label"] = DEVICE_LABELS.get(self.device, self.device)
         d["html_verdict"] = html_verdict(self.wake_evidence or {})
         d["short_device_wakes"] = short_device_wakes(self.wake_evidence or {})
@@ -1265,8 +1738,10 @@ def render_point_finding(p: dict) -> str:
         '</article>',
         '<details class="ss-point-details"><summary>Evidence and full analysis</summary>',
         '',
-        f'**Window:** {esc(p.get("window_start"))} → {esc(p.get("window_end"))}  ',
+        f'**Window:** {esc(p.get("window_start"))} → {esc(p.get("window_end"))}'
+        + (f' ({esc(p.get("utc_offset_label"))}, customer clock)' if p.get("utc_offset_label") else "") + '  ',
         f'**Driver log:** `{esc(driver_files)}`  ',
+        *([f'**Time zone:** {esc(p.get("log_clock_note"))}  '] if p.get("log_clock_note") else []),
         f'**DRIPS:** SW {esc(drip_label)} · HW {esc(_pct(p.get("hw_drip_pct")))} · 80% target',
         '',
         '<div class="ss-point-evidence-grid">',
@@ -1408,10 +1883,30 @@ def _select_uncached(html_path: str, drip_threshold: float, max_points: int, per
     )
     raw_by_id = {s.get("SessionId"): s for s in payload.get("ScenarioInstances") or []}
     points = select_time_points(collected["sessions"], max_points, per_device)
+    report_offset = (payload.get("ReportInformation") or {}).get("UtcOffset")
     for p in points:
         p.sleep_summary = _sleep_summary(p, raw_by_id.get(p.session_id))
         p.wake_evidence = _wake_evidence(raw_by_id.get(p.session_id), p.device)
+        p.utc_offset_minutes = session_utc_offset(raw_by_id.get(p.session_id), report_offset)
     return collected, points, _system_sessions(payload, drip_threshold)
+
+
+def session_utc_offset(raw: Optional[dict], report_offset=None) -> Optional[int]:
+    """
+    A session's local time minus UTC, in minutes. The report stamps every
+    session both ways (EntryTimestampLocal / EntryTimestamp), which also
+    follows a DST change inside the report; its UtcOffset (taken when the
+    report was generated) is the fallback.
+    """
+    if raw:
+        local = ssa.parse_local_timestamp(raw.get("EntryTimestampLocal") or "")
+        utc = ssa.parse_local_timestamp(raw.get("EntryTimestamp") or "")
+        if local is not None and utc is not None:
+            return int(round((local - utc).total_seconds() / 60))
+    try:
+        return int(report_offset) if report_offset is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _system_sessions(payload: dict, drip_threshold: float) -> dict:
@@ -1497,15 +1992,37 @@ def plan(
             p.status = STATUS_NOT_COVERED
             p.message = "The report gives no readable start time for this session."
         else:
-            p.coverage, hits = coverage_of(log_index.get(p.device, []),
-                                           p.window_start, p.window_end)
+            p.coverage, hits, p.log_clock_note = _align(
+                log_index.get(p.device, []), p.window_start, p.window_end, p.utc_offset_minutes)
+            s_lo, s_hi = session_span(p.window_start, p.window_end, p.start, p.end)
+            margin_only = bool(hits) and not covers_session(hits, s_lo, s_hi)
+            if margin_only:
+                gap = outside_session_note(hits, s_lo, s_hi)
+                hits, p.coverage = [], "none"
+            etls = (etl_candidates(log_index.get(RAW_ETL_KEY, []), p.window_start, p.window_end,
+                                   p.start, p.end)
+                    if not hits and p.device == ssa.DEVICE_WIFI else [])
             if hits:
                 p.driver_log_path = hits[0].path
                 p.driver_log_files = [s.describe() for s in hits]
+            elif etls:
+                # Decoded when the point runs: decoding takes minutes, and the
+                # plan is the quick step where a person checks the picks. The
+                # path is the folder searched, not the first ETL, so the run
+                # can still fall back to the candidates in sibling captures.
+                p.coverage = "etl"
+                p.driver_log_path = search_root
+                p.etl_candidates = [{"file": os.path.basename(s.path), "path": s.path,
+                                     "captured": _fmt(s.start), "captured_from": s.end_from}
+                                    for s in etls[:MAX_ETL_DECODES]]
+                p.message = (f"Wi-Fi driver ETL {os.path.basename(etls[0].path)} is decoded "
+                             "when this point is analysed.")
             else:
                 p.status = STATUS_NO_LOG
                 p.message = (f"No {DEVICE_LABELS[p.device]} driver log under the report's "
                              "folder covers this window; choose one.")
+                if margin_only:
+                    p.message = f"{gap} Choose a driver log that covers the standby."
     return {
         "source": html_path,
         "search_root": search_root,
@@ -1524,8 +2041,53 @@ def _head(p: TimePoint) -> str:
             f"{_fmt(p.window_start)} → {_fmt(p.window_end)}")
 
 
+# Decodes in progress, by ETL path. A decode cannot be interrupted (share
+# copies, tracefmt), so a run that is paused or whose page goes away leaves it
+# running; the run that resumes waits for that decode instead of starting a
+# second one of the same file.
+_DECODES_IN_FLIGHT: dict = {}
+_DECODES_LOCK = threading.Lock()
+
+
+def _decode_steps(etl_path: str, head: str):
+    """decode_wifi_etl() on a worker thread, yielding a progress step every
+    20 s so a page following the stream sees it is still working. A decode of
+    the same ETL already running is joined, not repeated. Returns
+    (decoded log, error) through `yield from`."""
+    key = os.path.normcase(os.path.abspath(etl_path))
+    with _DECODES_LOCK:
+        job = _DECODES_IN_FLIGHT.get(key)
+        joined = job is not None
+        if job is None:
+            job = {"done": threading.Event(), "value": None}
+            _DECODES_IN_FLIGHT[key] = job
+
+            def work():
+                try:
+                    job["value"] = decode_wifi_etl(etl_path)
+                except Exception as exc:      # noqa: BLE001 -- reported to the user
+                    job["value"] = (None, f"{type(exc).__name__}: {exc}")
+                finally:
+                    with _DECODES_LOCK:
+                        _DECODES_IN_FLIGHT.pop(key, None)
+                    job["done"].set()
+
+            threading.Thread(target=work, daemon=True).start()
+    if joined:
+        yield {"type": "step", "content": (
+            f"{head}: `{os.path.basename(etl_path)}` is already being decoded "
+            "(an earlier run of this point); waiting for it…")}
+    waited = 0
+    while not job["done"].wait(20):
+        waited += 20
+        yield {"type": "step", "content": (
+            f"{head}: still decoding `{os.path.basename(etl_path)}` ({waited} s)…")}
+    return job["value"] or (None, "The decoder stopped without a result.")
+
+
 def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str,
-                   agent_factory, max_steps: int, on_agent=None) -> Iterator[dict]:
+                   agent_factory, max_steps: int, on_agent=None,
+                   log_clock: Optional[int] = None) -> Iterator[dict]:
     """
     Analyse one time point in p.driver_log_path. Yields "step" events for
     the pipeline's own progress and "agent_step" events carrying each step
@@ -1551,12 +2113,69 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
             log_warnings.extend(warns)
             for w in warns:
                 yield {"type": "step", "content": f"⚠️ {w}"}
-        segments = indexed[p.driver_log_path].get(p.device, [])
-        p.coverage, hits = coverage_of(segments, p.window_start, p.window_end)
-        if p.coverage == "none":
+        index = indexed[p.driver_log_path]
+        segments = index.get(p.device, [])
+        p.coverage, hits, p.log_clock_note = _align(
+            segments, p.window_start, p.window_end, p.utc_offset_minutes, log_clock)
+        s_lo, s_hi = session_span(p.window_start, p.window_end, p.start, p.end)
+        reaches = lambda hs: covers_session(hs, s_lo, s_hi)
+        # No decoded log reaches the session (none at all, or one covering
+        # only the margin around it): decode the Wi-Fi driver ETLs that may,
+        # likeliest first, until one does.
+        decode_errors = []
+        raw_etls = index.get(RAW_ETL_KEY, []) if p.device == ssa.DEVICE_WIFI else []
+        candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, p.start, p.end)
+                      if raw_etls else [])
+        if not reaches(hits) and candidates:
+            for etl in candidates[:MAX_ETL_DECODES]:
+                name = os.path.basename(etl.path)
+                yield {"type": "step", "content": (
+                    f"{head}: decoding Wi-Fi driver ETL `{name}` (captured {_fmt(etl.start)})…")}
+                log_path, error = yield from _decode_steps(etl.path, head)
+                index[RAW_ETL_KEY] = [s for s in index.get(RAW_ETL_KEY, []) if s.path != etl.path]
+                if not log_path:
+                    decode_errors.append(error)
+                    yield {"type": "step", "content": f"⚠️ {error}"}
+                    continue
+                seg = _decoded_log_segment(log_path, alone=False)
+                if seg is None:
+                    decode_errors.append(f"{name}: the decoded log has no timestamp this tool can read.")
+                    continue
+                index.setdefault(ssa.DEVICE_WIFI, []).append(seg)
+                segments = index[ssa.DEVICE_WIFI]
+                p.coverage, hits, p.log_clock_note = _align(
+                    segments, p.window_start, p.window_end, p.utc_offset_minutes, log_clock)
+                yield {"type": "step", "content": (
+                    f"{head}: decoded `{name}` covers {_fmt(seg.start)} → {_fmt(seg.end)} "
+                    f"({_fmt_offset(seg.clock)})"
+                    + ("; it holds this session." if reaches(hits) else "; not this session."))}
+                if reaches(hits):
+                    break
+        if p.coverage != "none" and not reaches(hits):
+            # Cutting the margin alone would hand the agent the minutes before
+            # (or after) standby as if they were the session.
             p.status = STATUS_NOT_COVERED
-            p.message = "Driver log 沒有涵蓋這段時間 (the driver log does not cover this window)."
+            p.message = outside_session_note(hits, s_lo, s_hi)
+            if decode_errors:
+                p.message += " " + " ".join(decode_errors)
+            p.coverage = "none"
+        elif p.coverage == "none":
+            p.status = STATUS_NOT_COVERED
+            p.message = "The driver log does not cover this window."
+            if decode_errors:
+                p.message += " " + " ".join(decode_errors)
+            elif raw_etls and not candidates and not segments:
+                p.message += (" Every Wi-Fi driver ETL here was captured before this session "
+                              "started, so none can hold it.")
+            elif any(s.clock is not None for s in segments) or p.utc_offset_minutes is None:
+                p.message += " Its times were compared on the report's clock."
+            else:
+                p.message += (" A log decoded on another machine is stamped in that machine's "
+                              "clock; check it is in the report's time zone "
+                              f"({_fmt_offset(p.utc_offset_minutes)}).")
         else:
+            if p.log_clock_note:
+                yield {"type": "step", "content": f"🕐 {p.log_clock_note}"}
             p.driver_log_files = [h.describe() for h in hits]
             p.excerpt_path = os.path.join(
                 out_dir, f"point{p.index:02d}_session{p.session_id}_{p.device}.log")
@@ -1567,7 +2186,10 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
             p.excerpt_lines = ex["lines"]
             p.driver_log_sources = ex["sources"]
             if p.coverage == "partial":
-                p.message = "The driver log covers only part of this window."
+                p.message = (f"The driver log covers only part of this window: "
+                             f"{_fmt(ex['first'])} → {_fmt(ex['last'])[11:]} of "
+                             f"{_fmt(p.window_start)} → {_fmt(p.window_end)[11:]}."
+                             if ex["lines"] else "The driver log covers only part of this window.")
             if not ex["lines"]:
                 p.status = STATUS_NO_LINES
                 p.message = "The driver log covers this window but logged nothing in it."
@@ -1600,7 +2222,14 @@ def _agent_steps(p: TimePoint, agent_factory, max_steps: int, on_agent) -> Itera
         if kind == "step":
             yield {"type": "agent_step", "step": value}
         elif kind == "ok":
-            p.status = STATUS_ANALYZED
+            # agent.chat() reports a provider failure or an exhausted reasoning
+            # budget in its return value instead of raising, and that text must
+            # not reach the combined report as a driver's conclusion.
+            if p.agent_result_type == "error":
+                p.status = STATUS_AGENT_FAILED
+                p.message = f"Agent failed: {p.agent_report or 'no reason given'}"
+            else:
+                p.status = STATUS_ANALYZED
             return
         else:
             p.status = STATUS_AGENT_FAILED
@@ -1621,10 +2250,14 @@ def run_point(
     max_steps: int = 6,
     on_agent: Optional[Callable[[object], None]] = None,
     point_template: Optional[str] = None,
+    log_clock: Optional[int] = None,
 ) -> Iterator[dict]:
     """
     Analyse the time point `index` (as plan() numbered it) in `driver_log`
-    ("" for none), and yield events:
+    ("" for none), and yield events. `driver_log` may be a Wi-Fi driver ETL
+    (or its capture folder): an undecoded one is decoded first. `log_clock`
+    (minutes east of UTC) says which clock a decoded log is in, when the
+    person knows it; otherwise it is the recorded or guessed one.
 
       {"type": "start",      "data": <TimePoint dict>} the point, before any work
       {"type": "step",       "content": <markdown>}   pipeline progress
@@ -1646,7 +2279,8 @@ def run_point(
         yield {"type": "start", "data": p.to_dict()}
         out_dir = out_dir or tempfile.mkdtemp(prefix="sleepstudy_")
         os.makedirs(out_dir, exist_ok=True)
-        yield from _analyze_point(p, {}, [], out_dir, agent_factory, max_steps, on_agent)
+        yield from _analyze_point(p, {}, [], out_dir, agent_factory, max_steps, on_agent,
+                                  log_clock=log_clock)
         data = p.to_dict()
         data["markdown"] = render_point_markdown(data)
         data["finding"] = render_point_finding(data)
@@ -1852,6 +2486,52 @@ def _stats_tables(stats: dict, total: int) -> list[str]:
                 f"{len(v['sessions'])}/{total} ({100 * len(v['sessions']) // max(total, 1)}%) |"
                 for name, v in rows]
     return out
+
+
+# ── Chat before any driver log is read ─────────────────────────────────────────
+# A question asked on the NW page before a time point has been analysed has
+# only the Sleep Study report to go on. It is answered from the report's
+# evidence, not by the log agent: that agent would read the report HTML as if
+# it were a driver log.
+REPORT_CHAT_PROMPT = """You answer questions about one Windows Sleep Study report, for Modern Standby battery drain on Intel wireless (Wi-Fi / Bluetooth) devices.
+
+Only the Sleep Study report has been read so far; no driver log has been analysed in this conversation. The evidence below is everything the report says about its bad sessions (on battery, DRIPS below 80%): each session's times on the customer machine's clock (its UTC offset is given), its SW / HW DRIPS, its RED top blockers, the scenario the report points to, the OS jobs and wake reasons that woke the wireless device, the network activity by app, and the sessions blocked outside the wireless driver ("system").
+
+Answer from that evidence only, concisely, in the user's language. Quote the numbers it gives; do not invent any. When a question needs the driver log (why the driver stayed in D0, which OS command or packet woke it, firmware, roams, the driver's own wake reason), say what the report shows and that the driver log has not been checked yet: tick the session(s) on the plan card and press Analyse, then ask again. If earlier driver-log conclusions are listed, use them and say they come from the driver log."""
+
+
+def report_context(html_path: str, findings: Optional[dict] = None, *,
+                   drip_threshold: float = DRIP_THRESHOLD, max_points: int = MAX_TIME_POINTS,
+                   per_device: int = PER_DEVICE_LIMIT) -> str:
+    """
+    The Sleep Study report's evidence as text for REPORT_CHAT_PROMPT: the
+    bad sessions, each time point's own evidence and the system sessions.
+    `findings` (point index -> driver-log conclusion) adds what driver logs
+    already concluded, for a conversation analysed before excerpts were kept.
+    """
+    collected, points, system = _select(html_path, drip_threshold, max_points, per_device)
+    out = [f"Report: {os.path.basename(html_path)}",
+           f"Bad sessions on battery: {system['bad_total']} "
+           f"({system['wireless']} with a wireless RED top blocker, {system['system']} system)."]
+    for p in points:
+        tz = _fmt_offset(p.utc_offset_minutes) if p.utc_offset_minutes is not None else "customer clock"
+        out += ["",
+                f"Time point {p.index}: session {p.session_id}, {DEVICE_LABELS.get(p.device, p.device)}, "
+                f"{_fmt(p.start)} -> {_fmt(p.end)} ({p.duration}; customer clock {tz})",
+                f"SW DRIPS {_pct(p.sw_drip_pct)}, HW DRIPS {_pct(p.hw_drip_pct)}",
+                "RED top blockers: " + "; ".join(
+                    f"{b.get('name', '')} ({b.get('active_time_pct', 0)}% active)" for b in p.blockers or []),
+                f"Sleep Study points to: {html_verdict(p.wake_evidence or {})}"]
+        out += [line.strip() for line in wake_evidence_lines(p.wake_evidence or {})]
+        out += [line.strip() for line in app_activity_lines(p.wake_evidence or {})]
+        if findings and p.index in findings:
+            out.append("Driver-log conclusion (already analysed): "
+                       + _short_detail(findings[p.index], 900))
+    if system.get("groups"):
+        out += ["", "System sessions, by top blocker: " + "; ".join(
+            f"{g['blocker']} ({len(g['sessions'])} session(s), lowest SW DRIPS {_pct(g['worst_sw'])})"
+            for g in system["groups"])]
+    return "\n".join(out)
 
 
 # Appended to the editable sleepstudy_summary prompt: the report puts the

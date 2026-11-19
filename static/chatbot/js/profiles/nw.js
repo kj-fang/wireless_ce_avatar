@@ -35,7 +35,7 @@
 
     // Picking a report loads it, as picking a log does on the other chatbots.
     async function browseSleepstudy() {
-        if (await browseInto('sleepstudy-path-input')) await setSleepstudy();
+        if (await browseInto('sleepstudy-path-input')) await setSleepstudy(true);
     }
 
     // ── History hooks (called by features/history.js) ────────────────
@@ -94,11 +94,29 @@
     }
 
     // ── Step 1: load the report and list its time points ─────────────
-    async function setSleepstudy() {
+    // A report loaded (a new one, or the same one again) starts from a clean
+    // page: the previous report's plan card, point results, run bar and
+    // time points go, and so does its conversation. A run of the previous
+    // report that is still analysing carries on in its own History
+    // conversation; it no longer draws here (isSleepstudyRunVisible).
+    function clearSleepstudyView() {
+        ssRun = null;
+        planPoints = {};
+        window.__feedbackConversationId = '';
+        firstRoundSent = false;
+        window.__viewingSavedConv = false;
+        document.getElementById('chat-window').innerHTML = '';
+        if (typeof setSendBtnSendMode === 'function') setSendBtnSendMode();
+    }
+
+    // `force` (Enter, or a file picked) loads even the report already loaded,
+    // for a clean run of it; the box's change event leaves a report already
+    // loaded alone, since it also fires when the box loses focus after Enter.
+    async function setSleepstudy(force) {
         const path = document.getElementById('sleepstudy-path-input').value.trim();
         const statusEl = document.getElementById('sleepstudy-status');
         if (!path) { showStatus(statusEl, 'Please enter a sleepstudy file path.', 'err'); return; }
-        if (path === nwLoadedPath) return;
+        if (!force && path === nwLoadedPath) return;
         nwLoadedPath = path;
 
         statusEl.className = 'log-status'; statusEl.textContent = 'Loading…'; statusEl.style.display = 'block';
@@ -122,10 +140,8 @@
             // in the box.
             showStatus(statusEl, '✔ Sleep Study loaded', 'ok', 3000);
             if (data.skills) renderSkills(data.skills);
-            window.__feedbackConversationId = '';
-            firstRoundSent = false;
-            window.__viewingSavedConv = false;
-            document.getElementById('chat-window').innerHTML = '';
+            clearSleepstudyView();
+            if (typeof loadHistoryList === 'function') loadHistoryList();
             if (window.IpsPrompt) { await window.IpsPrompt.handleSetLog(data); }
             await planSleepstudy(path);
         } catch (e) {
@@ -168,13 +184,35 @@
         const path = (document.getElementById(`ss-drv-${index}`) || {}).value || '';
         if (!path.trim()) {
             el.style.color = '#b45309';
-            el.textContent = '⚠ No driver log found for this time point — choose one, or leave empty to skip.';
+            // The plan's own reason when it has one (e.g. the log under the
+            // report's folder stops before this standby began).
+            const why = ((planPoints[index] || {}).message) || '';
+            el.textContent = why
+                ? `⚠ ${why} Or leave it empty to skip.`
+                : '⚠ No driver log found for this time point — choose one, or leave it empty to skip.';
             return;
         }
         if (!check) { el.textContent = ''; return; }
         if (check.error) {
             el.style.color = '#b91c1c';
             el.textContent = '✘ ' + check.error;
+            return;
+        }
+        // A Wi-Fi driver ETL with no decoded log yet: it is decoded when the
+        // point runs (minutes, so not while the plan is being checked).
+        // The box itself shows both clocks of a converted log, so only a note
+        // that asks the person to check something stays beneath it: a time
+        // zone that was not recorded and lined up only after trying others.
+        const clockNote = check.clock_note && !/^Decoded log is in /.test(check.clock_note)
+            ? `<div class="ss-coverage-warning">🕐 ${escapeHtml(check.clock_note)}</div>` : '';
+        if (check.coverage === 'etl') {
+            const etls = check.etl_candidates || [];
+            const first = etls[0] || {file: path.split(/[\\/]/).pop(), captured: ''};
+            el.style.color = '#0369a1';
+            el.innerHTML = `<div class="ss-coverage-entry"><span>🗜 Wi-Fi driver ETL, decoded when this point is analysed</span>` +
+                `<small>${escapeHtml(first.file)}${first.captured ? ' · captured ' + escapeHtml(first.captured) : ''}` +
+                `${etls.length > 1 ? ` · ${etls.length - 1} more to try if it does not cover the window` : ''}</small></div>` +
+                (check.gap_note ? `<div class="ss-coverage-warning">${escapeHtml(check.gap_note)}</div>` : '');
             return;
         }
         const files = check.files || [];
@@ -185,17 +223,53 @@
                 el.textContent = '✘ ' + check.warnings.join(' ');
                 return;
             }
+            if (check.gap_note) {
+                // It reaches only the margin around the session, not the standby.
+                el.textContent = '✘ ' + check.gap_note;
+                return;
+            }
             const span = check.log_span ? ` It covers ${check.log_span.start} → ${check.log_span.end}.` : '';
             el.textContent = '✘ Driver log 沒有涵蓋這段時間 (this log does not cover the window).' + span;
             return;
         }
         el.style.color = check.coverage === 'full' ? '#15803d' : '#b45309';
+        // Every time shown is on the customer's clock (the report's). A log
+        // stamped in another clock (decoded elsewhere) shows the converted
+        // span first and its own times beneath, so both can be checked.
+        const customer = ((planPoints[index] || {}).utc_offset_label) || '';
+        const tag = (text, cls) => text ? `<i class="ss-tz-tag ${cls || ''}">${escapeHtml(text)}</i>` : '';
+        // "MM/DD/YYYY HH:MM:SS → HH:MM:SS" when both ends fall on one day.
+        // The date and the clock time are each kept whole: a narrow box
+        // breaks the line between them or at the arrow, never inside one.
+        const whole = s => String(s).split(' ').filter(Boolean)
+            .map(part => `<span class="ss-tz-span">${escapeHtml(part)}</span>`).join(' ');
+        const span = (a, b) => {
+            a = String(a || ''); b = String(b || '');
+            const sameDay = a.slice(0, 10) && a.slice(0, 10) === b.slice(0, 10);
+            return `${whole(a)} → ${whole(sameDay ? b.slice(11) : b)}`;
+        };
         el.innerHTML = files.map(f => {
             const fileName = String(f.file || '').split(/[\\/]/).pop();
-            return `<div class="ss-coverage-entry"><span>⏱ ${escapeHtml(f.start)} → ${escapeHtml(f.end)}</span>` +
+            if (f.shifted) {
+                // Both clocks, one per row, the zone first so the rows line up:
+                // the customer's (converted, what the report says) above the
+                // log's own, with the shift between them.
+                return `<div class="ss-coverage-entry shifted"><div class="ss-tz-grid">` +
+                    tag(`${customer || 'customer'} · customer`, 'customer') +
+                    `<span class="ss-tz-time now">${span(f.start, f.end)}</span>` +
+                    // "≈" marks a log clock that was assumed, not recorded.
+                    (f.log_clock_guessed
+                        ? `<i class="ss-tz-tag log" title="Time zone assumed (not recorded with the log)">≈ ${escapeHtml(f.log_clock)} · log</i>`
+                        : tag(`${f.log_clock} · log`, 'log')) +
+                    `<span class="ss-tz-time was">${span(f.log_start, f.log_end)}` +
+                    `<b class="ss-tz-shift">${escapeHtml(f.shift)}</b></span>` +
+                    `</div><small>${escapeHtml(fileName)}</small></div>`;
+            }
+            return `<div class="ss-coverage-entry"><span>⏱ ${span(f.start, f.end)}` +
+                   `${tag(customer ? `${customer} · customer` : '', 'muted')}</span>` +
                    `<small>${escapeHtml(fileName)}</small></div>`;
         }).join('') + (check.coverage === 'full'
-            ? '' : '<div class="ss-coverage-warning">⚠ Driver log covers only part of this window.</div>');
+            ? '' : '<div class="ss-coverage-warning">⚠ Driver log covers only part of this window.</div>') + clockNote;
     }
 
     async function checkPlanLog(index) {
@@ -207,7 +281,8 @@
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({path: path, device: p.device,
-                                      window_start: p.window_start, window_end: p.window_end})
+                                      window_start: p.window_start, window_end: p.window_end,
+                                      utc_offset_minutes: p.utc_offset_minutes})
             });
             renderPlanLogInfo(index, await res.json());
         } catch (e) {
@@ -267,7 +342,10 @@
             lines.push('No wireless session to check against a driver log.');
         }
         // The driver log search only matters when there is something to check.
-        if (points.length) (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${w}`));
+        // Escaped: a warning names file patterns (WiFiLog--*.LOG, WifiDriver*.etl)
+        // whose asterisks markdown would otherwise turn into italics.
+        const mdEscape = s => String(s).replace(/([\\`*_[\]])/g, '\\$1');
+        if (points.length) (plan.warnings || []).forEach(w => lines.push(`> ⚠️ ${mdEscape(w)}`));
 
         const isSelected = (p) => locked
             ? (saved.selected ? saved.selected.includes(p.index) : true)
@@ -307,14 +385,15 @@
                            placeholder="Driver log for this time point…"
                            onchange="checkPlanLog(${p.index})" style="min-width:0;">
                     <button class="btn-browse" onclick="browsePlanLog(${p.index})"
-                            ${locked ? 'disabled' : ''} title="Browse for a WiFiLog or a decoded *.hci.txt">📁</button>
+                            ${locked ? 'disabled' : ''} title="Browse for a WiFiLog, a Wi-Fi driver ETL (WifiDriver*.etl) or its decoded log, or a decoded *.hci.txt">📁</button>
                 </div>
                 <div id="ss-drv-info-${p.index}" style="font-size:0.72rem;margin-top:3px;line-height:1.4;overflow-wrap:anywhere;"></div>`;
             return `<tr class="ss-plan-row" data-index="${p.index}" style="${picked ? '' : 'opacity:0.58;'}">
                 <td style="padding:4px 6px;vertical-align:top;">${p.index}</td>
                 <td style="padding:4px 6px;vertical-align:top;">
                     <div class="ss-plan-session-title"><b>Session ${escapeHtml(String(p.session_id))}</b><span>${escapeHtml(p.device_label)}</span></div>
-                    <div class="ss-plan-session-meta"><span>${when}</span><b>SW ${sw}</b></div>${verdict}${status}</td>
+                    <div class="ss-plan-session-meta"><span>${when}</span>${p.utc_offset_label
+                        ? `<i class="ss-tz-tag" title="Times are the customer machine's local clock, as the Sleep Study report records them">${escapeHtml(p.utc_offset_label)} · customer</i>` : ''}<b>SW ${sw}</b></div>${verdict}${status}</td>
                 <td style="padding:4px 6px;vertical-align:top;">${logCell}</td>
             </tr>`;
         }).join('');
@@ -393,7 +472,9 @@
         }));
         points.forEach(p => {
             renderPlanLogInfo(p.index, p.driver_log_path
-                ? {coverage: p.coverage, files: p.driver_log_files || []} : null);
+                ? {coverage: p.coverage, files: p.driver_log_files || [],
+                   etl_candidates: p.etl_candidates || [],
+                   clock_note: p.log_clock_note || ''} : null);
         });
         scrollBottom();
 

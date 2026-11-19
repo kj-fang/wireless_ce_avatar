@@ -136,8 +136,28 @@ def resolve_cloud_skills_dir() -> Optional[str]:
 # --- Lookup helpers ------------------------------------------------------
 
 def find_latest_cloud_baseline_yaml() -> Tuple[Optional[Path], Optional[date]]:
-    """Latest dated Generic YAML in the local `cloud/` mirror."""
-    return find_latest_dated_yaml(local_cloud_baseline_dir())
+    """The Generic YAML the "cloud baseline" means, including the floor.
+
+    Three rungs, same ones `current_active_yaml()` climbs for the live agent:
+    the latest dated file in the local `cloud/` mirror, then the legacy
+    un-dated `generic_skills.yaml` beside it, then the bundled copy that
+    ships with the app (`bundled_yaml_path()`). Without this last rung, a
+    clean install that has never reached the share folder leaves the agent
+    running on the bundled skills while the skill editor -- which reads this
+    function, not `current_active_yaml()` -- insists no baseline exists at
+    all and sends the user to "connect to VPN" for something a VPN was never
+    needed for.
+    """
+    path, dt = find_latest_dated_yaml(local_cloud_baseline_dir())
+    if path is not None:
+        return (path, dt)
+    legacy = local_cloud_baseline_dir().parent / GENERIC_SKILLS_YAML_FILENAME
+    if legacy.exists():
+        return (legacy, None)
+    bundled = bundled_yaml_path()
+    if bundled.exists():
+        return (bundled, None)
+    return (None, None)
 
 
 def find_latest_user_yaml() -> Tuple[Optional[Path], Optional[date]]:
@@ -185,30 +205,20 @@ def current_active_yaml() -> Tuple[Optional[Path], Optional[date], str]:
     loaded right now. `effective_source` may differ from
     `get_active_source()` — when active="user" but no user file exists,
     cloud baseline is loaded and effective source is reported as "cloud".
+
+    The cloud side (dated mirror -> legacy un-dated file -> bundled copy)
+    lives entirely in `find_latest_cloud_baseline_yaml()` now, so this and
+    the skill editor resolve "the cloud baseline" the same way. Without that,
+    a clean install off-VPN had the agent here fall back to the bundled
+    skills while the editor's own lookup still came back empty and told the
+    user to connect to VPN for something a VPN was never needed for.
     """
     if get_active_source() == _ACTIVE_SOURCE_USER:
         u_path, u_date = find_latest_user_yaml()
         if u_path is not None:
             return (u_path, u_date, _ACTIVE_SOURCE_USER)
     c_path, c_date = find_latest_cloud_baseline_yaml()
-    if c_path is not None:
-        return (c_path, c_date, _ACTIVE_SOURCE_CLOUD)
-    # Next: legacy un-dated generic_skills.yaml directly under the local
-    # skills_config root (mirrors WiFi/BT/Linux's same-name fallback).
-    legacy = local_cloud_baseline_dir().parent / GENERIC_SKILLS_YAML_FILENAME
-    if legacy.exists():
-        return (legacy, None, _ACTIVE_SOURCE_CLOUD)
-    # Last resort: the copy that ships with the app. Everything above needs
-    # either the share folder or a file a user has already saved, so a clean
-    # install off-VPN reached none of them and the caller was handed None --
-    # at which point startup gave the Generic agent the WI-FI skills, and it
-    # went looking for WDI markers in a log with no driver lifecycle at all.
-    # A bundled file means "no Generic skills" cannot happen, so that
-    # substitution never has to.
-    bundled = bundled_yaml_path()
-    if bundled.exists():
-        return (bundled, None, _ACTIVE_SOURCE_CLOUD)
-    return (None, None, _ACTIVE_SOURCE_CLOUD)
+    return (c_path, c_date, _ACTIVE_SOURCE_CLOUD)
 
 
 # --- Cloud baseline refresh ---------------------------------------------

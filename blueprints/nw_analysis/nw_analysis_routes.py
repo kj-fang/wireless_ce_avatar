@@ -633,7 +633,9 @@ def sleepstudy_driver_check():
             path, data.get("device") or "wifi",
             data.get("window_start") or "", data.get("window_end") or "",
             utc_offset=_optional_minutes(data.get("utc_offset_minutes")),
-            log_clock=_optional_minutes(data.get("log_clock")))})
+            log_clock=_optional_minutes(data.get("log_clock")),
+            session_start=data.get("session_start") or "",
+            session_end=data.get("session_end") or "")})
     except Exception as exc:
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
@@ -1045,6 +1047,44 @@ def _chat_scope(points: list[dict], conversation_id: str) -> tuple[str, str]:
     return scope_path, "\n".join(lines)
 
 
+def _load_driver_scope(agent, scope_path: str, scope_note: str) -> str:
+    """
+    Point the agent's log tools at the analysed points' cut for this turn and
+    make its evidence come from that cut; returns an error, or "".
+
+    The engine scopes skill filtering on its first turn only (Segment1 + the
+    issue-time window), and NW's fetch_filtered_logs answers from its skill
+    cache before it reloads the log. A cut taken up mid-conversation -- after
+    a report-only answer, a History reopen, or more points analysed -- would
+    otherwise give the tools no scoped lines, or the previous cut's evidence.
+    So the cut is loaded here; when it is a different cut from the one the
+    caches were built on, they are dropped and the whole cut (it already is
+    the analysed windows, on the customer's clock) becomes the scope. The
+    note goes into the conversation itself, so the turn runs as a follow-up
+    and keeps the messages already there.
+    """
+    agent.current_log_path = scope_path
+    error = agent._ensure_raw_log_cache()
+    if error:
+        return error
+    if getattr(agent, "_nw_scope_path", "") != scope_path or not agent._scoped_log_lines:
+        agent._scoped_log_lines = list(agent._raw_log_cache)
+        agent._filter_cache_by_skill = {}
+        agent._assembled_entries_by_key = {}
+        agent._assembled_entries_no_ts = {}
+        agent._assembled_log_text = ""
+        agent._detail_cache = {}
+        agent._detail_query_seen = set()
+        agent._nw_scope_path = scope_path
+    if getattr(agent, "_nw_scope_note", "") != scope_note:
+        agent.conversation_history.append({"role": "user", "content": scope_note})
+        agent.conversation_history.append({"role": "assistant", "content": (
+            "Understood: my log tools read these sessions' driver-log cut, on the "
+            "customer's clock.")})
+        agent._nw_scope_note = scope_note
+    return ""
+
+
 def _earlier_exchanges(agent, limit: int = 6) -> str:
     """The conversation's last questions and answers, for a report-only answer."""
     picked = []
@@ -1205,11 +1245,9 @@ def chat():
                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
         # Driver log: the tools read the analysed points' cuts for this turn,
-        # and the agent is told which sessions they are when that changes.
+        # and the agent is told which sessions they are when that changes
+        # (_load_driver_scope, on the worker before agent.chat()).
         scope_path, scope_note = _chat_scope(excerpts, conversation_id) if excerpts else ("", "")
-        agent_message = user_message
-        if scope_note and getattr(agent, "_nw_scope_note", "") != scope_note:
-            agent_message = f"{scope_note}\n\nQuestion: {user_message}"
 
         import queue as _queue
         step_queue = _queue.Queue()
@@ -1228,12 +1266,13 @@ def chat():
             error_code = ""
             previous_log = agent.current_log_path
             try:
-                if scope_path:
-                    agent.current_log_path = scope_path
-                    agent._nw_scope_note = scope_note
                 try:
+                    if scope_path:
+                        scope_error = _load_driver_scope(agent, scope_path, scope_note)
+                        if scope_error:
+                            raise RuntimeError(f"Could not read the analysed driver log: {scope_error}")
                     result = agent.chat(
-                        agent_message,
+                        user_message,
                         max_steps=max_steps,
                         temperature=temperature,
                         step_callback=step_cb,

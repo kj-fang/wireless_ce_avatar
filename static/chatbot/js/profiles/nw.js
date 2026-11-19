@@ -282,6 +282,9 @@
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({path: path, device: p.device,
                                       window_start: p.window_start, window_end: p.window_end,
+                                      // The session's own ends: a capped window
+                                      // no longer ends 2 min after the session.
+                                      session_start: p.start, session_end: p.end,
                                       utc_offset_minutes: p.utc_offset_minutes})
             });
             renderPlanLogInfo(index, await res.json());

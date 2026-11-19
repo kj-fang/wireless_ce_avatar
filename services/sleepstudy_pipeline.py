@@ -242,13 +242,23 @@ def read_clock_sidecar(log_path: str) -> Optional[int]:
         return None
 
 
-def write_clock_sidecar(log_path: str, minutes: int) -> None:
+def write_clock_sidecar(log_path: str, minutes: int) -> bool:
+    """Record a decoded log's clock, atomically (a reader never sees half a
+    file). Written before the log itself is published (decode_wifi_etl)."""
+    target = log_path + _CLOCK_SIDECAR
+    tmp = target + ".partial"
     try:
-        with open(log_path + _CLOCK_SIDECAR, "w", encoding="utf-8") as fh:
+        with open(tmp, "w", encoding="utf-8") as fh:
             json.dump({"utc_offset_minutes": minutes,
                        "note": "clock of the decoded log's timestamps (decoding machine)"}, fh)
+        os.replace(tmp, target)
+        return True
     except OSError:
-        pass
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False
 
 
 def in_report_clock(segments: list[LogSegment], session_offset: Optional[int],
@@ -699,6 +709,10 @@ def decode_wifi_etl(etl_path: str) -> tuple[Optional[str], str]:
         cwd = os.getcwd()
         try:
             parser = WppParser(to_long_path(etl_path), False, False)
+            # The parser would copy its output straight to <etl>.log, where
+            # discovery and other points take any file of that name as a
+            # finished decode. It is published below instead, atomically.
+            parser.copy_parsed_log_to_orig_path = lambda: None
             parse_single_binary(parser)
         except Exception as exc:          # noqa: BLE001 -- reported to the user
             return None, f"Decoding {os.path.basename(etl_path)} failed: {type(exc).__name__}: {exc}"
@@ -712,16 +726,28 @@ def decode_wifi_etl(etl_path: str) -> tuple[Optional[str], str]:
             except OSError:
                 pass
 
-    log_path = etl_path + ".log"
-    if not os.path.exists(log_path):
-        parsed = os.path.join(parser.workspace, parser.parsed_txt_name) if parser else ""
-        if not parsed or not os.path.exists(parsed):
-            return None, f"Decoding {os.path.basename(etl_path)} produced no log."
-        log_path = _decoded_copy_path(etl_path)
-        os.makedirs(os.path.dirname(log_path), exist_ok=True)
-        shutil.copyfile(parsed, log_path)
-    write_clock_sidecar(log_path, local_utc_offset())
-    return log_path, ""
+    parsed = os.path.join(parser.workspace, parser.parsed_txt_name) if parser else ""
+    if not parsed or not os.path.exists(parsed):
+        return None, f"Decoding {os.path.basename(etl_path)} produced no log."
+    # Published whole: the text goes to a .partial name, its clock record is
+    # written, and only then is it renamed to the name readers accept. Next
+    # to the ETL when that folder is writable, else in the cache.
+    clock = local_utc_offset()
+    for log_path in (etl_path + ".log", _decoded_copy_path(etl_path)):
+        tmp = log_path + ".partial"
+        try:
+            os.makedirs(os.path.dirname(log_path), exist_ok=True)
+            shutil.copyfile(parsed, tmp)
+            if not write_clock_sidecar(log_path, clock):
+                raise OSError("could not record the decoded log's clock")
+            os.replace(tmp, log_path)
+            return log_path, ""
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    return None, f"Decoding {os.path.basename(etl_path)} worked, but the decoded log could not be written."
 
 
 def etl_candidates(raw: list[LogSegment], lo: datetime, hi: datetime,
@@ -786,7 +812,8 @@ def outside_session_note(hits: list[LogSegment], s_lo: datetime, s_hi: datetime)
 
 
 def check_driver_log(path: str, device: str, window_start: str, window_end: str,
-                     utc_offset: Optional[int] = None, log_clock: Optional[int] = None) -> dict:
+                     utc_offset: Optional[int] = None, log_clock: Optional[int] = None,
+                     session_start: str = "", session_end: str = "") -> dict:
     """
     Whether one driver log covers a time point's window, and what time span
     each overlapping file covers and where that span was read from. For the
@@ -797,19 +824,28 @@ def check_driver_log(path: str, device: str, window_start: str, window_end: str,
     """
     lo = datetime.strptime(window_start, "%m/%d/%Y %H:%M:%S")
     hi = datetime.strptime(window_end, "%m/%d/%Y %H:%M:%S")
+
+    def parsed(value):
+        try:
+            return datetime.strptime(value, "%m/%d/%Y %H:%M:%S") if value else None
+        except ValueError:
+            return None
+    # The session's own start/end, as the plan and the run use them: a window
+    # capped at WINDOW_CAP no longer ends WINDOW_PAD after the session.
+    start, end = parsed(session_start), parsed(session_end)
     index, warnings = discover_driver_logs(path)
     segments = _anchored(index.get(device, []), lo.date())
     coverage, hits, note = _align(segments, lo, hi, utc_offset, log_clock)
     # A log that reaches only the margin padded around the session holds
     # nothing of the standby: reported as not covering it, with why.
     gap = ""
-    s_lo, s_hi = session_span(lo, hi)
+    s_lo, s_hi = session_span(lo, hi, start, end)
     if hits and not covers_session(hits, s_lo, s_hi):
         gap = outside_session_note(hits, s_lo, s_hi)
         coverage, hits = "none", []
     etls = []
     if coverage == "none" and device == ssa.DEVICE_WIFI:
-        etls = etl_candidates(index.get(RAW_ETL_KEY, []), lo, hi)
+        etls = etl_candidates(index.get(RAW_ETL_KEY, []), lo, hi, start, end)
         if etls:
             coverage = "etl"
     shown = in_report_clock(segments, utc_offset, log_clock)

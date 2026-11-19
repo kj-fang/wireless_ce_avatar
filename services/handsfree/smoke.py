@@ -133,6 +133,68 @@ def smoke_soql() -> None:
           .endswith("LIMIT 7"))
 
 
+def smoke_request_classifier() -> None:
+    print("[S2P] Request classifier POC")
+    import types
+    from .case_reader import READER_PROMPT, read_case_history
+
+    base = {
+        "clean_description": "classification probe",
+        "issue_times": [],
+        "missing_info": [],
+        "issue_domain": "Others",
+        "issue_subcategory": "",
+        "action_owner": "intel",
+        "next_action": "classify only",
+    }
+
+    def classify(request_type, question="", *, description="x", comments=None):
+        captured = []
+        payload = {**base, "request_type": request_type,
+                   "customer_question": question}
+        fake = types.SimpleNamespace(chat=lambda messages, system_content=None:
+                                     (captured.append(messages[0]["content"])
+                                      or json.dumps(payload)))
+        result = read_case_history(
+            fake, subject="classification POC", description=description,
+            comments=comments or [], attachment_list=[])
+        return result, captured[0]
+
+    result, prompt = classify("question", "Does this module support MLO?",
+                              description="old description",
+                              comments=[["1", "Partner", "Does this module support MLO?"]])
+    check("S2P.a question type and verbatim question",
+          result["request_type"] == "question"
+          and result["customer_question"] == "Does this module support MLO?"
+          and "REQUEST CLASSIFICATION SOURCE" in prompt
+          and result["request_source"]["text"] == "Does this module support MLO?",
+          str(result))
+
+    mixed, _ = classify("mixed", "New logs attached. Is this fixed in the next release?")
+    check("S2P.b mixed remains explicit for caller-side debug policy",
+          mixed["request_type"] == "mixed"
+          and mixed["customer_question"].startswith("New logs attached"), str(mixed))
+
+    unknown, _ = classify("unexpected", "should not survive")
+    check("S2P.c unknown value fails closed to debug",
+          unknown["request_type"] == "debug" and unknown["customer_question"] == "",
+          str(unknown))
+
+    bsod, _ = classify("question", "Why did the system crash?",
+                       description="Blue screen after resume")
+    check("S2P.d BSOD wording forces debug",
+          bsod["request_type"] == "debug" and bsod["customer_question"] == "",
+          str(bsod))
+
+    fallback, _ = classify("debug", description="Description-only request")
+    check("S2P.e no customer comment falls back to description",
+          fallback["request_source"]["kind"] == "description"
+          and fallback["request_source"]["text"] == "Description-only request",
+          str(fallback.get("request_source")))
+    check("S2P.f prompt documents all three request types",
+          all(value in READER_PROMPT for value in ("question", "debug", "mixed")))
+
+
 # ---------------------------------------------------------------- S2
 def _full_analysis():
     from .runner import CaseAnalysis, IncidentReport
@@ -6186,6 +6248,7 @@ def run_smoke() -> int:
     _gather._root_cache, _gather._outbox_root = _gather._ensure_layout(tmp / "gather"), None
     try:
         smoke_soql()
+        smoke_request_classifier()
         smoke_composer()
         from . import runner as _runner_mod
         _runner_mod.HandsfreeRunner.ECHO_ADVICE_ENABLED = False   # no network in the smoke

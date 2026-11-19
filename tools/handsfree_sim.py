@@ -91,6 +91,46 @@ def list_view_cases(list_view_name: str) -> list[dict]:
             for rec in r.json().get("records", [])]
 
 
+def classify_case(case_nbr: str) -> dict:
+    """Fetch one case and run only the reader classifier. No analysis or drafts."""
+    from configs.global_configs import app_config
+    from models.models import CaseContext
+    from services.case_info_service import CaseService
+    from services.handsfree.case_reader import read_case_history
+
+    print(f"\n{'#' * 70}\n### CLASSIFY {case_nbr}\n{'#' * 70}", flush=True)
+    t0 = time.time()
+    try:
+        case_ctx = CaseService.process_case(CaseContext(case_nbr=str(case_nbr)))
+        reader = read_case_history(
+            app_config.llm_helper,
+            subject=case_ctx.subject or "",
+            description=case_ctx.description or "",
+            comments=case_ctx.comments or [],
+            attachment_list=case_ctx.attachment_list or [],
+            env_detail=case_ctx.env_detail or {},
+        )
+        if not reader:
+            return {"case": case_nbr, "request_type": "ERROR",
+                    "customer_question": "reader failed", "source": "",
+                    "mins": round((time.time() - t0) / 60, 1)}
+        source = reader.get("request_source") or {}
+        return {
+            "case": case_nbr,
+            "request_type": reader.get("request_type") or "debug",
+            "customer_question": reader.get("customer_question") or "",
+            "source": source.get("kind") or "",
+            "source_author": source.get("author") or "",
+            "source_text": source.get("text") or "",
+            "mins": round((time.time() - t0) / 60, 1),
+        }
+    except Exception as e:
+        traceback.print_exc()
+        return {"case": case_nbr, "request_type": "CRASH",
+                "customer_question": str(e)[:120], "source": "",
+                "mins": round((time.time() - t0) / 60, 1)}
+
+
 def run_case(store, case_nbr: str, show_drafts: bool) -> dict:
     from services.handsfree import orchestrator
     print(f"\n{'#' * 70}\n### CASE {case_nbr}\n{'#' * 70}", flush=True)
@@ -147,6 +187,9 @@ def main() -> int:
                     help="with --list: run every listed case (token cost!)")
     ap.add_argument("--show-drafts", action="store_true",
                     help="print the queued draft texts for each case")
+    ap.add_argument("--classify-only", action="store_true",
+                    help="only classify each case as question/debug/mixed; no analysis, "
+                         "drafts, log download, agent, or Echo call")
     args = ap.parse_args()
     if not args.cases and not args.list:
         ap.error("give case numbers, or --list <list view name>")
@@ -163,6 +206,21 @@ def main() -> int:
             cases += [str(r.get("CaseNumber")) for r in rows
                       if r.get("CaseNumber")]
     if not cases:
+        return 0
+
+    if args.classify_only:
+        results = [classify_case(nbr) for nbr in cases]
+        print(f"\n{'=' * 70}\n=== CLASSIFICATION SUMMARY ===")
+        for result in results:
+            source = str(result.get("source") or "-")
+            if result.get("source_author"):
+                source += f"/{result['source_author']}"
+            question = str(result.get("customer_question") or "-")
+            print(f"  {result['case']}  request_type={str(result.get('request_type')):8s} "
+                  f"source={source:24s} question={question[:100]}  "
+                  f"({result['mins']}m)")
+        print("\nClassification-only POC: no analysis, drafts, downloads, or "
+              "posting were performed.")
         return 0
 
     from services.handsfree.queue import HandsfreeStore

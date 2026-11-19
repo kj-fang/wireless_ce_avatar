@@ -102,9 +102,22 @@ Your tasks:
     given). "Worked before" WITHOUT a version is not a version — return "".
     The version the failure was observed on (task 7) is never the
     last-known-good one. Never invent one.
+ 9. Classify the customer's latest request as exactly ONE type. Judge the
+    latest comment whose author tag starts with "Partner" or "Customer";
+    if there is no customer comment, judge the ISSUE DESCRIPTION.
+    - "question": asks for an explanation, status, support statement, or
+      how-to, with no new failure, reproduction time, or log evidence.
+    - "debug": reports a failure, provides debugging evidence, uploads logs,
+      or answers a request from Intel.
+    - "mixed": contains both question and debug information; mixed is kept
+      explicit so the caller can conservatively treat it as debug.
+    Copy the customer's question VERBATIM as "customer_question" for a
+    question or mixed request. Return an empty string for debug.
 
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
+  "request_type": "<'question' | 'debug' | 'mixed'>",
+  "customer_question": "<verbatim question, or '' for debug>",
   "clean_description": "<one-paragraph current issue statement>",
   "issue_times": ["<time exactly as written>", "..."],
   "issue_time_source": "<'description' or 'comment #N' that stated the time>",
@@ -132,6 +145,9 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 
 === COMMENTS (chronological; #1 is oldest) ===
 {comments_block}
+
+=== REQUEST CLASSIFICATION SOURCE (authoritative input for task 9) ===
+{classification_source}
 
 === ATTACHMENTS (candidate log uploads) ===
 {attachments_block}
@@ -194,6 +210,12 @@ def normalize_action_owner(raw: Any) -> str:
     return ""
 
 
+def normalize_request_type(raw: Any) -> str:
+    """Return question/debug/mixed, failing closed to debug."""
+    value = str(raw or "").strip().lower()
+    return value if value in {"question", "debug", "mixed"} else "debug"
+
+
 def _normalize_comments(comments: Any) -> list[dict]:
     """Coerce case_ctx.comments ([dtm, author_type, text] rows, possibly
     unsorted / stringy) into sorted dicts. Unknown shapes degrade to text."""
@@ -243,12 +265,25 @@ def _format_comments(rows: list[dict]) -> str:
     return "\n".join(out)
 
 
+_CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
+
+
+def request_classification_source(description: str, comments: Any) -> dict:
+    """Select the latest customer-owned comment, or the description."""
+    rows = _normalize_comments(comments)
+    for row in reversed(rows):
+        if row["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES):
+            return {"kind": "comment", "timestamp": row["ts"],
+                    "author": row["author"], "text": row["text"]}
+    return {"kind": "description", "timestamp": "", "author": "",
+            "text": str(description or "").strip()}
+
+
 # Comment author types (CORE_IPS_COMMENT_AUTHOR_TYPE_TXT) written by the
 # customer side: "Partner", "Partner - Agent", "Partner - DFAE", "Customer".
 # Intel-side rows ("Agent", "FAE", "Backend Integration", "System") may be
 # Private-to-Intel — the comment rows carry no visibility flag, so only an
 # allowlisted customer author proves a comment is customer-visible.
-_CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
 _MAX_CUSTOMER_COMMENTS = 12
 _MAX_CUSTOMER_COMMENT_CHARS = 400
 
@@ -326,11 +361,17 @@ def read_case_history(llm, *, subject: str, description: str,
             for sub, desc in d["subcategories"].items())
         for name, d in checklist["domains"].items()
         if d.get("subcategories")) or "      (none)"
+    normalized_description = (description or "").strip()[:_MAX_DESC_CHARS] or "(empty)"
+    classification_source = request_classification_source(description, comments)
+    source_label = classification_source["kind"]
+    if source_label == "comment":
+        source_label += f" ({classification_source['author']}, {classification_source['timestamp']})"
     prompt = READER_PROMPT.format(
         subject=(subject or "").strip()[:500],
         env_block=_format_env_detail(env_detail),
-        description=(description or "").strip()[:_MAX_DESC_CHARS] or "(empty)",
+        description=normalized_description,
         comments_block=_format_comments(_normalize_comments(comments)),
+        classification_source=(f"{source_label}:\n{classification_source['text'][:_MAX_COMMENT_CHARS]}"),
         attachments_block=_format_attachments(attachment_list),
         domains_block=domains_block,
         subcats_block=subcats_block,
@@ -369,8 +410,19 @@ def read_case_history(llm, *, subject: str, description: str,
         missing.append({"item": item,
                         "reason": str(entry.get("reason") or "").strip()[:200]})
 
+    request_type = normalize_request_type(res.get("request_type"))
+    classification_text = "\n".join(
+        str(value or "") for value in (subject, description, comments))
+    if re.search(r"(?i)\b(?:bsod|blue[ -]?screen|bugcheck|bug check)\b",
+                 classification_text):
+        request_type = "debug"
+
     return {
         "vague_times": vague,
+        "request_type": request_type,
+        "customer_question": (str(res.get("customer_question") or "").strip()
+                              if request_type in {"question", "mixed"} else ""),
+        "request_source": classification_source,
         "action_owner": normalize_action_owner(res.get("action_owner")),
         "next_action": re.sub(r"\s+", " ", str(res.get("next_action") or "")).strip()[:300],
         "clean_description": str(res.get("clean_description") or "").strip(),

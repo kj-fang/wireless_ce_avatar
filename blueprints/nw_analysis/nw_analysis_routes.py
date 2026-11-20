@@ -24,8 +24,10 @@ from services.chatbot.factory import (
     create_chatbot_blueprint,
     handler_map,
 )
+import hashlib
 import json
 import re
+import shutil
 import traceback
 import uuid
 import os
@@ -293,6 +295,9 @@ def set_log():
     try:
         agent = _get_or_create_agent()
         agent.current_log_path = log_path
+        # The report, kept apart from current_log_path: a chat turn points
+        # the log tools at the analysed driver-log excerpts for its duration.
+        agent.nw_report_path = log_path
         agent.reset_conversation()          # fresh conversation for a new file
         agent.prompt_overrides.clear()      # and its prompt edits start over
         ctx = _extract_issue_context()      # re-extract context in case session was updated after agent creation
@@ -604,11 +609,20 @@ def sleepstudy_plan():
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
 
 
+def _optional_minutes(value):
+    """An offset in minutes from the page (number, or "" / null for none)."""
+    try:
+        return None if value in (None, "") else int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def sleepstudy_driver_check():
     """
     Re-check one time point after the user changes its driver log.
-    Request JSON: { "path", "device", "window_start", "window_end" }
-    (the window as /sleepstudy_plan returned it).
+    Request JSON: { "path", "device", "window_start", "window_end",
+                    "utc_offset_minutes", "log_clock" (optional) }
+    (the window and its UTC offset as /sleepstudy_plan returned them).
     """
     data = request.get_json(silent=True) or {}
     path = (data.get("path") or "").strip()
@@ -617,7 +631,11 @@ def sleepstudy_driver_check():
     try:
         return jsonify({"success": True, **sleepstudy_pipeline.check_driver_log(
             path, data.get("device") or "wifi",
-            data.get("window_start") or "", data.get("window_end") or "")})
+            data.get("window_start") or "", data.get("window_end") or "",
+            utc_offset=_optional_minutes(data.get("utc_offset_minutes")),
+            log_clock=_optional_minutes(data.get("log_clock")),
+            session_start=data.get("session_start") or "",
+            session_end=data.get("session_end") or "")})
     except Exception as exc:
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 400
 
@@ -767,13 +785,16 @@ def analyze_sleepstudy_point():
     Request JSON: {
       "log_path":   "<sleepstudy-report.html>",
       "index":      <time point number from /sleepstudy_plan>,
-      "driver_log": "<WRT folder, a WiFiLog, a decoded Wi-Fi log, a *.hci.txt, or ''>",
+      "driver_log": "<WRT folder, a WiFiLog, a Wi-Fi driver ETL (decoded first) or its
+                     decoded log, a *.hci.txt, or ''>",
+      "log_clock":  <optional: minutes east of UTC a decoded log is stamped in>,
       "position":   <1-based place in this run>, "total": <points in this run>
     }
     """
     data = request.get_json(silent=True) or {}
     sleep_path = (data.get("log_path") or "").strip()
     driver_log = (data.get("driver_log") or "").strip()
+    log_clock = _optional_minutes(data.get("log_clock"))
     try:
         index = int(data.get("index"))
         position = int(data.get("position") or index)
@@ -841,7 +862,8 @@ def analyze_sleepstudy_point():
         try:
             for event in sleepstudy_pipeline.run_point(
                     sleep_path, index, driver_log, out_dir=out_dir, on_agent=remember_agent,
-                    point_template=point_template, agent_factory=point_agent_factory):
+                    point_template=point_template, agent_factory=point_agent_factory,
+                    log_clock=log_clock):
                 kind = event["type"]
                 if kind == "start":
                     point_meta = event["data"]
@@ -862,6 +884,10 @@ def analyze_sleepstudy_point():
                     # Which point this turn is, so the plan card reopened from
                     # History can tell the finished points from the rest.
                     result["point"] = {k: point[k] for k in ("index", "status", "message", "session_id")}
+                    # Where its driver-log cut is, so a later chat turn can
+                    # point the log tools at what was analysed (_chat_scope).
+                    result["point"].update({k: point.get(k) or "" for k in (
+                        "excerpt_path", "device_label", "window_start", "window_end", "utc_offset_label")})
                     agent_data = (point.get("agent_result") or {}).get("data")
                     result["point"]["agent_summary"] = (
                         str(agent_data.get("root_cause_summary") or "") if isinstance(agent_data, dict)
@@ -947,6 +973,133 @@ def analyze_sleepstudy_point():
 # one implementation inherited by all three agents. Same name, two layers:
 # seeing agent.chat() in here does not mean this function is shared.
 # ------------------------------------------------------------------
+# ------------------------------------------------------------------
+# Chat stages
+#
+# What a question can be answered from grows with the run:
+#   report only   -- no time point analysed yet: the Sleep Study report's
+#                    evidence, in one LLM call (the log agent would read the
+#                    report HTML as if it were a driver log)
+#   driver log    -- time points analysed: the log agent, its tools pointed at
+#                    the analysed points' driver-log cuts (already on the
+#                    customer's clock) for the turn, told which sessions they are
+# ------------------------------------------------------------------
+def _report_path_of(agent) -> str:
+    """The Sleep Study report this conversation is about. current_log_path
+    first: between turns it is always the conversation's report (a History
+    reopen sets it to that conversation's), while nw_report_path is only the
+    report last loaded with /set_log."""
+    for path in (getattr(agent, "current_log_path", ""), getattr(agent, "nw_report_path", "")):
+        path = str(path or "")
+        if path.lower().endswith((".html", ".htm")):
+            return path
+    return ""
+
+
+def _analysed_points(conversation_id: str) -> list[dict]:
+    """The time points this conversation analysed, latest result per point."""
+    conv = history_service.get_conversation(conversation_id, domain=HISTORY_DOMAIN) or {}
+    by_index = {}
+    for turn in conv.get("turns") or []:
+        result = turn.get("result") or {}
+        point = result.get("point") if isinstance(result, dict) else None
+        if isinstance(point, dict) and point.get("index") is not None:
+            by_index[int(point["index"])] = point
+    return [p for _, p in sorted(by_index.items()) if p.get("status") == "analyzed"]
+
+
+def _chat_scope(points: list[dict], conversation_id: str) -> tuple[str, str]:
+    """
+    (log path, note) for a driver-log chat turn: the analysed points' cuts,
+    one file when there are several (written once per set of cuts), and a
+    note naming the sessions, their windows, the clock and each conclusion.
+    """
+    def started(p):
+        try:
+            return datetime.strptime(str(p.get("window_start")), "%m/%d/%Y %H:%M:%S")
+        except ValueError:
+            return datetime.max
+    points = sorted(points, key=started)
+    paths = [p["excerpt_path"] for p in points]
+    if len(paths) == 1:
+        scope_path = paths[0]
+    else:
+        digest = hashlib.sha1("|".join(paths).encode("utf-8", "replace")).hexdigest()[:10]
+        scope_path = os.path.join(app_config.avatarfiles_dir or os.path.expanduser("~"),
+                                  "sleepstudy", "chat", f"{conversation_id[:12]}_{digest}.log")
+        if not os.path.exists(scope_path):
+            os.makedirs(os.path.dirname(scope_path), exist_ok=True)
+            with open(scope_path, "w", encoding="utf-8", newline="\n") as out:
+                for path in paths:
+                    with open(path, "r", encoding="utf-8", errors="replace") as part:
+                        shutil.copyfileobj(part, out)
+    clock = next((p.get("utc_offset_label") for p in points if p.get("utc_offset_label")), "")
+    lines = ["[DRIVER LOG SCOPE] Your log tools read the driver log cut for the Sleep Study "
+             "session(s) analysed in this conversation:"]
+    for p in points:
+        lines.append(f"- Session {p.get('session_id')} ({p.get('device_label') or 'wireless'}), "
+                     f"{p.get('window_start')} -> {p.get('window_end')}"
+                     + (f"; driver-log conclusion: {str(p.get('agent_summary'))[:600]}"
+                        if p.get("agent_summary") else ""))
+    lines.append("Times are the customer machine's clock" + (f" ({clock})" if clock else "")
+                 + ", the same as the Sleep Study report. Sessions not listed were not analysed: "
+                 "say so rather than guess about them.")
+    return scope_path, "\n".join(lines)
+
+
+def _load_driver_scope(agent, scope_path: str, scope_note: str) -> str:
+    """
+    Point the agent's log tools at the analysed points' cut for this turn and
+    make its evidence come from that cut; returns an error, or "".
+
+    The engine scopes skill filtering on its first turn only (Segment1 + the
+    issue-time window), and NW's fetch_filtered_logs answers from its skill
+    cache before it reloads the log. A cut taken up mid-conversation -- after
+    a report-only answer, a History reopen, or more points analysed -- would
+    otherwise give the tools no scoped lines, or the previous cut's evidence.
+    So the cut is loaded here; when it is a different cut from the one the
+    caches were built on, they are dropped and the whole cut (it already is
+    the analysed windows, on the customer's clock) becomes the scope. The
+    note goes into the conversation itself, so the turn runs as a follow-up
+    and keeps the messages already there.
+    """
+    agent.current_log_path = scope_path
+    error = agent._ensure_raw_log_cache()
+    if error:
+        return error
+    if getattr(agent, "_nw_scope_path", "") != scope_path or not agent._scoped_log_lines:
+        agent._scoped_log_lines = list(agent._raw_log_cache)
+        agent._filter_cache_by_skill = {}
+        agent._assembled_entries_by_key = {}
+        agent._assembled_entries_no_ts = {}
+        agent._assembled_log_text = ""
+        agent._detail_cache = {}
+        agent._detail_query_seen = set()
+        agent._nw_scope_path = scope_path
+    if getattr(agent, "_nw_scope_note", "") != scope_note:
+        agent.conversation_history.append({"role": "user", "content": scope_note})
+        agent.conversation_history.append({"role": "assistant", "content": (
+            "Understood: my log tools read these sessions' driver-log cut, on the "
+            "customer's clock.")})
+        agent._nw_scope_note = scope_note
+    return ""
+
+
+def _earlier_exchanges(agent, limit: int = 6) -> str:
+    """The conversation's last questions and answers, for a report-only answer."""
+    picked = []
+    for m in reversed(getattr(agent, "conversation_history", None) or []):
+        if not isinstance(m, dict) or m.get("role") not in ("user", "assistant"):
+            continue
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip() or content.startswith("["):
+            continue
+        picked.append(f"{'Q' if m['role'] == 'user' else 'A'}: {content.strip()[:1200]}")
+        if len(picked) >= limit:
+            break
+    return ("Earlier in this conversation:\n" + "\n".join(reversed(picked)) + "\n\n") if picked else ""
+
+
 def chat():
     data = request.get_json(silent=True) or {}
     user_message = (data.get("message") or "").strip()
@@ -1029,23 +1182,105 @@ def chat():
                 )
             except Exception:
                 pass
+
+        # ── The stage this question is at (see "Chat stages" above) ──
+        report_path = _report_path_of(agent)
+        analysed = _analysed_points(conversation_id) if report_path else []
+        excerpts = [p for p in analysed
+                    if p.get("excerpt_path") and os.path.exists(str(p["excerpt_path"]))]
+        history_session_id = session.get("chatbot_session_id", "") or ""
+        history_log_path = report_path or getattr(agent, "current_log_path", "") or ""
+
+        if report_path and not excerpts:
+            # Report only (or analysed before driver-log cuts were kept): answer
+            # from the report's evidence and any conclusions already reached.
+            findings = {int(p["index"]): str(p.get("agent_summary") or "")
+                        for p in analysed if p.get("agent_summary")}
+            workflow_id = session.get("gather_workflow_id", "")
+
+            def report_stream():
+                notice = ("📄 Answering from the Sleep Study report: no driver log has been analysed "
+                          "in this conversation yet." if not findings else
+                          "📄 Answering from the Sleep Study report and the driver-log conclusions "
+                          "already reached.")
+                step = {"role": "agent", "content": notice}
+                yield f"data: {json.dumps({'type': 'step', 'step': step}, ensure_ascii=False)}\n\n"
+                spend = _new_spend()
+                llm_model, llm_call = _one_shot_llm(spend, max_tokens=1500)
+                status, started = "success", datetime.now()
+                try:
+                    if llm_call is None:
+                        raise RuntimeError("No LLM client is configured.")
+                    context = sleepstudy_pipeline.report_context(report_path, findings)
+                    answer = llm_call(
+                        sleepstudy_pipeline.REPORT_CHAT_PROMPT,
+                        f"Sleep Study evidence:\n{context}\n\n{_earlier_exchanges(agent)}"
+                        f"Question: {user_message}")
+                    result = {"type": "text", "data": answer}
+                    # Kept in the agent's conversation, so a later driver-log
+                    # turn knows what was already asked and answered.
+                    agent.conversation_history.append({"role": "user", "content": user_message})
+                    agent.conversation_history.append({"role": "assistant", "content": answer})
+                    history_service.record_turn(
+                        conversation_id=conversation_id, session_id=history_session_id,
+                        turn_id=turn_id, user_message=user_message, agent_result=result,
+                        issue=_issue_ctx_for_snapshot, log_path=history_log_path,
+                        domain=HISTORY_DOMAIN, steps=[step])
+                    yield (f"data: {json.dumps({'type': 'done', 'result': {**result, 'conversation_id': conversation_id}}, ensure_ascii=False)}\n\n")
+                except Exception as exc:
+                    status = "failed"
+                    traceback.print_exc()
+                    yield f"data: {json.dumps({'type': 'error', 'content': f'{type(exc).__name__}: {exc}'}, ensure_ascii=False)}\n\n"
+                finally:
+                    try:
+                        gather_service.record_feature_usage(
+                            workflow_id=workflow_id, feature_code="sleepstudy_report_chat",
+                            model=llm_model, usage=spend, issue=_issue_ctx_for_snapshot,
+                            domain=GATHER_DOMAIN, trigger="chat", status=status,
+                            latency_ms=int((datetime.now() - started).total_seconds() * 1000))
+                    except Exception:
+                        pass
+
+            return Response(report_stream(), mimetype="text/event-stream",
+                            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+        # Driver log: the tools read the analysed points' cuts for this turn,
+        # and the agent is told which sessions they are when that changes
+        # (_load_driver_scope, on the worker before agent.chat()).
+        scope_path, scope_note = _chat_scope(excerpts, conversation_id) if excerpts else ("", "")
+
         import queue as _queue
         step_queue = _queue.Queue()
 
         def step_cb(step):
             step_queue.put(("step", step))
 
+        if scope_path:
+            step_queue.put(("step", {"role": "agent", "content": (
+                "🔎 Reading the driver log of the analysed session(s): "
+                + ", ".join(f"Session {p.get('session_id')}" for p in excerpts) + ".")}))
+
         @copy_current_request_context
         def run_chat_with_tools():
             turn_status = "completed"
             error_code = ""
+            previous_log = agent.current_log_path
             try:
-                result = agent.chat(
-                    user_message,
-                    max_steps=max_steps,
-                    temperature=temperature,
-                    step_callback=step_cb,
-                )
+                try:
+                    if scope_path:
+                        scope_error = _load_driver_scope(agent, scope_path, scope_note)
+                        if scope_error:
+                            raise RuntimeError(f"Could not read the analysed driver log: {scope_error}")
+                    result = agent.chat(
+                        user_message,
+                        max_steps=max_steps,
+                        temperature=temperature,
+                        step_callback=step_cb,
+                    )
+                finally:
+                    # The report stays the conversation's file between turns
+                    # (IPS gating, History, the next turn's stage).
+                    agent.current_log_path = previous_log
                 step_queue.put(("done", result))
             except Exception as exc:
                 turn_status = "failed"
@@ -1061,9 +1296,9 @@ def chat():
         t = threading.Thread(target=run_chat_with_tools, daemon=True)
         t.start()
 
-        # Read now: the generator below runs after the request context is gone.
-        history_session_id = session.get("chatbot_session_id", "") or ""
-        history_log_path = getattr(agent, "current_log_path", "") or ""
+        # history_session_id / history_log_path were read before the worker
+        # started: it points current_log_path at the driver-log cut, and the
+        # generator below runs after the request context is gone.
 
         def event_stream():
             steps = []
@@ -1209,6 +1444,7 @@ def history_load():
         skills = []
         if log_exists:
             agent.current_log_path = sleep_path
+            agent.nw_report_path = sleep_path
             issue = conv.get("issue") if isinstance(conv.get("issue"), dict) else {}
             allowed = {"case_nbr", "subject", "description", "issue_type", "attachment_time"}
             try:
@@ -1280,8 +1516,11 @@ _SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
     agent_config_attr="nw_analysis_agent",
     get_agent=_get_or_create_agent,
     session_agents=_chatbot_instances,
+    # The default filter shows every file the Sleep Study check reads: the
+    # report, WRT WiFiLogs and decoded Wi-Fi logs (.log / .txt), decoded BT
+    # logs (.hci.txt) and Wi-Fi driver ETLs with their rolling parts (.etl.N).
     browse_filetypes=(
-        ("Sleep Study report / driver log", "*.html *.htm *.log *.LOG"),
+        ("Sleep Study report / driver log", "*.html *.htm *.log *.txt *.etl *.etl.*"),
         ("All files", "*.*"),
     ),
     load_skills_from_yaml=load_skills_from_yaml,

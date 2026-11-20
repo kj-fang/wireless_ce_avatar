@@ -13,7 +13,7 @@
              other chatbots' log box: there is no separate Load button. -->
         <input id="sleepstudy-path-input" type="text"
                placeholder="Full path to sleepstudy file…"
-               onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy();}"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy(true);}"
                onchange="setSleepstudy()">
         <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>
     </div>

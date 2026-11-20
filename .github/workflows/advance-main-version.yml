@@ -1,0 +1,60 @@
+name: Advance Main Version After PV Branch
+
+on:
+  create:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prepare-main-version:
+    if: github.event.ref_type == 'branch' && startsWith(github.event.ref, 'release/')
+    runs-on: windows-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Prepare next main version line
+        id: bump
+        shell: pwsh
+        env:
+          PV_BRANCH: ${{ github.event.ref }}
+        run: |
+          if ($env:PV_BRANCH -notmatch '^release/(\d+)\.(\d+)$') {
+            "changed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          $pvMajor = [int]$Matches[1]
+          $pvMinor = [int]$Matches[2]
+          $versionLine = Get-Content "configs/version_line.json" -Raw | ConvertFrom-Json
+          $expectedRelease = "$pvMajor.$pvMinor"
+          if ($versionLine.next_pv_release -ne $expectedRelease) {
+            Write-Host "Ignoring $env:PV_BRANCH; next configured PV release is $($versionLine.next_pv_release)."
+            "changed=false" >> $env:GITHUB_OUTPUT
+            exit 0
+          }
+
+          $versionLine.main_minor = [int]$versionLine.main_minor + 1
+          $versionLine.next_pv_release = "$pvMajor.$($pvMinor + 1)"
+          $versionLine | ConvertTo-Json | Set-Content "configs/version_line.json" -Encoding utf8
+
+          "changed=true" >> $env:GITHUB_OUTPUT
+          "branch=automation/main-version-after-release-$pvMajor-$pvMinor" >> $env:GITHUB_OUTPUT
+
+      - name: Open main version bump PR
+        if: steps.bump.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.VERSION_BOT_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.bump.outputs.branch }}
+          delete-branch: true
+          commit-message: "chore(version): advance main after PV release branch"
+          title: "chore(version): advance main after ${{ github.event.ref }}"
+          body: |
+            A PV release branch was created from its locked main baseline.
+            This PR advances the main version line by one patch cycle. The version-line edit itself becomes the new `.0` baseline; the next merged main PR starts at `.1`.

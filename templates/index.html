@@ -1314,39 +1314,27 @@
             align-items: start;
             gap: 8px;
         }
-        .chatbot-shortcut-primary > .chatbot-tech-btn {
+        .home-card .chatbot-shortcut-primary > .chatbot-tech-btn {
             width: 100%;
             min-width: 0;
             padding: 6px 8px;
+            justify-content: center;
             font-size: 12px;
             white-space: nowrap;
         }
-        .chatbot-log-analysis-trigger {
+        .home-card .chatbot-shortcut-primary > .chatbot-log-analysis-trigger {
             width: 100%;
             min-width: 0;
             min-height: 38px;
             cursor: pointer;
             font-family: inherit;
+            font-size: 13px;
             line-height: 1.25;
         }
         .chatbot-log-analysis-trigger:focus-visible,
         .chatbot-log-analysis-grid a:focus-visible {
             outline: 2px solid currentColor;
             outline-offset: 3px;
-        }
-        .chatbot-log-chevron {
-            width: 8px;
-            height: 8px;
-            flex: 0 0 8px;
-            margin: -4px 2px 0 auto;
-            border-right: 1.5px solid currentColor;
-            border-bottom: 1.5px solid currentColor;
-            transform: rotate(45deg);
-            transition: transform .2s ease;
-        }
-        .chatbot-shortcut-links.is-log-analysis-open .chatbot-log-chevron {
-            margin-top: 4px;
-            transform: rotate(225deg);
         }
         .chatbot-log-analysis-options {
             display: grid;
@@ -1444,7 +1432,6 @@
         .chatbot-log-analysis-grid .shortcut-icon { filter: brightness(0) invert(1); }
         .home-analysis-unframed .chatbot-log-analysis-grid .chatbot-tech-btn:hover .shortcut-icon { filter: brightness(0) invert(1); }
         @media (prefers-reduced-motion: reduce) {
-            .chatbot-log-chevron,
             .chatbot-log-analysis-options,
             .chatbot-log-analysis-grid .chatbot-tech-btn { transition: none; transform: none; }
         }
@@ -1643,7 +1630,6 @@
                 <button type="button" class="chatbot-tech-btn chatbot-log-analysis-trigger" id="chatbot-log-analysis-trigger" aria-expanded="false" aria-controls="chatbot-log-analysis-options">
                     <img src="{{ url_for('static', filename='lucide-file-text.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">
                     <span>Log Analysis</span>
-                    <span class="chatbot-log-chevron" aria-hidden="true"></span>
                 </button>
                 <a href="/nw_analysis/" class="chatbot-tech-btn"><img src="{{ url_for('static', filename='lucide-network.svg') }}" class="shortcut-icon" alt="" aria-hidden="true">Network Experience</a>
             </div>

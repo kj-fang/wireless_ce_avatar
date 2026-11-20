@@ -80,11 +80,18 @@ DOMAINS: tuple[ChatDomain, ...] = (
         history_prefix="linux-",
         feedback_prefix="linux_",
     ),
+    ChatDomain(
+        key="generic",
+        aliases=("generic",),
+        history_folder="generic_history",
+        history_prefix="generic-",
+        feedback_prefix="generic_",
+    ),
 )
 
 # The agent labels Gather accepts. "Which agent ran" and "whose files are
 # these" are different questions, so this set is kept apart from DOMAINS.
-AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux"})
+AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux", "generic"})
 
 # A third question, and the one that is easiest to get wrong: which agents
 # tell you what TECHNOLOGY the case is about?
@@ -93,17 +100,20 @@ AGENT_DOMAINS: frozenset[str] = frozenset({"wifi", "nw", "bt", "linux"})
 # Bluetooth agent for a Bluetooth one, so when a case record does not say, the
 # agent is a fair stand-in. The other two say nothing of the kind:
 #
-#   nw     reads a sleep-study report, which is a platform-power question
-#          that may or may not turn out to be wireless at all.
-#   linux  is the "Generic Log Analysis Agent" -- it is pointed at whatever
-#          log the user has, so a session on it is evidence of nothing.
+#   nw       reads a sleep-study report, which is a platform-power question
+#            that may or may not turn out to be wireless at all.
+#   linux    is pointed at a Linux dmesg/journalctl capture, which says
+#            "Linux", not which wireless technology (if any) is involved.
+#   generic  is pointed at whatever log the user has, of literally any
+#            domain, so a session on it is evidence of nothing.
 #
-# Both are rejected today anyway, because gather_service._case_domain only
-# admits "wifi" and "bt". That is an accident of that allowlist rather than a
-# decision, and the day somebody widens it -- to count Linux cases, say --
-# every generic-agent session would quietly start being filed under a
-# technology nobody established. Stating it here means the fallback has to
-# opt a domain in, instead of relying on a filter elsewhere to keep it out.
+# Both linux and generic are rejected today anyway, because
+# gather_service._case_domain only admits "wifi" and "bt". That is an
+# accident of that allowlist rather than a decision, and the day somebody
+# widens it -- to count Linux cases, say -- every generic-agent session
+# would quietly start being filed under a technology nobody established.
+# Stating it here means the fallback has to opt a domain in, instead of
+# relying on a filter elsewhere to keep it out.
 CASE_TECHNOLOGY_AGENTS: frozenset[str] = frozenset({"wifi", "bt"})
 
 

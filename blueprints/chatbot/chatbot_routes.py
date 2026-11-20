@@ -74,7 +74,7 @@ from flask import (
     session,
 )
 
-from configs.chatbot_ui import BT_UI, LINUX_UI, LOG_CHATBOT_UI
+from configs.chatbot_ui import BT_UI, GENERIC_UI, LINUX_UI, LOG_CHATBOT_UI
 from configs.global_configs import app_config
 from services import feedback_service
 from services import check_ips_service
@@ -82,6 +82,7 @@ from services import gather_service
 from services import history_service
 from services.chatbot import job_runtime as chat_jobs
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
+from services.chatbot.engine.generic import GenericLogAgentSystem
 from services.chatbot.engine.linux import LinuxLogAgentSystem
 from services.chatbot.engine.log_scope import LogScopeMixin
 from services.chatbot.engine.system import WifiLogAgentSystem, load_skills_from_yaml
@@ -125,6 +126,7 @@ from services.skill_editor.yaml_service import (
     write_yaml_file as _write_yaml_file,
 )
 from utils import bt_skills_yaml_utils as _bt_yaml_utils
+from utils import generic_skills_yaml_utils as _generic_yaml_utils
 from utils import linux_skills_yaml_utils as _linux_yaml_utils
 from utils import log_time_format
 from utils import skills_yaml_utils as _wifi_yaml_utils
@@ -1131,9 +1133,19 @@ class AgentRoutes:
                 extra["tz_label"] = format_tz_label(_tz_name) if _tz_name else ""
             if self.profile.event_log_anchor:
                 extra["event_log_events"] = event_log_events
+            # log_format answers "what shape are this log's timestamps" --
+            # independent of whether the profile has a domain-flavored focus.
+            # Detecting it for every profile (not just the ones with a focus)
+            # is what lets build_issue_time_suggestions() route an unanchored
+            # relative-time log (dmesg's "[55.510209] ..." with no boot
+            # anchor) to suggest_boot_elapsed() instead of treating the
+            # seconds-since-boot numbers as ordinary clock times -- a case
+            # Generic (no fixed marker lifecycle, no issue_time_focus) is
+            # exactly the profile most likely to meet.
+            if log_path:
+                extra["log_format"] = log_time_format.detect(log_path)
             if self.profile.issue_time_focus is not None and log_path:
                 extra["focus"] = self.profile.issue_time_focus
-                extra["log_format"] = log_time_format.detect(log_path)
 
             payload = build_issue_time_suggestions(
                 text=text,
@@ -2174,6 +2186,26 @@ LINUX_PROFILE = AgentRouteProfile(
     issue_time_focus=LINUX_WIFI_FOCUS,
 )
 
+# A log of unknown domain: no fixed marker lifecycle, no fixed browse
+# filter -- the agent turns off the Windows driver-init markers (see
+# GenericLogAgentSystem) and the dialog accepts any file.
+GENERIC_PROFILE = AgentRouteProfile(
+    name="generic_chatbot",
+    ui=GENERIC_UI,
+    agent_class=GenericLogAgentSystem,
+    agent_config_attr="generic_chatbot_agent",
+    yaml_utils=_generic_yaml_utils,
+    user_yaml_prefix="generic_skills_",
+    browse_filetypes=(("Log files", "*.log *.log.* *.txt *.*"), ("All files", "*.*")),
+    gather_domain="generic",
+    window_minutes_cap=100000,
+    reset_conversation_on_prepare=True,
+    direct_log_suffixes=(),
+    read_log_has_date_while_running=False,
+    issue_time_focus=None,
+)
+
 log_chatbot_bp = create_agent_blueprint(WIFI_PROFILE)
 bt_chatbot_bp = create_agent_blueprint(BT_PROFILE)
 linux_chatbot_bp = create_agent_blueprint(LINUX_PROFILE)
+generic_chatbot_bp = create_agent_blueprint(GENERIC_PROFILE)

@@ -348,6 +348,70 @@ LINUX_SUGGEST_TIME = (
 )
 
 
+# --- Generic (generic_chatbot) --------------------------------------------
+
+# Written for a log of unknown domain, independently of Linux's text: no
+# subsystem vocabulary (iwlwifi, mac80211, deauth, kernel, NetworkManager) is
+# assumed, because this profile has no fixed log family to be an expert in.
+GENERIC_PROMPT = """You are an Elite Log Diagnostic Engineer. The log you are given may be from any subsystem or technology -- its domain is not assumed in advance. Your GOAL: Find the REAL Root Cause based on evidence.
+Available skills:
+{skills}
+PHASE 1 (SYMPTOM LOCALIZATION):
+   - Call `fetch_filtered_logs` with the skill that best matches the user's described symptom.
+PHASE 2 (SOURCE RETROSPECTIVE - optional):
+   - If needed, call another skill, or `query_log_detail` for the lines around one key event.
+PHASE 3. Call `submit_final_report` to conclude.
+
+HOW TO READ A LOG OF UNKNOWN DOMAIN:
+- Do not assume any specific subsystem's error codes, state machine, or vocabulary. Let the user's description and the log's own wording define what "the problem" is.
+- Identify the event that most plausibly started the problem, then look forward from it for the failure and any recovery.
+- A run of repeated or near-identical lines usually reflects one underlying condition, not N separate incidents -- say so instead of listing duplicates.
+- Quote the log lines that support each claim. If the log's format or a line's meaning is ambiguous, say so explicitly rather than guessing at domain-specific significance it may not have.
+
+CRITICAL CONSTRAINTS:
+- Max step is 8
+- Timestamps are on the log's own clock; quote them exactly as they appear.
+- Do not import concepts (vendor/protocol/OS internals) the log has not itself shown evidence of.
+- 🛑 NO REPETITION: Do not fetch the same data twice. If Phase 1 keywords are found in Phase 2, ignore them.
+- 🛑 IMMEDIATELY call `submit_final_report` after your detail query. Do not over-analyze."""
+
+GENERIC_REPORT = """Your `markdown_summary` format (REQUIRED):
+  # Executive Summary
+  (1-2 sentences: the root cause, and the evidence that supports it)
+
+  | Aspect | Finding |
+  |--------|---------|
+  | Skill used | (which skill's evidence this report is based on) |
+  | Symptom | ... |
+  | Root cause | (or "not determined from available evidence") |
+
+  ## Timeline
+  - <log timestamp>: Trigger event
+  - <log timestamp>: Failure observed
+  - <log timestamp>: Recovery or final state
+
+  ## Key Evidence
+  (Up to 5 log lines quoted verbatim with their timestamps)
+
+  ## Recommendations
+  **P0 (Urgent):** ...
+  **P1 (Important):** ...
+  **P2 (Nice-to-have):** ...
+  (Every recommendation must cite a specific quoted log line/timestamp; if none meet that bar for a tier, write "(none)" rather than generic advice.)"""
+
+# Mirrors LINUX_SUGGEST_TIME's shape but names no subsystem: a retargeted
+# agent for a specific domain would replace this hint, not this profile.
+GENERIC_SUGGEST_TIME = (
+    SUGGEST_TIME_BASE + "\n"
+    "This log's domain is not assumed in advance -- do not look for Wi-Fi/"
+    "Bluetooth-specific vocabulary. Use the user's description alone to "
+    "decide which lines in the log are relevant to the described problem. "
+    "A log can span multiple sessions and contain several separate "
+    "incidents: suggest the distinct incidents that fit the description, "
+    "best first."
+)
+
+
 DEFAULTS: dict[str, str] = {
     "wifi_prompt": WIFI_PROMPT,
     "wifi_report": WIFI_REPORT,
@@ -363,6 +427,9 @@ DEFAULTS: dict[str, str] = {
     "nw_sleepstudy_summary": NW_SLEEPSTUDY_SUMMARY,
     "linux_prompt": LINUX_PROMPT,
     "linux_report": LINUX_REPORT,
+    "generic_prompt": GENERIC_PROMPT,
+    "generic_report": GENERIC_REPORT,
+    "generic_suggest_time": GENERIC_SUGGEST_TIME,
     "shared_review": SHARED_REVIEW,
     "shared_issue_time": SHARED_ISSUE_TIME,
     "shared_followup": SHARED_FOLLOWUP,
@@ -371,9 +438,9 @@ DEFAULTS: dict[str, str] = {
 
 def default_speclet(profile: str, kind: str) -> str:
     """Built-in text for one speclet, or "" for an unknown combination."""
-    if kind == "agent" and profile in ("wifi", "bt", "nw", "linux"):
-        from utils.speclets_utils import join_bundle
+    from utils.speclets_utils import PROFILES, join_bundle
 
+    if kind == "agent" and profile in PROFILES:
         return join_bundle({part: DEFAULTS.get(f"{profile}_{part}", "")
                             for part in ("prompt", "report", "suggest_time")})
     return DEFAULTS.get(f"{profile}_{kind}", "")

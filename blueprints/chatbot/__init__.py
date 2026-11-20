@@ -2,10 +2,12 @@
 
 from .chatbot_routes import (
     BT_PROFILE,
+    GENERIC_PROFILE,
     LINUX_PROFILE,
     WIFI_PROFILE,
     AgentRouteProfile,
     bt_chatbot_bp,
+    generic_chatbot_bp,
     linux_chatbot_bp,
     log_chatbot_bp,
 )
@@ -13,9 +15,11 @@ from .chatbot_routes import (
 __all__ = [
     "AgentRouteProfile",
     "BT_PROFILE",
+    "GENERIC_PROFILE",
     "LINUX_PROFILE",
     "WIFI_PROFILE",
     "bt_chatbot_bp",
+    "generic_chatbot_bp",
     "linux_chatbot_bp",
     "log_chatbot_bp",
 ]

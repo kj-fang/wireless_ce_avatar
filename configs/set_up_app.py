@@ -32,12 +32,19 @@ from utils.linux_skills_yaml_utils import (
     refresh_local_cloud_baseline as linux_refresh_local_cloud_baseline,
     set_active_source as linux_set_active_source,
 )
+from utils.generic_skills_yaml_utils import (
+    bundled_yaml_path as generic_bundled_yaml_path,
+    current_active_yaml as generic_current_active_yaml,
+    refresh_local_cloud_baseline as generic_refresh_local_cloud_baseline,
+    set_active_source as generic_set_active_source,
+)
 from services.llm_service import LLM_helper
 from services.chatbot.engine.system import WifiLogAgentSystem, sync_to_local, load_skills_from_yaml
 from services.chatbot.engine.network_experience import NwAnalysisAgentSystem
 from services.chatbot.engine.bluetooth import BtLogAgentSystem
 from services.feedback_service import _current_user
 from services.chatbot.engine.linux import LinuxLogAgentSystem
+from services.chatbot.engine.generic import GenericLogAgentSystem
 
 from configs.global_configs import app_config
 
@@ -615,6 +622,73 @@ def set_up(socketio):
         linux_chatbot_agent = None
         print("⚠️  Linux Chatbot Agent skipped — LLM client not configured (no API key).")
     app_config.set_linux_chatbot_agent(linux_chatbot_agent)
+
+    # ------------------------------------------------------------------
+    # Generic Chatbot Agent — log of unknown/arbitrary domain
+    # ------------------------------------------------------------------
+    # Generic skills follow the SAME user/cloud lifecycle as WiFi/BT/Linux but
+    # file names carry a `generic_skills_` prefix so all four domains share
+    # the same skills_config sub-folders without collision.
+    #
+    # Loading sequence mirrors the Linux block above:
+    #   1. Reset Generic active source to "cloud" on every restart.
+    #   2. Refresh local `cloud/` mirror from share's generic_skills_*.yaml
+    #      (best-effort; off-VPN runs simply skip this).
+    #   3. Resolve and load whichever YAML `generic_current_active_yaml()`
+    #      picks (user override > cloud baseline > legacy un-dated >
+    #      the baseline bundled at utils/generic_skills.yaml).
+    #   4. Step 3 ends at a file that ships with the app, so it only comes
+    #      back empty if that file is missing or unreadable -- an install
+    #      problem, not an off-VPN one. Say so loudly rather than quietly
+    #      handing the Generic agent the WiFi skills: Wi-Fi keywords look
+    #      for a specific domain's markers a generic log may not contain, so
+    #      the agent would receive a near-empty view of the log and answer
+    #      from it.
+    generic_skills = None
+    generic_set_active_source("cloud")
+    try:
+        generic_refreshed_path, generic_refreshed_date = generic_refresh_local_cloud_baseline()
+        if generic_refreshed_path is not None:
+            print(f"📥 Refreshed local Generic cloud baseline → {generic_refreshed_path} "
+                  f"(date={generic_refreshed_date})")
+        else:
+            print("ℹ️  Generic cloud baseline refresh skipped — share folder unreachable.")
+    except Exception as e:
+        print(f"⚠️  Generic cloud baseline refresh failed: {e}")
+
+    generic_chosen_yaml, generic_chosen_date, generic_chosen_source = generic_current_active_yaml()
+    if generic_chosen_yaml is not None and generic_chosen_yaml.exists():
+        try:
+            generic_skills = load_skills_from_yaml(str(generic_chosen_yaml))
+            print(f"✅  {len(generic_skills)} Generic skills loaded from "
+                  f"{generic_chosen_source} YAML: {generic_chosen_yaml} (date={generic_chosen_date})")
+        except Exception as e:
+            print(f"❌  Failed to load Generic skills from YAML ({e}). Falling back to "
+                  f"WiFi skills, which filter for a specific domain's markers a "
+                  f"generic log may not contain — the Generic agent will see very "
+                  f"little of the log. Fix {generic_chosen_yaml} before relying on it.")
+    else:
+        print(f"❌  No Generic skills YAML found, including the bundled baseline at "
+              f"{generic_bundled_yaml_path()}. Falling back to WiFi skills, which "
+              f"filter for a specific domain's markers a generic log may not contain — "
+              f"the Generic agent will see very little of the log. This is an "
+              f"install problem: the bundled file should always be present.")
+
+    if llm_helper.client is not None:
+        model = getattr(llm_helper, 'model', 'gpt-4.1')
+        generic_chatbot_agent = GenericLogAgentSystem(
+            client=llm_helper.client,
+            model=model,
+            skills=generic_skills if generic_skills else llm_helper.skills,
+        )
+        print(f"📄 Generic Chatbot Agent loaded (model={model})")
+        # No ACE playbook namespace exists for Generic yet (services/ace/sync_utils.py
+        # only defines "wifi" and "bt") — skipped rather than invent a share path;
+        # the agent works fine without it, same as a failed attach above degrades.
+    else:
+        generic_chatbot_agent = None
+        print("⚠️  Generic Chatbot Agent skipped — LLM client not configured (no API key).")
+    app_config.set_generic_chatbot_agent(generic_chatbot_agent)
 
     # socketio
     app_config.set_socketio(socketio)

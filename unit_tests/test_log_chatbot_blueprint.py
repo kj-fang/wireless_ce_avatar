@@ -611,6 +611,7 @@ class TestSuggestIssueTimes(_LogChatbotTestBase):
             text="dropped at 11:25", log_lines=["line 1"], first_ts=LOG_FIRST, last_ts=LOG_LAST,
             llm_client=self.agent.client, llm_model="gpt-test", log_has_date=True,
             log_frame_first_ts=None, log_frame_last_ts=None, tz_label="PST (UTC-08:00)", brief=ANY,
+            log_format=ANY,
         )
         self.read_range.assert_called_once_with(LOG_PATH)
 

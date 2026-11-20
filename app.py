@@ -266,8 +266,11 @@ if __name__ == "__main__":
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')
-    parser.add_argument('--no-tray', action='store_true', help='Disable tray manager')
-    parser.add_argument('--tray-mode', action='store_true', help='Run as tray manager')
+    parser.add_argument('--no-tray', action='store_true',
+                        help='Disable the system tray manager (enabled by default, for both the packaged exe and `python app.py`).')
+    # Internal only: the packaged exe re-launches itself with this flag to become the
+    # tray process (see utils.instance_utils.ensure_tray_manager). Not for manual use.
+    parser.add_argument('--tray-mode', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--silent-mode', action='store_true', default=False, help='Disable auto-opening analysis windows (TextAnalysisTool / Explorer) after parsing.')
     parser.add_argument('--sendto-token', type=str, default=None, help='SendTo security token (auto-set by shortcut, not for manual use).')
     parser.add_argument('--handsfree', action='store_true', help='Open the Handsfree review dashboard instead of the home page.')
@@ -338,7 +341,7 @@ if __name__ == "__main__":
     # [DO NOT remove] - Only log the first few chars as a sanity check
     print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
 
-    # Ensure the tray manager is running (unless explicitly disabled).
+    # Tray manager is ON by default (exe and `python app.py`); pass --no-tray to disable.
     if not args.no_tray:
         ensure_tray_manager()
 

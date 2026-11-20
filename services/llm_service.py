@@ -533,7 +533,7 @@ class LLM_helper:
             )
         self.model = model
         self.classifitation_path  = None
-        if Path(classifitation_path).exists():
+        if classifitation_path and Path(classifitation_path).exists():
             self.classifitation_path = classifitation_path
         print("classifitation_path", classifitation_path, self.classifitation_path)
 

@@ -2,12 +2,12 @@ import os
 from flask import request, jsonify
 from typing import Dict, Any
 
-from configs.path_configs import LOG_PARSER_DIR
+from configs.path_configs import get_log_parser_dir
 from utils.log_parser_file_utils import get_available_filters, get_available_prompts
 
 class FileManagerService:
     def __init__(self):
-        self.log_parser_dir = LOG_PARSER_DIR
+        self.log_parser_dir = get_log_parser_dir()
     
     def handle_file_upload(self, upload_type: str, files) -> Dict[str, Any]:
         if upload_type == 'filter':
@@ -47,7 +47,7 @@ class FileManagerService:
             
             file.save(file_path)
             
-            updated_filters = get_available_filters(LOG_PARSER_DIR)
+            updated_filters = get_available_filters(self.log_parser_dir)
             
             return jsonify({
                 'success': True, 
@@ -79,7 +79,7 @@ class FileManagerService:
             
             file.save(file_path)
 
-            available_prompts, available_custom_prompts = get_available_prompts(LOG_PARSER_DIR)
+            available_prompts, available_custom_prompts = get_available_prompts(self.log_parser_dir)
             
             return jsonify({
                 'success': True, 

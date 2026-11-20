@@ -26,13 +26,15 @@ from flask import Blueprint, request, session
 
 import blueprints.log_parser.log_parser_routes as lp
 from blueprints.log_parser.log_parser_routes import log_parser_bp
-from configs.path_configs import LOAD_PATH_bkup, LOAD_PATH_prim, LOG_PARSER_DIR
 from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.log_parser.log_parser_routes"
 
 SRC_DIR = r"C:\fake\local"
 TIMESTAMP = "20260101_120000"
+# Fake resolved share — get_log_parser_dir() is patched to this in setUp so
+# tests never probe the real prim/bkup shares.
+LOG_PARSER_DIR = r"\\fake\log_parser_data"
 FILTER_DIR = os.path.join(LOG_PARSER_DIR, "filter")
 NON_LOCAL = {"REMOTE_ADDR": "10.0.0.5"}
 
@@ -50,6 +52,9 @@ class LogParserTestCase(BaseTestCase):
 
     def setUp(self):
         super().setUp()
+        patcher = patch(f"{ROUTES}.get_log_parser_dir", return_value=LOG_PARSER_DIR)
+        self.addCleanup(patcher.stop)
+        patcher.start()
         for name in ("log_chatbot", "bt_chatbot"):
             stub = Blueprint(name, __name__)
             stub.add_url_rule(f"/__{name}_stub__/index", endpoint="index",
@@ -582,6 +587,7 @@ class TestUploadLocalAnalysisProcessing(LogParserTestCase):
         self.mock_helpers = self._start(f"{ROUTES}.helpers")
         self.mock_helpers.get_long_path.side_effect = lambda p: p
         self.mock_helpers.to_long_path.side_effect = _long
+        self.mock_get_bsod_load_path = self._start(f"{ROUTES}.get_bsod_load_path")
         self.mock_gather = self._start(f"{ROUTES}.gather_service")
         self.mock_gather.new_workflow_id.return_value = "wf-1"
         mock_dt = self._start(f"{ROUTES}.datetime")
@@ -788,7 +794,7 @@ class TestUploadLocalAnalysisProcessing(LogParserTestCase):
         into a timestamped share dir and the session records the bsod flow.
         """
         # Arrange
-        self.mock_helpers.get_load_path.return_value = r"\\share\bsod"
+        self.mock_get_bsod_load_path.return_value = r"\\share\bsod"
 
         # Act
         resp = self._post("memory.dmp")
@@ -796,7 +802,7 @@ class TestUploadLocalAnalysisProcessing(LogParserTestCase):
         # Assert
         shared_dir = os.path.join(r"\\share\bsod", f"local_bsod_{TIMESTAMP}")
         self.assertEqual(resp.get_json()["redirect"], "/__main_stub__/download_result_bsod")
-        self.mock_helpers.get_load_path.assert_called_once_with(LOAD_PATH_prim, LOAD_PATH_bkup)
+        self.mock_get_bsod_load_path.assert_called_once_with()
         self.assertEqual(mock_copy.call_args.args,
                          (os.path.join(SRC_DIR, "memory.dmp"), os.path.join(shared_dir, "memory.dmp")))
         sess = self.get_session()
@@ -815,7 +821,7 @@ class TestUploadLocalAnalysisProcessing(LogParserTestCase):
         occurs.
         """
         # Arrange
-        self.mock_helpers.get_load_path.return_value = None
+        self.mock_get_bsod_load_path.return_value = None
 
         # Act
         resp = self._post("memory.dmp")
@@ -884,7 +890,7 @@ class TestUploadLocalAnalysisProcessing(LogParserTestCase):
         and the session's bsod flag is True.
         """
         # Arrange
-        self.mock_helpers.get_load_path.return_value = r"\\share\bsod"
+        self.mock_get_bsod_load_path.return_value = r"\\share\bsod"
 
         # Act
         resp = self._post("dump_bundle.zip", is_bsod="true")

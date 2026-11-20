@@ -659,7 +659,7 @@ class TestDownloadAttachments(MainTestBase):
             download_path=expected_path)
         self.assertEqual(self.get_session()["download_path"], expected_path)
 
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=r"\\share\BSOD_Dumps")
+    @patch("configs.path_configs.get_bsod_load_path", return_value=r"\\share\BSOD_Dumps")
     @patch(f"{ROUTES}.render_template", return_value="progress-page")
     def test_bsod_uses_shared_load_path_and_case_nbr(self, mock_render, mock_load):
         """download_attachments (BSOD) uses the shared load path and case nbr.
@@ -678,7 +678,7 @@ class TestDownloadAttachments(MainTestBase):
         self.assertEqual(mock_render.call_args.kwargs["download_path"], r"\\share\BSOD_Dumps\00123456")
         self.assertEqual(self.get_session()["download_path"], r"\\share\BSOD_Dumps\00123456")
 
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=r"\\share\BSOD_Dumps")
+    @patch("configs.path_configs.get_bsod_load_path", return_value=r"\\share\BSOD_Dumps")
     def test_resolve_download_path_prefers_dashed_backend_id(self, mock_load):
         """_resolve_download_path prefers a dashed backend id for BSOD.
 
@@ -692,7 +692,7 @@ class TestDownloadAttachments(MainTestBase):
         # Act / Assert
         self.assertEqual(main_routes._resolve_download_path(ctx, True), r"\\share\BSOD_Dumps\BSOD-4242")
 
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=None)
+    @patch("configs.path_configs.get_bsod_load_path", return_value=None)
     def test_resolve_download_path_bsod_without_share_returns_empty(self, mock_load):
         """_resolve_download_path returns empty without a share (BSOD) or context.
 
@@ -765,7 +765,7 @@ class TestDownloadResult(MainTestBase):
         self.assert_redirects_to(resp, "/")
         self.mock_render.assert_not_called()
 
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=None)
+    @patch("configs.path_configs.get_bsod_load_path", return_value=None)
     def test_empty_download_path_redirects_to_index(self, mock_load):
         """download_result with an empty download path redirects home.
 
@@ -1113,7 +1113,7 @@ class TestDownloadResultBsod(MainTestBase):
         # Assert
         self.assert_redirects_to(resp, "/")
 
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=None)
+    @patch("configs.path_configs.get_bsod_load_path", return_value=None)
     def test_unreachable_share_redirects_to_index(self, mock_load):
         """download_result_bsod with an unreachable share redirects home.
 
@@ -1131,7 +1131,7 @@ class TestDownloadResultBsod(MainTestBase):
         self.assertEqual(self.flashes(), [("warning", "Session expired. Please start again.")])
 
     @patch(f"{ROUTES}.helpers.detect_user_email", return_value="tester@example.com")
-    @patch(f"{ROUTES}.helpers.get_load_path", return_value=r"\\share\BSOD_Dumps")
+    @patch("configs.path_configs.get_bsod_load_path", return_value=r"\\share\BSOD_Dumps")
     @patch(f"{ROUTES}.render_template", return_value="bsod-page")
     def test_renders_bsod_page(self, mock_render, mock_load, mock_email):
         """download_result_bsod renders the BSOD page.

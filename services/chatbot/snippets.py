@@ -400,7 +400,7 @@ def explain_snippet(payload, *, client=None, model=None, echo_ask=None,
         model=model,
         messages=_build_avatar_messages(prompt, history, selected_skills, tool_results),
         temperature=0.2,
-        max_tokens=2000,
+        max_tokens=8000,
     )
     answer = _response_text(response)
     if not answer:

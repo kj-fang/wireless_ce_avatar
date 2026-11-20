@@ -1,22 +1,52 @@
 # -----shared folder path-----
+# Cache of resolved prim/bkup shares — see utils.helpers.get_load_path_cached.
+from utils import helpers as _helpers
 
 # bsod
 #LOAD_PATH_prim = rf"\\pgsfls0101.gar.corp.intel.com\symstore\CMAttachments\JIRA"
 LOAD_PATH_bkup = rf"\\elitpts46.ger.corp.intel.com\BSOD_Dumps"
 LOAD_PATH_prim = rf"\\elitpts46.ger.corp.intel.com\BSOD_Dumps"
 
+def get_bsod_load_path(force: bool = True):
+    """Resolve LOAD_PATH_prim/bkup — whichever share answers first.
+
+    Re-probes every call by default: BSOD download is a rare, user-triggered
+    action, and a share that was unreachable earlier in the session (e.g.
+    before the VPN connected) should not stay cached as "unavailable".
+    """
+    return _helpers.get_load_path_cached("bsod_load_path", LOAD_PATH_prim, LOAD_PATH_bkup, force=force)
+
 
 # key
-KEY_PATH_prim = rf"\\pgsfls0101.gar.corp.intel.com\symstore\CMAttachments\JIRA\WIFI\Temp\KJ\Intel_WirelessCE_Avatar\key\keys.py"
+KEY_PATH_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\key\keys.py"
 KEY_PATH_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\key\keys.py"
 # Per-path wait before get_load_path() gives up on a key share (primary then
 # backup, so worst case is 2x this). Bump down when diagnosing "no API key"
 # boot failures so a dead share fails fast instead of eating ~16s.
 KEY_SHARE_TIMEOUT_SEC = 8
 
+def get_key_path(force: bool = False):
+    """Resolve KEY_PATH_prim/bkup — whichever share answers first."""
+    return _helpers.get_load_path_cached("key_path", KEY_PATH_prim, KEY_PATH_bkup,
+                                         timeout_sec=KEY_SHARE_TIMEOUT_SEC, label="key", force=force)
+
+
 # llm 
-CLASSIFY_PATH = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\classification.py"
-LOG_PARSER_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
+CLASSIFY_PATH_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\classification.py"
+CLASSIFY_PATH_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data\classification.py"
+LOG_PARSER_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
+LOG_PARSER_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
+
+
+def get_classify_path():
+    """Resolve CLASSIFY_PATH_prim/bkup — whichever share answers first."""
+    return _helpers.get_load_path_cached("classify_path", CLASSIFY_PATH_prim, CLASSIFY_PATH_bkup, label="classify_path")
+
+
+def get_log_parser_dir():
+    """Resolve LOG_PARSER_DIR_prim/bkup — whichever share answers first."""
+    return _helpers.get_load_path_cached("log_parser_dir", LOG_PARSER_DIR_prim, LOG_PARSER_DIR_bkup, label="log_parser_dir")
+
 
 # log_parser_data (skills/prompts/filters for chatbot)
 LOG_PARSER_DATA_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\log_parser_data"
@@ -73,7 +103,12 @@ GENERIC_SKILLS_YAML_DATED_RE = r"^generic_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 GENERIC_SKILLS_YAML_DATED_TEMPLATE = "generic_skills_{date}.yaml"
 
 # Wireless knowledge topics used by the home page.
-WIRELESS_TOPICS_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
+WIRELESS_TOPICS_DIR_prim = rf"\\infs089b.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
+WIRELESS_TOPICS_DIR_bkup = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
+
+def get_wireless_topics_dir():
+    """Resolve WIRELESS_TOPICS_DIR_prim/bkup — whichever share answers first."""
+    return _helpers.get_load_path_cached("wireless_topics_dir", WIRELESS_TOPICS_DIR_prim, WIRELESS_TOPICS_DIR_bkup, label="wireless_topics_dir")
 
 # Feedback sidecar — shared training-data layer.
 # Each user writes under a per-user subfolder (see feedback_service) so

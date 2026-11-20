@@ -17,7 +17,7 @@ from models.models import CaseContext
 from services.llm_service import LLM_helper
 from services import gather_service
 from configs.global_configs import app_config
-from configs.path_configs import WIRELESS_TOPICS_DIR
+from configs.path_configs import get_wireless_topics_dir
 
 
 main_bp = Blueprint("main", __name__, url_prefix="/")
@@ -97,7 +97,7 @@ def _get_wireless_topics(limit=5):
     topics = []
     try:
         for filename in ('bluetooth_topics.yaml', 'WiFi_7_topics.yaml'):
-            topic_file = os.path.join(WIRELESS_TOPICS_DIR, filename)
+            topic_file = os.path.join(get_wireless_topics_dir(), filename)
             with open(topic_file, 'r', encoding='utf-8') as f:
                 data = yaml.safe_load(f) or {}
 
@@ -421,9 +421,9 @@ def _resolve_download_path(case_context: CaseContext, is_bsod: bool) -> str:
     if not is_bsod:
         return case_context.case_download_dir or ''
 
-    from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
+    from configs.path_configs import get_bsod_load_path
 
-    load_path_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+    load_path_bsod = get_bsod_load_path()
     if not load_path_bsod:
         return ''
 

@@ -83,9 +83,8 @@ def share_case_dir(case_nbr: str, backend_id: str = "") -> str:
     """The folder Avatar's manual flow downloads to
     (main_routes._resolve_download_path): <BSOD share>\\<backend id or case
     number>. "" when no share is reachable."""
-    from configs.path_configs import LOAD_PATH_prim, LOAD_PATH_bkup
-    from utils import helpers
-    root = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+    from configs.path_configs import get_bsod_load_path
+    root = get_bsod_load_path()
     if not root:
         return ""
     folder = backend_id if "-" in str(backend_id or "") else str(case_nbr)

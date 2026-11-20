@@ -1,0 +1,14 @@
+{
+  "case:00123456": {
+    "case_nbr": "00123456",
+    "organized": {
+      "for": "00076c71bc5d729fbb8c65a936816a94d6d14255",
+      "data": {
+        "clean_description": "Wi-Fi drops every time the laptop resumes from Modern Standby.",
+        "issue_times": [],
+        "interpretation": ""
+      }
+    },
+    "at": "2026-11-20T06:00:11+00:00"
+  }
+}

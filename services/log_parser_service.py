@@ -8,11 +8,10 @@ from concurrent.futures import ThreadPoolExecutor
 from flask import session
 from typing import Dict, Any, Optional, Tuple
 
-from configs.path_configs import LOG_PARSER_DIR
+from configs.path_configs import get_log_parser_dir
 import markdown
 import bleach
 
-from configs.path_configs import LOG_PARSER_DIR
 from configs.global_configs import app_config
 
 from utils import helpers
@@ -28,7 +27,7 @@ from utils.log_parser_preprocess import (
 
 class LogParserService:
     def __init__(self):
-        self.log_parser_dir = LOG_PARSER_DIR
+        self.log_parser_dir = get_log_parser_dir()
         self.progress_status = {
             'percentage': 0,
             'message': 'Ready',
@@ -56,7 +55,9 @@ class LogParserService:
     def check_auto_analysis_availability(self, classification: Dict) -> Tuple[bool, Optional[Dict]]:
         if 'issue_type' not in classification or classification['issue_type'] == "Unclassified":
             return False, None
-            
+        if not self.log_parser_dir:
+            return False, None
+
         issue_type = classification['issue_type'].lower()
         filter_file = f"{issue_type}.tat"
         prompt_file = f"{issue_type}.py"

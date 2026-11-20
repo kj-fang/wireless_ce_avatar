@@ -171,6 +171,27 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
     print(f"{tag}!! ALL SHARED FOLDER UNAVAILABLE")
 
 
+# Cache of resolved prim/bkup shares, keyed by caller-chosen cache_key — the
+# probe above spins up a thread per path with its own timeout, so sharing
+# one cache per key keeps that cost to once per process instead of once
+# per call site.
+_load_path_cache: dict = {}
+
+
+def get_load_path_cached(cache_key: str, primary: str, backup: str, timeout_sec: int = 8,
+                          label: str = None, force: bool = False):
+    """Return whichever of ``primary``/``backup`` is reachable (``None`` if neither is).
+
+    Cached per process, per ``cache_key``, unless ``force=True``, which always
+    re-probes and refreshes the cache — for callers (e.g. a rare, user-triggered
+    action) where a stale answer from earlier in the session must not stick.
+    """
+    if force or cache_key not in _load_path_cache:
+        _load_path_cache[cache_key] = get_load_path(
+            primary, backup, timeout_sec=timeout_sec, label=label or cache_key)
+    return _load_path_cache[cache_key]
+
+
 def read_log_file(path: str) -> List[str]:
     """Read an ETL-decoded ``.log`` into a list of lines as-is.
 

@@ -42,7 +42,7 @@ self.onmessage = event => {
             if (rows.length >= maxLines || length > maxChars) {
                 const error = purpose === 'copy'
                     ? `Select at most ${maxLines.toLocaleString()} lines to copy. Nothing was copied.`
-                    : 'Select at most 200 lines and 16,000 characters. Nothing was added.';
+                    : 'Select at most 200 lines and 80,000 characters. Nothing was added.';
                 self.postMessage({type: 'selection', runId: displayedRunId, requestId: message.requestId, purpose, error});
                 return;
             }

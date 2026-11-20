@@ -28,6 +28,14 @@
         }
     }
     function clearDefaultPrompt() {
+        if (window.getChatRecipientDraft && window.setChatRecipientDraft) {
+            for (const mode of ['avatar', 'echo']) {
+                if (window.getChatRecipientDraft(mode) === DEFAULT_PROMPT) {
+                    window.setChatRecipientDraft(mode, '');
+                }
+            }
+            return;
+        }
         const input = document.getElementById('user-input');
         if (input.value === DEFAULT_PROMPT) {
             input.value = '';

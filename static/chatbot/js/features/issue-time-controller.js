@@ -397,6 +397,24 @@
         const noTimeHint = document.getElementById('no-time-hint');
         const sendBtn = document.getElementById('send-btn');
 
+        if (window.ChatbotSnippets?.active) {
+            [noLogHint, noDescHint, noTimeHint, document.getElementById('time-hint')].forEach(hint => {
+                if (hint) hint.style.display = 'none';
+            });
+            const valid = !window.ChatbotSnippets.busy && !window.__echoChatBusy;
+            if (sendBtn && !isChatStreaming()) sendBtn.disabled = !valid;
+            return valid;
+        }
+
+        if (window.__chatRecipient === 'echo') {
+            [noLogHint, noDescHint, noTimeHint, document.getElementById('time-hint')].forEach(hint => {
+                if (hint) hint.style.display = 'none';
+            });
+            const valid = !!text.trim() && !window.__echoChatBusy;
+            if (sendBtn) sendBtn.disabled = !valid;
+            return valid;
+        }
+
         // Hide the (now legacy) "invalid time format" banner; we no longer
         // accept free-form time in the textarea.
         const timeHint = document.getElementById('time-hint');

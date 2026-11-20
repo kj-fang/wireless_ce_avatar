@@ -40,6 +40,7 @@
 
     function setSendBtnStopMode() {
         __chatStreaming = true;
+        window.refreshChatRecipientAvailability?.();
         // Before the early return below: a profile with no Send button still
         // has skill cards, and they must go inert too.
         setSkillCardsEnabled(false);
@@ -52,6 +53,7 @@
 
     function setSendBtnSendMode() {
         __chatStreaming = false;
+        window.refreshChatRecipientAvailability?.();
         setSkillCardsEnabled(true);
         window.__streamCtl = null;
         const btn = document.getElementById('send-btn');
@@ -67,6 +69,16 @@
     // Single click entry point for the Send/Stop button (and the Enter key).
     function onSendBtnClick() {
         if (__chatStreaming) { stopChat(); return; }
+        if (window.ChatbotSnippets?.busy) return;
+        if (window.ChatbotSnippets?.active) {
+            window.ChatbotSnippets.send();
+            return;
+        }
+        if (window.__echoChatBusy) return;
+        if (window.__chatRecipient === 'echo' && typeof window.sendEchoMessage === 'function') {
+            window.sendEchoMessage();
+            return;
+        }
         sendMessage();
     }
 
@@ -514,8 +526,9 @@
     }
 
     function sendQuick(text) {
+        if (__chatStreaming || window.ChatbotSnippets?.busy || window.__echoChatBusy) return;
         document.getElementById('user-input').value = text;
-        sendMessage();
+        onSendBtnClick();
     }
 
     // ── Render agent steps with dynamic loading and auto-collapse ────
@@ -574,17 +587,25 @@
 // meant, and nothing to do with navigation when it is not -- so it asks,
 // but only when there is something to lose. A page with no log loaded has
 // nothing to confirm and should not nag.
-window.confirmLeaveChatbot = function () {
+window.confirmLeaveChatbot = function (form) {
+    if (form && form.dataset.leaving) return false;
     // NW has no log box; its Sleep Study report box stands in for it.
     const box = document.getElementById('log-path-input')
              || document.getElementById('sleepstudy-path-input');
     const path = (box || {}).value || '';
-    if (!path.trim()) return true;
-    return confirm(
+    const ok = !path.trim() || confirm(
         'Leave the analysis?\n\n'
         + 'The loaded log and this conversation are discarded, and a prompt '
         + 'you applied without keeping goes with them.'
     );
+    if (ok && form) {
+        // Avatar's index can take a while to render; show progress and block a second submit.
+        form.dataset.leaving = '1';
+        const button = form.querySelector('button[type="submit"]');
+        if (button) { button.disabled = true; button.textContent = 'Leaving…'; }
+        document.body.style.cursor = 'progress';
+    }
+    return ok;
 };
 
 // ---- Chat runtime shims -------------------------------------------------

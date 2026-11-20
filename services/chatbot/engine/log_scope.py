@@ -10,8 +10,8 @@ from typing import List, Optional, Tuple
 
 from utils import helpers
 from utils.log_parser_preprocess import (
-    extract_enabled_keywords_from_filter_file,
-    filter_log_by_keywords,
+    extract_enabled_filter_rules_from_filter_file,
+    filter_log_by_filters,
     group_similar_logs,
     preprocess_log_for_llm,
 )
@@ -50,7 +50,12 @@ class LogScopeMixin:
 
         try:
             self._raw_log_cache = helpers.read_log_file(self.current_log_path)
+            with open(self.current_log_path, "r", encoding="utf-8", errors="replace") as log_file:
+                 source_start = 2 if log_file.readline().startswith("# WCE_LOG_TZ_SHIFTED=") else 1
+            self._raw_log_source_line_numbers = list(range(source_start, source_start + len(self._raw_log_cache)))
             self._raw_log_cache_path = self.current_log_path
+            self._original_wrapped_lines = {}
+            self._raw_log_line_number_lookup = None
             # A different file means all derived caches are stale.
             self._filter_cache_by_skill = {}
             self._detail_cache = {}
@@ -219,17 +224,27 @@ class LogScopeMixin:
         # wraps the time-of-day in ``<...>``.
         start_re = re.compile(r'^\s*<?(?:\d+\s+)?\d{1,2}:\d{2}:\d{2}')
         merged: List[str] = []
+        originals: List[str] = []
+        merged_line_numbers: List[int] = []
+        source_line_numbers = getattr(self, "_raw_log_source_line_numbers", [])
         wrapped = 0
-        for line in lines:
+        for index, line in enumerate(lines):
+            line_number = source_line_numbers[index] if index < len(source_line_numbers) else index + 1
             if not line.strip() or not merged or start_re.match(line):
                 # Blank lines and entry-start lines pass through unchanged;
                 # blanks are never treated as continuations.
                 merged.append(line)
+                originals.append(line)
+                merged_line_numbers.append(line_number)
             else:
                 merged[-1] = merged[-1].rstrip("\r\n") + " " + line.strip()
+                originals[-1] += line
                 wrapped += 1
         if wrapped:
+            self._original_wrapped_lines = dict(zip(merged, originals))
             self._raw_log_cache = merged
+            self._raw_log_source_line_numbers = merged_line_numbers
+            self._raw_log_line_number_lookup = None
             print(f"[PreScan] 🔗 Merged {wrapped} wrapped continuation line(s) "
                   f"in time-only log (now {len(merged)} entries).")
 
@@ -944,15 +959,15 @@ class LogScopeMixin:
 
         # --- keyword extraction: prefer TAT file, fall back to in-memory list ---
         if skill.tat_path and Path(skill.tat_path).exists():
-            keywords = extract_enabled_keywords_from_filter_file(skill.tat_path)
+            filters = extract_enabled_filter_rules_from_filter_file(skill.tat_path)
         else:
-            keywords = skill.keywords  # fallback: keywords already loaded from TAT
-
-        if not keywords:
-            return "No keywords available for this skill."
-
-        # --- same preprocessing steps as log_parser_service.process_analysis ---
-        filtered   = filter_log_by_keywords(log_lines, keywords)
+            filters = [{"text": keyword} for keyword in (skill.keywords or [])]
+        filters += [{"text": term, "excluding": True} for term in (skill.exclusive or [])]
+        if not any(not rule.get("excluding") for rule in filters):
+            return "No enabled filters available for this skill."
+        original_lines = filter_log_by_filters(log_lines, filters)
+        self._remember_turn_skill_logs(skill_name, original_lines)
+        filtered = [re.sub(r"^\d+\t", "", line) for line in original_lines]
         processed  = preprocess_log_for_llm(filtered)
         grouped    = group_similar_logs(processed)
 

@@ -459,9 +459,27 @@ def record_turn(
                 "turn_id": turn_id,
                 "ts": _now_iso(),
                 "user_message": user_message or "",
-                "result": _trim_result(agent_result),
+                "result": _trim_result({key: value for key, value in agent_result.items()
+                                        if key not in {"key_logs", "key_log_rows"}}
+                                       if isinstance(agent_result, dict) else agent_result),
                 "mode": mode,
             })
+
+            key_logs = agent_result.get("key_logs") if isinstance(agent_result, dict) else None
+            key_log_rows = agent_result.get("key_log_rows") if isinstance(agent_result, dict) else None
+            if ((isinstance(key_logs, str) and key_logs)
+                    or (isinstance(key_log_rows, list) and key_log_rows)):
+                try:
+                    log_path = _sidecar_path("key_logs", conversation_id, domain)
+                    if log_path is not None:
+                        log_path.parent.mkdir(parents=True, exist_ok=True)
+                        log_snapshot = _read_snapshot(log_path) or {}
+                        log_snapshot[turn_id] = {"text": key_logs or "", "rows": key_log_rows or []}
+                        log_tmp = log_path.with_suffix(".json.tmp")
+                        log_tmp.write_text(json.dumps(log_snapshot, ensure_ascii=False), encoding="utf-8")
+                        log_tmp.replace(log_path)
+                except Exception as exc:
+                    print(f"[history] key log export failed: {exc}")
 
             # tmp+replace inline (already holding the lock).
             tmp = path.with_suffix(".json.tmp")
@@ -676,6 +694,21 @@ def get_conversation(conversation_id: str, domain: str = "",
     snapshot = _read_snapshot(path)
     if snapshot is None or not with_steps:
         return snapshot
+    log_path = _sidecar_path("key_logs", conversation_id, domain)
+    key_logs = _read_snapshot(log_path) if log_path is not None else None
+    if key_logs:
+        for turn in snapshot.get("turns") or []:
+            if isinstance(turn, dict) and isinstance(turn.get("result"), dict):
+                entry = key_logs.get(str(turn.get("turn_id") or ""))
+                if isinstance(entry, str):
+                    turn["result"]["key_logs"] = entry
+                elif isinstance(entry, dict):
+                    raw = entry.get("text")
+                    rows = entry.get("rows")
+                    if isinstance(raw, str):
+                        turn["result"]["key_logs"] = raw
+                    if isinstance(rows, list):
+                        turn["result"]["key_log_rows"] = rows
     try:
         by_turn = _load_steps(conversation_id, domain)
         if by_turn:
@@ -709,7 +742,7 @@ def delete_conversation(conversation_id: str, domain: str = "") -> bool:
                 removed = True
     except Exception as e:
         print(f"[history] delete failed (conv={conversation_id}): {e}")
-    for subdir in (_STEPS_SUBDIR, _CONTEXT_SUBDIR):
+    for subdir in (_STEPS_SUBDIR, _CONTEXT_SUBDIR, "key_logs"):
         sidecar = _sidecar_path(subdir, conversation_id, domain)
         if sidecar is None:
             continue

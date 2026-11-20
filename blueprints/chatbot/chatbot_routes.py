@@ -64,6 +64,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import ModuleType
 from typing import Any, Callable, Sequence
+from urllib.parse import quote
 
 from flask import (
     Response,
@@ -72,6 +73,7 @@ from flask import (
     render_template,
     request,
     session,
+    url_for,
 )
 
 from configs.chatbot_ui import BT_UI, GENERIC_UI, LINUX_UI, LOG_CHATBOT_UI
@@ -145,6 +147,7 @@ from utils.issue_time_utils import (
     read_log_time_range,
     validate_issue_time_in_log_range,
 )
+from utils.port_utils import get_logs_dir
 from utils.timezone_utils import (
     get_effective_timezone,
     taiwan_to_local,
@@ -158,6 +161,7 @@ from utils.timezone_utils import (
 # find_nearest_event_error only needs a representative pool, so this cap keeps
 # /suggest_issue_times fast and bounded even on very large .evtx captures.
 _EVENT_ANCHOR_MAX = 500
+LOG_PREVIEW_CHUNK_BYTES = 1024 * 1024
 
 
 # ==================================================================
@@ -1181,6 +1185,155 @@ class AgentRoutes:
     # been one shared implementation since the engine refactor. Same name, two
     # layers: seeing agent.chat() in here is not what makes this shared.
     # ------------------------------------------------------------------
+    def preview_log(self):
+        agent = self._get_configuration_agent()
+        log_path = (getattr(agent, "current_log_path", "") or "").strip()
+        if not log_path:
+            return jsonify({"success": False, "error": "Load a log file in the sidebar first."}), 400
+        if not os.path.isfile(log_path):
+            return jsonify({"success": False, "error": "The selected log file is not available."}), 404
+        return jsonify({"success": True, "name": os.path.basename(log_path),
+                        "size": os.path.getsize(log_path), "chunk_size": LOG_PREVIEW_CHUNK_BYTES,
+                        "chunk_url": url_for(f"{self.profile.name}.preview_log_chunk")})
+
+    def preview_log_chunk(self):
+        agent = self._get_configuration_agent()
+        log_path = (getattr(agent, "current_log_path", "") or "").strip()
+        if not log_path:
+            return Response("Load a log file in the sidebar first.", status=400, mimetype="text/plain")
+        if not os.path.isfile(log_path):
+            return Response("The selected log file is not available.", status=404, mimetype="text/plain")
+        try:
+            offset = int(request.args.get("offset", "0"))
+        except (TypeError, ValueError):
+            return Response("offset must be a non-negative integer.", status=400, mimetype="text/plain")
+        size = os.path.getsize(log_path)
+        if offset < 0 or offset > size:
+            return Response("offset is outside the selected log.", status=416, mimetype="text/plain")
+        try:
+            with open(log_path, "rb") as log_file:
+                log_file.seek(offset)
+                chunk = log_file.read(LOG_PREVIEW_CHUNK_BYTES)
+            next_offset = offset + len(chunk)
+            return Response(chunk, mimetype="application/octet-stream", headers={
+                "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+                "X-Next-Offset": str(next_offset), "X-Log-Size": str(size),
+                "X-Log-Eof": "true" if next_offset >= size else "false",
+            })
+        except OSError:
+            return Response("Could not read the selected log.", status=500, mimetype="text/plain")
+
+    def default_tat_filter(self):
+        logs_dir = get_logs_dir()
+        try:
+            tat_names = [name for name in os.listdir(logs_dir) if name.lower().endswith(".tat")]
+        except OSError:
+            return jsonify({"success": False}), 404
+        # Exactly one keeps this unambiguous: a user drops their own .tat (any
+        # name) into the logs folder rather than renaming it to a fixed
+        # "default.tat". Zero means no default yet; two or more means we
+        # can't guess which one -- both stay silent on the frontend, same as
+        # a missing file, rather than guessing wrong.
+        if len(tat_names) != 1:
+            return jsonify({"success": False}), 404
+        tat_path = os.path.join(logs_dir, tat_names[0])
+        if not os.path.isfile(tat_path):
+            return jsonify({"success": False}), 404
+        try:
+            with open(tat_path, "r", encoding="utf-8") as tat_file:
+                content = tat_file.read()
+        except OSError:
+            return jsonify({"success": False}), 404
+        return Response(content, mimetype="application/xml",
+                         headers={"X-Tat-Name": quote(tat_names[0])})
+
+    def explain_snippet(self):
+        from services.chatbot.echo import ask_echo_chat
+        from services.chatbot.snippets import explain_snippet
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return jsonify(success=False, error="Invalid snippet request."), 400
+        if data.get("recipient") == "echo" and "echo_chat" not in self.profile.capabilities:
+            return jsonify(success=False, error="Echo is not available for this profile."), 400
+        agent = self._get_configuration_agent()
+        active_log = str(getattr(agent, "current_log_path", "") or "")
+        blocked = check_ips_service.blocking_state(active_log or None)
+        if blocked:
+            return jsonify(blocked), 428
+        try:
+            if data.get("recipient", "avatar") == "avatar":
+                client, model = self._get_llm_client_model()
+                skills = getattr(agent, "skills", {}) or {}
+                skill_catalog = []
+                if isinstance(skills, dict):
+                    skill_values = skills.values()
+                elif isinstance(skills, (list, tuple)):
+                    skill_values = skills
+                else:
+                    skill_values = ()
+                for skill in skill_values:
+                    if isinstance(skill, dict):
+                        skill_catalog.append({
+                            "name": skill.get("name"),
+                            "description": skill.get("description"),
+                            "expert_rules": skill.get("expert_rules"),
+                            "keywords": skill.get("keywords", []),
+                        })
+                    else:
+                        skill_catalog.append({
+                            "name": getattr(skill, "name", None),
+                            "description": getattr(skill, "description", None),
+                            "expert_rules": getattr(skill, "expert_rules", None),
+                            "keywords": getattr(skill, "keywords", []),
+                        })
+                analysis = explain_snippet(
+                    data, client=client, model=model, echo_ask=ask_echo_chat,
+                    skill_catalog=skill_catalog, include_metadata=True,
+                    disabled_tools=getattr(getattr(agent, "capabilities", None), "disabled_tools", ()),
+                )
+            else:
+                client, model = None, None
+                analysis = explain_snippet(
+                    data, client=client, model=model, echo_ask=ask_echo_chat,
+                    include_metadata=True,
+                )
+            if isinstance(analysis, dict):
+                answer = analysis.get("answer", "")
+                applied_skills = analysis.get("applied_skills", [])
+                selection_status = analysis.get("selection_status", "no_match")
+                tool_results = analysis.get("tool_results", [])
+                token_usage = analysis.get("token_usage")
+            else:
+                answer = analysis
+                applied_skills = []
+                selection_status = "no_match"
+                tool_results = []
+                token_usage = None
+            result = dict(success=True, answer=answer, applied_skills=applied_skills,
+                          selection_status=selection_status)
+            if tool_results:
+                result["tool_results"] = tool_results
+            if data.get("recipient", "avatar") == "avatar":
+                result["token_usage"] = token_usage
+            return jsonify(result)
+        except ValueError as error:
+            return jsonify(success=False, error=str(error)), 400
+        except Exception:
+            traceback.print_exc()
+            return jsonify(success=False, error="Could not explain the fragment. Please try again."), 502
+
+    def echo_chat(self):
+        from services.chatbot.echo import ask_echo_chat, EchoChatError
+        data = request.get_json(silent=True) or {}
+        message = str(data.get("message") or "").strip()
+        history = data.get("history") or []
+        if not message or len(message) > 12000 or not isinstance(history, list):
+            return jsonify({"success": False, "error": "Provide a message (up to 12000 characters) and history list."}), 400
+        try:
+            return jsonify({"success": True, "answer": ask_echo_chat(message, history=history)})
+        except EchoChatError as error:
+            return jsonify({"success": False, "error": str(error)}), 502
+
     def chat(self):
         data = request.get_json(silent=True) or {}
         user_message = (data.get("message") or "").strip()
@@ -2096,6 +2249,11 @@ class AgentRoutes:
 
         return {
             "chat": self.chat,
+            "preview_log": self.preview_log,
+            "preview_log_chunk": self.preview_log_chunk,
+            "default_tat_filter": self.default_tat_filter,
+            "explain_snippet": self.explain_snippet,
+            "echo_chat": self.echo_chat,
             "get_issue_context": self.get_issue_context,
             "history_load": self.history_load,
             "index": self.index,

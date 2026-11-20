@@ -17,8 +17,23 @@
     let pendingAnswer = null;
     let generation = 0;
     let busy = false;
+    const DEFAULT_PROMPT = 'Please explain this log fragment.';
 
     function recipient() { return window.__chatRecipient === 'echo' ? 'echo' : 'avatar'; }
+    function setDefaultPrompt() {
+        const input = document.getElementById('user-input');
+        if (!input.value.trim()) {
+            input.value = DEFAULT_PROMPT;
+            autoResize(input);
+        }
+    }
+    function clearDefaultPrompt() {
+        const input = document.getElementById('user-input');
+        if (input.value === DEFAULT_PROMPT) {
+            input.value = '';
+            autoResize(input);
+        }
+    }
     function setAnswerText(el, text) {
         if (typeof marked !== 'undefined' && typeof DOMPurify !== 'undefined') {
             el.innerHTML = DOMPurify.sanitize(marked.parse(text), {USE_PROFILES: {html: true}});
@@ -113,15 +128,20 @@
         generation++;
         if (controller) controller.abort();
         if (pendingAnswer?.isConnected) setAnswerText(pendingAnswer, 'Fragment explanation cancelled.');
+        clearDefaultPrompt();
         selected = null;
         histories = {avatar: [], echo: []};
         refresh();
     });
-    document.addEventListener('chatbot:recipient-changed', refresh);
+    document.addEventListener('chatbot:recipient-changed', () => {
+        if (selected) setDefaultPrompt();
+        refresh();
+    });
     document.addEventListener('chatbot:context-changed', () => {
         if (pendingAnswer?.isConnected) setAnswerText(pendingAnswer, 'Fragment explanation cancelled.');
         generation++;
         if (controller) controller.abort();
+        clearDefaultPrompt();
         selected = null;
         histories = {avatar: [], echo: []};
         refresh();
@@ -130,16 +150,17 @@
         get active() { return !!selected; },
         get busy() { return busy; },
         select(snippet) {
-            if (!snippet.rows.length || snippet.rows.length > 200 || snippet.rows.reduce((total, row) => total + row.text.length, 0) > 8000) return;
+            if (!snippet.rows.length || snippet.rows.length > 200 || snippet.rows.reduce((total, row) => total + row.text.length, 0) > 80000) return;
             selected = {name: snippet.name, rows: snippet.rows.map(row => ({lineNumber: row.lineNumber, text: row.text}))};
             histories = {avatar: [], echo: []};
+            setDefaultPrompt();
             refresh();
             document.getElementById('user-input').focus();
         },
         async send() {
             if (!selected || busy || window.__echoChatBusy || isChatStreaming()) return;
             const input = document.getElementById('user-input');
-            const question = input.value.trim() || 'Please explain this log fragment.';
+            const question = input.value.trim() || DEFAULT_PROMPT;
             const target = recipient();
             const snapshot = selected;
             const history = histories[target];

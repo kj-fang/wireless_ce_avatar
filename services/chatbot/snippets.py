@@ -5,7 +5,7 @@ import re
 
 MAX_SNIPPET_LINES = 200
 MAX_SNIPPET_CHARS = 8000
-MAX_PROMPT_CHARS = 24000
+MAX_PROMPT_CHARS = 240000
 MAX_SKILLS_TO_APPLY = 3
 MAX_TOOL_CALLS = 20
 MAX_TOOL_OUTPUT_CHARS = 10000
@@ -77,7 +77,7 @@ def build_snippet_request(payload):
             raise ValueError("Selected lines must have increasing original line numbers.")
         length += len(text)
         if length > MAX_SNIPPET_CHARS:
-            raise ValueError("Select at most 8,000 characters. Nothing was truncated.")
+            raise ValueError("Select at most 80,000 characters. Nothing was truncated.")
         if previous and number != previous + 1:
             lines.append("[hidden or unselected lines omitted]")
         line_text = text.rstrip("\r\n")

@@ -70,7 +70,7 @@
             margin: 5px 8px 7px; border: 1px solid #d6dbe1; border-radius: 5px; overflow: hidden;
         }
         .key-log-filter-head, .key-log-filter-rule {
-            display: grid; grid-template-columns: 62px minmax(0, 1fr) 46px 28px; align-items: center;
+            display: grid; grid-template-columns: 82px minmax(0, 1fr) 46px 28px; align-items: center;
         }
         .key-log-filter-head {
             min-height: 21px; background: #f4f6f8; border-bottom: 1px solid #d6dbe1;
@@ -80,7 +80,7 @@
         .key-log-filter-head span { min-width: 0; padding: 1px 5px; }
         .key-log-filter-list { flex: 1; min-height: 0; overflow: auto; font-size: 0.68rem; }
         .key-log-filter-rule {
-            min-height: 21px; border-bottom: 1px solid #f0f2f4; line-height: 1.4;
+            min-height: 28px; border-bottom: 1px solid #f0f2f4; line-height: 1.4;
             color: #2c2f33; cursor: grab; user-select: none;
         }
         .key-log-filter-rule:hover { background: rgba(0, 113, 197, 0.05); }
@@ -88,12 +88,12 @@
         .key-log-filter-rule.drop-before { box-shadow: inset 0 2px #0071c5; }
         .key-log-filter-rule.drop-after { box-shadow: inset 0 -2px #0071c5; }
         .key-log-filter-mod {
-            display: flex; align-items: center; gap: 3px; min-width: 0; padding: 1px 4px;
+            display: flex; align-items: center; gap: 8px; min-width: 0; padding: 1px 5px;
         }
-        .key-log-filter-drag { width: 16px; height: 18px; flex: 0 0 16px; cursor: grab; }
+        .key-log-filter-drag { width: 20px; height: 24px; flex: 0 0 20px; cursor: grab; }
         .key-log-filter-drag:active { cursor: grabbing; }
-        .key-log-filter-drag svg { width: 14px; height: 14px; }
-        .key-log-filter-mod input { width: 12px; height: 12px; margin: 0; }
+        .key-log-filter-drag svg { width: 15px; height: 15px; }
+        .key-log-filter-mod input { width: 14px; height: 14px; flex: 0 0 14px; margin: 0; cursor: pointer; }
         .key-log-filter-letter {
             color: #7a8088; font: 0.64rem Consolas, monospace;
         }

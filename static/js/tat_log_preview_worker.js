@@ -1,6 +1,6 @@
 const DEFAULT_CHUNK_BYTES = 1024 * 1024;
 const ADD_TO_QUESTION_MAX_LINES = 200;
-const ADD_TO_QUESTION_MAX_CHARS = 8000;
+const ADD_TO_QUESTION_MAX_CHARS = 80000;
 const COPY_MAX_LINES = 50000;
 const MAX_SOURCE_CACHE_BYTES = 32 * 1024 * 1024;
 const MAX_RULE_INDEX_BYTES = 16 * 1024 * 1024;
@@ -42,7 +42,7 @@ self.onmessage = event => {
             if (rows.length >= maxLines || length > maxChars) {
                 const error = purpose === 'copy'
                     ? `Select at most ${maxLines.toLocaleString()} lines to copy. Nothing was copied.`
-                    : 'Select at most 200 lines and 8,000 characters. Nothing was added.';
+                    : 'Select at most 200 lines and 16,000 characters. Nothing was added.';
                 self.postMessage({type: 'selection', runId: displayedRunId, requestId: message.requestId, purpose, error});
                 return;
             }

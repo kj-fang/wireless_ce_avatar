@@ -187,6 +187,7 @@ class DriverManager:
         options.add_argument('ignore-certificate-errors')
         options.add_argument("--disable-gpu")
         options.add_argument("--log-level=3")
+        options.add_argument("--start-maximized")
         # When Python/Selenium exits, the driver is quit, or the process is terminated, Chrome will close along with it.
         options.add_experimental_option("detach", False)
         if not self.chrome_driver_path:

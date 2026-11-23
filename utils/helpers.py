@@ -126,7 +126,7 @@ def load_module(path, module_name):
 def get_load_path(primary, backup, timeout_sec=8, label=None):
     tag = f"[{label}] " if label else ""
     print(f"{tag}checking shared folder path...")
-    for path in [primary, backup]:
+    for slot, path in (("prim", primary), ("bkup", backup)):
         result = {"exists": False, "error": None,
                    "parent_exists": None, "parent_error": None}
         def check():
@@ -150,14 +150,14 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
         thread.join(timeout_sec)
         elapsed = time.monotonic() - start
         if thread.is_alive():
-            print(f"{tag}  TIMEOUT after {elapsed:.1f}s (> {timeout_sec}s): {path}")
+            print(f"{tag}  TIMEOUT after {elapsed:.1f}s (> {timeout_sec}s) [{slot}]: {path}")
             continue
         if result["error"] is not None:
             err = result["error"]
-            print(f"{tag}  ERROR after {elapsed:.1f}s checking {path}: {type(err).__name__}: {err}")
+            print(f"{tag}  ERROR after {elapsed:.1f}s checking [{slot}] {path}: {type(err).__name__}: {err}")
             continue
         if result["exists"]:
-            print(f"{tag}Using: {path} (found in {elapsed:.1f}s)")
+            print(f"{tag}Using [{slot}]: {path} (found in {elapsed:.1f}s)")
             return path
         if result["parent_error"] is not None:
             pe = result["parent_error"]
@@ -186,9 +186,14 @@ def get_load_path_cached(cache_key: str, primary: str, backup: str, timeout_sec:
     re-probes and refreshes the cache — for callers (e.g. a rare, user-triggered
     action) where a stale answer from earlier in the session must not stick.
     """
+    tag = f"[{label or cache_key}] "
     if force or cache_key not in _load_path_cache:
+        reason = "force=True" if force else "cache miss"
+        print(f"{tag}get_load_path_cached({cache_key}): {reason} — probing shared folder")
         _load_path_cache[cache_key] = get_load_path(
             primary, backup, timeout_sec=timeout_sec, label=label or cache_key)
+    else:
+        print(f"{tag}get_load_path_cached({cache_key}): using cached result: {_load_path_cache[cache_key]}")
     return _load_path_cache[cache_key]
 
 

@@ -2,7 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Avatar Beacon</title>
+  <title>Avatar Handsfree</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='handsfree_logo.svg') }}" />
   <style>
     :root {
       --bg: #0a0d12;
@@ -352,14 +353,9 @@
 <div class="page-grid">
 <header>
   <span class="mark" aria-hidden="true">
-    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-         stroke-width="1.8" stroke-linecap="round">
-      <path d="M4.5 10.5a11 11 0 0 1 15 0" />
-      <path d="M7.5 13.8a7 7 0 0 1 9 0" />
-      <circle cx="12" cy="17.6" r="1.6" fill="currentColor" stroke="none" />
-    </svg>
+    <img src="{{ url_for('static', filename='handsfree_logo.svg') }}" width="34" height="34" alt="">
   </span>
-  <h1>Avatar Beacon</h1>
+  <h1>Avatar Handsfree</h1>
   <div class="sub">Hands-free IPS case replies — detect newly assigned cases → analyze → review → post Private-to-Intel</div>
 </header>
 
@@ -400,11 +396,11 @@
             <option value="auto">auto</option>
           </select>
         </label>
-        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Beacon server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
+        <label title="The latest released Wi-Fi driver the customer drafts ask an outdated customer to validate on. Empty = the value the Handsfree server reads from the PAE Wi-Fi Dashboard once a day; a full version here (e.g. 24.90.0.3) overrides it for everyone.">Latest driver (manual override):
           <input type="text" id="cfg-latest-driver" style="width: 120px;" placeholder="empty = use the report">
         </label>
-        <span class="status-line" id="cfg-latest-driver-auto" title="What the Beacon server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
-        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Beacon server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
+        <span class="status-line" id="cfg-latest-driver-auto" title="What the Handsfree server last read from the PAE Wi-Fi Dashboard (PV / PV-HF rows, highest version up to this work week)"></span>
+        <button class="ghost" id="latest-driver-refresh-btn" onclick="refreshLatestDriver()" title="Asks the Handsfree server to re-read the PAE Wi-Fi Dashboard now (within about 30 seconds)">Refresh now</button>
         <button class="primary" onclick="saveConfig()">Save settings</button>
         <span class="status-line" id="cfg-status"></span>
       </div>
@@ -554,7 +550,7 @@
         </label>
         <label>folder
           <input type="text" id="auto-email-folder" value="Inbox" style="width: 150px; font-family: var(--mono); font-size: 12.5px;"
-                 title="Inbox, or a subfolder of it such as Inbox/Beacon"></label>
+                 title="Inbox, or a subfolder of it such as Inbox/Handsfree"></label>
         <label>mail from the last
           <input type="number" id="auto-email-days" min="1" max="60" step="1" value="7" style="width: 54px;"> days</label>
         <label>max
@@ -662,7 +658,7 @@
       <button class="ghost" id="draft-avatar-btn" onclick="openInAvatar(currentDraftCase, currentDraftId, this)"
               title="Opens this case in Avatar to continue by hand">Open in Avatar analysis</button>
       <button class="ghost" onclick="resetCase(currentDraftCase)"
-              title="Forget this case's Beacon history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
+              title="Forget this case's Handsfree history (drafts archived, analysis marks cleared) so the next run starts fresh">Reset case history</button>
       <span class="status-line" id="post-status"></span>
     </div>
     <details style="margin-top:10px;">
@@ -956,7 +952,7 @@
     return bits.join(' · ');
   }
 
-  // "Refresh now": ask the Beacon server to re-read the PAE Wi-Fi Dashboard,
+  // "Refresh now": ask the Handsfree server to re-read the PAE Wi-Fi Dashboard,
   // then follow the shared config until the server has fetched (<= 2 min).
   async function refreshLatestDriver() {
     const btn = document.getElementById('latest-driver-refresh-btn');
@@ -967,7 +963,7 @@
       const r = await fetch('/handsfree/latest_driver/refresh', {method: 'POST'});
       const res = await r.json();
       if (!r.ok || res.ok === false) throw new Error(res.error || ('HTTP ' + r.status));
-      out.textContent = 'refresh requested — the Beacon server reads the dashboard on its next tick…';
+      out.textContent = 'refresh requested — the Handsfree server reads the dashboard on its next tick…';
       const t0 = Date.now();
       while (Date.now() - t0 < 120000) {
         await new Promise(res => setTimeout(res, 5000));
@@ -977,7 +973,7 @@
           return;
         }
       }
-      out.textContent = 'no fetch yet — is the Beacon server running? ' + latestDriverAutoText(before);
+      out.textContent = 'no fetch yet — is the Handsfree server running? ' + latestDriverAutoText(before);
     } catch (e) {
       out.textContent = 'refresh failed: ' + e;
     } finally {
@@ -1547,7 +1543,7 @@
           : '') +
         `<button class="ghost avatar-btn lp-btn-sm" title="${esc(avatarHandoffTitle(!!it.log_dir))}"${it.log_dir ? '' : ' disabled'}>Avatar</button> ` +
         (firstOfCase.has(it.case_nbr) ? '' :
-          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Beacon history so the next run starts fresh">Reset</button>`) +
+          `<button class="ghost reset-btn lp-btn-sm" title="Forget this case's Handsfree history so the next run starts fresh">Reset</button>`) +
         `</td>`;
       firstOfCase.add(it.case_nbr);
       tr.onclick = () => openDraft(it.draft_id);
@@ -1601,7 +1597,7 @@
 
   async function resetCase(caseNbr) {
     if (!caseNbr) return;
-    const purge = confirm('Reset Beacon history of case ' + caseNbr + '?\n\n' +
+    const purge = confirm('Reset Handsfree history of case ' + caseNbr + '?\n\n' +
       'Its unposted drafts move to an archive folder and the analysis marks are cleared, ' +
       'so the next run analyzes it afresh. Posted comments stay recorded.\n\n' +
       'OK = reset (keep downloaded files)\nCancel = do nothing');
@@ -1615,7 +1611,10 @@
     document.getElementById('run-status').textContent =
       'case ' + caseNbr + ' reset — ' + n + ' draft' + (n === 1 ? '' : 's') + ' archived'
       + ((j.kept_posted || []).length ? ', ' + j.kept_posted.length + ' posted kept' : '');
-    if (currentDraftCase === caseNbr) document.getElementById('draft-panel').style.display = 'none';
+    if (currentDraftCase === caseNbr) {
+      reportDraftView(true);
+      document.getElementById('draft-panel').style.display = 'none';
+    }
     loadQueue();
   }
 
@@ -1737,6 +1736,31 @@
     el.style.display = chips.length ? 'flex' : 'none';
   }
 
+  // Usage tracking: tell the server this draft was opened on this page, and
+  // again with how long it stayed open once it is left (another draft opened,
+  // rejected, page closed). Both reports carry one id, so they land in one
+  // record. Never in the way: failures are ignored.
+  let draftView = null;
+  function reportDraftView(closing) {
+    if (!draftView) return;
+    const body = {view_id: draftView.id, via: 'beacon_page'};
+    if (closing) body.dwell_seconds = Math.round((Date.now() - draftView.openedAt) / 1000);
+    try {
+      fetch('/handsfree/queue/' + encodeURIComponent(draftView.draftId) + '/viewed', {
+        method: 'POST', keepalive: true,
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+      }).catch(() => {});
+    } catch (e) { /* tracking only */ }
+    if (closing) draftView = null;
+  }
+  function startDraftView(draftId) {
+    reportDraftView(true);
+    draftView = {id: 'v-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12),
+                 draftId: draftId, openedAt: Date.now()};
+    reportDraftView(false);
+  }
+  window.addEventListener('pagehide', () => reportDraftView(true));
+
   async function openDraft(draftId) {
     const r = await fetch('/handsfree/queue/' + encodeURIComponent(draftId));
     if (!r.ok) {
@@ -1745,6 +1769,7 @@
       return;
     }
     const d = await r.json();
+    startDraftView(d.draft_id);
     currentDraftId = d.draft_id;
     currentDraftMode = d.mode || null;
     currentDraftCase = d.case_nbr || '';
@@ -1867,8 +1892,9 @@
     const reason = prompt('Reject reason (optional):') || '';
     await fetch('/handsfree/queue/' + encodeURIComponent(currentDraftId) + '/reject', {
       method: 'POST', headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({reason}),
+      body: JSON.stringify({reason, via: 'beacon_page'}),
     });
+    reportDraftView(true);
     document.getElementById('draft-panel').style.display = 'none';
     loadQueue();
   }

@@ -93,6 +93,14 @@ class BaseTestCase(unittest.TestCase):
             side_effect=handsfree_queue.HandsfreeShareUnavailable(
                 "unit tests never open the shared Handsfree folder")))
 
+        # Same reasoning for the Gather (usage analytics) share: a route test
+        # that reaches a real gather_service call would file test traffic
+        # next to the team's real usage records. Collection is switched off
+        # for every test; a test of the Gather writers themselves pins the
+        # root to a temp folder and patches this back on.
+        import services.gather_service as gather_service
+        cls._start_patch(patch.object(gather_service, "_collection_enabled", return_value=False))
+
     @classmethod
     def tearDownClass(cls):
         for patcher in reversed(cls._patchers):

@@ -126,6 +126,16 @@ GATHER_SCHEMA_VERSION = 6
 #        of the reviewer's edit.
 HANDSFREE_POST_VERSION = 1
 
+# Version of the "handsfree_event" / "handsfree_listed_day" records - the steps
+# of a Beacon draft's life BEFORE the post, in a folder of their own
+# (<root>/handsfree_events/<user>/<id>.json). Like the post record they are a
+# new kind, change no existing record, and so do not bump the schema above.
+#   v1 - processed (the server queued or skipped a case), viewed (a reviewer
+#        opened a draft, from which page, for how long), edit_saved, rejected,
+#        handoff, log_folder; and one "listed" file per user and day naming
+#        the drafts that were shown in that reviewer's queue.
+HANDSFREE_EVENT_VERSION = 1
+
 # Bucket for records that carry no domain, rather than assuming the busiest
 # one. Defaulting these to "wifi" made real wifi traffic indistinguishable
 # from "we don't know" — every pre-v4 record on the share has no domain, so
@@ -157,7 +167,8 @@ _MAX_EDIT_LINE_CHARS = 500    # cap one line in those lists
 _AGG_COOLDOWN_SEC = 600
 
 # Record kinds that live under the mode sub-root, one file per id, per user.
-_RECORD_DIRS = ("sessions", "workflows", "feedback_submissions", "handsfree_posts")
+_RECORD_DIRS = ("sessions", "workflows", "feedback_submissions", "handsfree_posts",
+                "handsfree_events")
 
 # Which build produced a record. Reporting has to tell support traffic from
 # developer traffic and a flat tree cannot: both landed in the same folders.
@@ -463,6 +474,13 @@ def _handsfree_post_path(post_event_id: str, user: str) -> Path:
     user_dir = root / "handsfree_posts" / _safe_id(user)
     user_dir.mkdir(parents=True, exist_ok=True)
     return user_dir / f"{_safe_id(post_event_id)}.json"
+
+
+def _handsfree_event_path(event_id: str, user: str) -> Path:
+    root = _mode_root(_resolve_root())
+    user_dir = root / "handsfree_events" / _safe_id(user)
+    user_dir.mkdir(parents=True, exist_ok=True)
+    return user_dir / f"{_safe_id(event_id)}.json"
 
 
 def _agent_domain(value: Any) -> str:
@@ -2197,6 +2215,223 @@ def record_handsfree_post(
 
 
 # ---------------------------------------------------------------------------
+# Beacon funnel events: what happens to a draft between the server writing it
+# and a reviewer posting it. The post record above is the END of that path and
+# has no denominator on its own; these events are the steps before it, so the
+# rollup (handsfree_funnel) can say how many cases the server processed, how
+# many of those drafts a reviewer was shown and opened, from which page, and
+# how long each step took.
+# ---------------------------------------------------------------------------
+
+# A kind that happens once per draft is written to one file (a repeat is the
+# same event); the others get a file per occurrence.
+HANDSFREE_EVENT_KINDS = ("processed", "viewed", "edit_saved", "rejected",
+                         "handoff", "log_folder")
+_HANDSFREE_ONCE_KINDS = ("processed", "rejected")
+
+# Where a reviewer saw a draft. A view has no "auto_post": nobody looked.
+HANDSFREE_VIEW_VIAS = ("beacon_page", "home_dashboard", "api")
+
+_MAX_EVENT_TEXT = 500          # cap one free-text detail of an event
+_MAX_DWELL_SEC = 4 * 3600      # a draft left open overnight is not four hours of reading
+_MAX_LISTED_PER_DAY = 2000     # cap the drafts named in one user's "listed" file
+
+_listed_lock = threading.Lock()
+_listed_day = ""
+_listed_seen: set = set()
+
+
+def _event_details(details: Optional[dict]) -> dict:
+    """Keep an event's extra fields flat and small: scalars and short lists of
+    scalars only, so a caller cannot park a draft text or an analysis dump in
+    a file that every rollup reads back in bulk."""
+    out: dict = {}
+    for key, value in (details or {}).items():
+        name = re.sub(r"[^A-Za-z0-9_]+", "_", str(key))[:40]
+        if not name or value is None:
+            continue
+        if isinstance(value, (bool, int, float)):
+            out[name] = value
+        elif isinstance(value, (list, tuple, set)):
+            out[name] = [str(v)[:120] for v in list(value)[:20]]
+        else:
+            out[name] = str(value)[:_MAX_EVENT_TEXT]
+    return out
+
+
+def _do_record_handsfree_event(event: dict) -> None:
+    """Write one funnel event. A second write of the same event id keeps the
+    first one's time and adds what the later call knows (a view is reported
+    when the draft is opened and again, with its duration, when it closes)."""
+    user = _current_user()
+    try:
+        path = _handsfree_event_path(event["event_id"], user)
+        with _lock_for(path):
+            record = {
+                "schema_version": GATHER_SCHEMA_VERSION,
+                "record_type": "handsfree_event",
+                "handsfree_event_version": HANDSFREE_EVENT_VERSION,
+                "user_name": user,
+                "date": _today(),
+                "app_version": APP_VERSION,
+                "execution_mode": _execution_mode(),
+                **event,
+                "updated_at": _now_iso(),
+            }
+            if path.exists():
+                try:
+                    earlier = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    earlier = {}
+                if isinstance(earlier, dict) and earlier:
+                    merged = {**earlier,
+                              **{k: v for k, v in record.items() if v not in ("", None)}}
+                    for keep in ("at", "date"):
+                        if earlier.get(keep):
+                            merged[keep] = earlier[keep]
+                    try:
+                        merged["dwell_seconds"] = max(int(earlier["dwell_seconds"]),
+                                                      int(record["dwell_seconds"]))
+                    except (KeyError, TypeError, ValueError):
+                        pass
+                    record = merged
+            _write_json_atomic(path, record)
+    except Exception as e:
+        print(f"[gather] handsfree event failed (event={event.get('event_id')}): {e}")
+        return
+    # Only the coarse event schedules a rollup; views and edits ride along
+    # with the next one (see _AGG_COOLDOWN_SEC).
+    if event.get("kind") == "processed":
+        _maybe_rebuild_aggregates_async()
+
+
+def record_handsfree_event(
+    kind: str,
+    *,
+    draft_id: str = "",
+    case_nbr: str = "",
+    via: str = "",
+    key: str = "",
+    handsfree_role: str = "",
+    details: Optional[dict] = None,
+) -> str:
+    """Record one step of a Beacon draft's life (HANDSFREE_EVENT_KINDS).
+
+    `key` tells two events of the same kind on one draft apart - the page's
+    own id of a view, so its "opened" and "closed" reports land in one file.
+    Without one, a once-per-draft kind is written to the draft's single file
+    for that kind and any other kind gets a new file each time.
+
+    Like every Gather write: on a background thread, never raises, and silent
+    when collection is off for this build. Returns the event id ("" when
+    nothing was recorded)."""
+    kind = str(kind or "").strip().lower()
+    if kind not in HANDSFREE_EVENT_KINDS or not (draft_id or case_nbr) or not _collection_enabled():
+        return ""
+    try:
+        subject = _safe_id(draft_id) if draft_id else "case_" + _safe_id(case_nbr)
+        if key:
+            suffix = "__" + _safe_id(key)[:64]
+        else:
+            suffix = "" if kind in _HANDSFREE_ONCE_KINDS else "__" + uuid.uuid4().hex[:8]
+        via_clean = str(via or "").strip().lower()
+        extra = _event_details(details)
+        if "dwell_seconds" in extra:
+            try:
+                extra["dwell_seconds"] = max(0, min(_MAX_DWELL_SEC, int(extra["dwell_seconds"])))
+            except (TypeError, ValueError):
+                extra.pop("dwell_seconds")
+        event = {
+            **extra,
+            "event_id": f"{subject}__{kind}{suffix}",
+            "kind": kind,
+            "at": _now_iso(),
+            "via": via_clean if via_clean in HANDSFREE_POST_VIAS else ("api" if via_clean else ""),
+            "handsfree_role": str(handsfree_role or "")[:20],
+            "draft_id": _safe_id(draft_id) if draft_id else "",
+            "case_nbr": (check_ips_utils.normalise_ips(str(case_nbr or ""))
+                         or str(case_nbr or "")[:20]),
+        }
+        threading.Thread(target=_do_record_handsfree_event, args=(event,), daemon=True,
+                         name="gather-handsfree-event").start()
+        return event["event_id"]
+    except Exception as e:
+        print(f"[gather] handsfree event dispatch failed: {e}")
+        return ""
+
+
+def _do_record_handsfree_listed(day: str, stamp: str, via: str, role: str, fresh: list) -> None:
+    user = _current_user()
+    try:
+        path = _handsfree_event_path(f"listed__{day}", user)
+        with _lock_for(path):
+            record: Any = {}
+            if path.exists():
+                try:
+                    record = json.loads(path.read_text(encoding="utf-8"))
+                except Exception:
+                    record = {}
+            if not isinstance(record, dict) or not isinstance(record.get("drafts"), dict):
+                record = {
+                    "schema_version": GATHER_SCHEMA_VERSION,
+                    "record_type": "handsfree_listed_day",
+                    "handsfree_event_version": HANDSFREE_EVENT_VERSION,
+                    "user_name": user,
+                    "date": _today(),
+                    "app_version": APP_VERSION,
+                    "execution_mode": _execution_mode(),
+                    "handsfree_role": role,
+                    "drafts": {},
+                }
+            drafts = record["drafts"]
+            for draft_id, case_nbr in fresh:
+                if draft_id in drafts or len(drafts) >= _MAX_LISTED_PER_DAY:
+                    continue
+                drafts[draft_id] = {"at": stamp, "via": via, "case_nbr": case_nbr}
+            record["updated_at"] = _now_iso()
+            _write_json_atomic(path, record)
+    except Exception as e:
+        print(f"[gather] handsfree listed failed: {e}")
+
+
+def record_handsfree_listed(drafts: Any, *, via: str = "", handsfree_role: str = "") -> int:
+    """Record which drafts were shown in this reviewer's queue: the
+    "impression" before a view. The queue is re-read every few seconds, so
+    this keeps ONE file per user and day and writes only when a draft shows
+    up that this process has not reported today. `drafts` are queue rows
+    (dicts with draft_id and case_nbr). Returns how many were new."""
+    global _listed_day, _listed_seen
+    if not _collection_enabled():
+        return 0
+    try:
+        day = datetime.now().strftime("%Y%m%d")
+        fresh: list = []
+        with _listed_lock:
+            if day != _listed_day:
+                _listed_day, _listed_seen = day, set()
+            for row in drafts or []:
+                if not isinstance(row, dict) or not row.get("draft_id"):
+                    continue
+                draft_id = _safe_id(row["draft_id"])
+                if draft_id in _listed_seen:
+                    continue
+                _listed_seen.add(draft_id)
+                fresh.append((draft_id, str(row.get("case_nbr") or "")[:20]))
+        if not fresh:
+            return 0
+        via_clean = str(via or "").strip().lower()
+        threading.Thread(
+            target=_do_record_handsfree_listed,
+            args=(day, _now_iso(), via_clean if via_clean in HANDSFREE_VIEW_VIAS else "api",
+                  str(handsfree_role or "")[:20], fresh),
+            daemon=True, name="gather-handsfree-listed").start()
+        return len(fresh)
+    except Exception as e:
+        print(f"[gather] handsfree listed dispatch failed: {e}")
+        return 0
+
+
+# ---------------------------------------------------------------------------
 # Silver layer: aggregate rollups derived from the bronze per-conversation
 # records. Files live at <root>/aggregates/*.json and are fully regenerated
 # from the bronze records, so they're always consistent with the source of
@@ -2749,7 +2984,13 @@ def _handsfree_stats() -> dict:
     total = ok_posts = edited = 0
     similarity_sum = 0.0
     cases: set = set()
-    for event in iter_handsfree_posts():
+    posts = list(iter_handsfree_posts())
+    try:
+        funnel = handsfree_funnel(posts, list(iter_handsfree_events()))
+    except Exception as e:
+        print(f"[gather] handsfree funnel skipped: {e}")
+        funnel = {}
+    for event in posts:
         total += 1
         user_name = str(event.get("user_name") or "anon").strip() or "anon"
         via = str(event.get("via") or "api")
@@ -2800,6 +3041,277 @@ def _handsfree_stats() -> dict:
             }
             for user_name, data in sorted(users.items())
         },
+        # The path TO those posts: processed -> shown -> opened -> posted.
+        "funnel": funnel,
+    }
+
+
+def iter_handsfree_events() -> Iterator[dict]:
+    """Yield Beacon funnel records: the events of record_handsfree_event and
+    the per-day "listed" files of record_handsfree_listed (told apart by
+    `record_type`)."""
+    try:
+        root = _resolve_root()
+    except Exception:
+        return
+    event_dir = root / "handsfree_events"
+    if not event_dir.exists():
+        return
+    for user_dir in event_dir.iterdir():
+        if not user_dir.is_dir():
+            continue
+        for f in user_dir.glob("*.json"):
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            if isinstance(rec, dict):
+                yield rec
+
+
+# A queued draft nobody has opened after this many days counts as backlog.
+HANDSFREE_UNSEEN_DAYS = 3
+_MAX_BACKLOG_ROWS = 20
+
+
+def _iso_ts(value: Any) -> Optional[float]:
+    try:
+        return datetime.fromisoformat(str(value)).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _spread(values: Any) -> dict:
+    """Median and 90th percentile (nearest rank) of a list of seconds."""
+    vals = sorted(v for v in values if isinstance(v, (int, float)) and v >= 0)
+    if not vals:
+        return {"count": 0, "median_seconds": None, "p90_seconds": None}
+    mid = len(vals) // 2
+    median = vals[mid] if len(vals) % 2 else (vals[mid - 1] + vals[mid]) / 2
+    p90 = vals[max(0, -(-len(vals) * 9 // 10) - 1)]
+    return {"count": len(vals), "median_seconds": round(median), "p90_seconds": round(p90)}
+
+
+def _rate(part: int, whole: int) -> Optional[float]:
+    return round(part / whole, 3) if whole else None
+
+
+def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
+                     unseen_after_days: int = HANDSFREE_UNSEEN_DAYS) -> dict:
+    """The Beacon overview: of the cases the server processed, how many
+    drafts were shown to a reviewer, opened, and posted - and how long each
+    step took. Pure: takes the post records and the funnel records as lists.
+
+    Counted per draft, over the drafts that have a `processed` event, so
+    every rate shares one denominator. A draft the server posted by itself
+    (auto_post) never needed a reviewer and is reported on its own line
+    rather than as an unviewed draft; a trial draft can never be posted and
+    is left out. Drafts that were viewed or posted but were queued before
+    this tracking existed are counted as `untracked_drafts` only."""
+    now_ts = time.time() if now is None else float(now)
+    drafts: dict[str, dict] = {}
+
+    def entry(draft_id: str) -> dict:
+        return drafts.setdefault(draft_id, {
+            "processed": None, "listed_at": None, "viewed_at": None, "views": 0,
+            "viewers": set(), "view_vias": set(), "dwell": [], "posted_at": None,
+            "post_via": "", "edited": False, "rejected_at": None,
+            "edit_saved": 0, "handoff": 0, "log_folder": 0,
+        })
+
+    def earliest(current: Optional[float], candidate: Optional[float]) -> Optional[float]:
+        if candidate is None:
+            return current
+        return candidate if current is None else min(current, candidate)
+
+    for rec in events or []:
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("record_type") == "handsfree_listed_day":
+            listed = rec.get("drafts") if isinstance(rec.get("drafts"), dict) else {}
+            for draft_id, info in listed.items():
+                d = entry(str(draft_id))
+                d["listed_at"] = earliest(d["listed_at"], _iso_ts((info or {}).get("at")))
+            continue
+        draft_id, kind = str(rec.get("draft_id") or ""), rec.get("kind")
+        if not draft_id:
+            continue
+        d, at = entry(draft_id), _iso_ts(rec.get("at"))
+        if kind == "processed":
+            if d["processed"] is None or (at or 0) < (_iso_ts(d["processed"].get("at")) or 0):
+                d["processed"] = rec
+        elif kind == "viewed":
+            d["views"] += 1
+            d["viewed_at"] = earliest(d["viewed_at"], at)
+            d["viewers"].add(str(rec.get("user_name") or "anon"))
+            d["view_vias"].add(str(rec.get("via") or "api"))
+            if isinstance(rec.get("dwell_seconds"), (int, float)):
+                d["dwell"].append(rec["dwell_seconds"])
+        elif kind == "rejected":
+            d["rejected_at"] = earliest(d["rejected_at"], at)
+        elif kind in ("edit_saved", "handoff", "log_folder"):
+            d[kind] += 1
+
+    for post in posts or []:
+        if not isinstance(post, dict) or not post.get("ok") or not post.get("draft_id"):
+            continue
+        d, at = entry(str(post["draft_id"])), _iso_ts(post.get("posted_at"))
+        if d["posted_at"] is None or (at is not None and at < d["posted_at"]):
+            d["posted_at"] = at if at is not None else d["posted_at"] or 0.0
+            d["post_via"] = str(post.get("via") or "api")
+            edit = post.get("edit") if isinstance(post.get("edit"), dict) else {}
+            d["edited"] = bool(edit.get("changed"))
+
+    by_outcome: Counter = Counter()
+    by_trigger: Counter = Counter()
+    by_mode: Counter = Counter()
+    by_source: Counter = Counter()
+    viewed_by_via: Counter = Counter()
+    posted_by_via: Counter = Counter()
+    weeks: dict[str, dict] = defaultdict(
+        lambda: {"queued": 0, "viewed": 0, "posted": 0, "reviewers": set()})
+    cases: set = set()
+    viewers: set = set()
+    trial = untracked = queued = auto_posted = 0
+    reached = viewed = posted = posted_after_view = edited = rejected = 0
+    views_total = edits_saved = handoffs = log_folders = 0
+    dwell: list = []
+    t_processing: list = []
+    t_to_view: list = []
+    t_view_to_post: list = []
+    t_to_post: list = []
+    backlog: list = []
+
+    for draft_id, d in drafts.items():
+        proc = d["processed"]
+        if proc is None:
+            if d["views"] or d["posted_at"] is not None:
+                untracked += 1
+            continue
+        if proc.get("trial"):
+            trial += 1
+            continue
+        outcome = str(proc.get("outcome") or "queued")
+        by_outcome[outcome] += 1
+        by_trigger[str(proc.get("trigger") or "unknown")] += 1
+        case_nbr = str(proc.get("case_nbr") or "")
+        if case_nbr:
+            cases.add(case_nbr)
+        if isinstance(proc.get("processing_seconds"), (int, float)) and proc.get("primary", True):
+            t_processing.append(proc["processing_seconds"])
+        if outcome != "queued":
+            continue
+        queued += 1
+        by_mode[str(proc.get("mode") or "unknown")] += 1
+        by_source[str(proc.get("source") or "unknown")] += 1
+        created = _iso_ts(proc.get("at"))
+        is_posted = d["posted_at"] is not None
+        if is_posted and d["post_via"] == "auto_post":
+            auto_posted += 1
+            continue
+
+        week = weeks[datetime.fromtimestamp(created).strftime("%G-W%V") if created else "unknown"]
+        week["queued"] += 1
+        is_viewed = d["viewed_at"] is not None
+        if is_viewed or d["listed_at"] is not None:
+            reached += 1
+        if is_viewed:
+            viewed += 1
+            week["viewed"] += 1
+            week["reviewers"] |= d["viewers"]
+            viewers |= d["viewers"]
+            views_total += d["views"]
+            dwell.extend(d["dwell"])
+            for via in d["view_vias"]:
+                viewed_by_via[via] += 1
+            if created is not None:
+                t_to_view.append(d["viewed_at"] - created)
+        edits_saved += d["edit_saved"]
+        handoffs += d["handoff"]
+        log_folders += d["log_folder"]
+        if is_posted:
+            posted += 1
+            week["posted"] += 1
+            posted_by_via[d["post_via"]] += 1
+            edited += 1 if d["edited"] else 0
+            if created is not None and d["posted_at"]:
+                t_to_post.append(d["posted_at"] - created)
+            if is_viewed:
+                posted_after_view += 1
+                if d["posted_at"]:
+                    t_view_to_post.append(d["posted_at"] - d["viewed_at"])
+        elif d["rejected_at"] is not None:
+            rejected += 1
+        elif not is_viewed and created is not None:
+            age_days = (now_ts - created) / 86400
+            if age_days >= unseen_after_days:
+                backlog.append({"draft_id": draft_id, "case_nbr": case_nbr,
+                                "mode": str(proc.get("mode") or ""),
+                                "age_days": round(age_days, 1)})
+
+    for_review = queued - auto_posted
+    backlog.sort(key=lambda row: row["age_days"], reverse=True)
+    return {
+        "handsfree_event_version": HANDSFREE_EVENT_VERSION,
+        # 1. what the server did in the background
+        "processed": {
+            "runs": sum(by_outcome.values()),
+            "distinct_cases": len(cases),
+            "by_outcome": dict(by_outcome),          # queued | skipped | error
+            "by_trigger": dict(by_trigger),
+            "drafts_queued": queued,
+            "by_mode": dict(by_mode),
+            "by_source": dict(by_source),
+            "auto_posted": auto_posted,
+            "trial_drafts": trial,
+        },
+        # 2-5. what became of the drafts that needed a reviewer
+        "drafts_for_review": for_review,
+        "reached": reached,                          # shown in a reviewer's queue
+        "viewed": viewed,                            # opened by a reviewer
+        "viewed_by_via": dict(viewed_by_via),        # a draft opened on both pages counts in both
+        "posted": posted,
+        "posted_by_via": dict(posted_by_via),
+        "posted_after_view": posted_after_view,
+        "posted_as_suggested": posted - edited,
+        "posted_after_edit": edited,
+        "rejected": rejected,
+        "pending": for_review - posted - rejected,
+        "rates": {
+            "reach_rate": _rate(reached, for_review),
+            "view_rate": _rate(viewed, for_review),
+            "click_through_rate": _rate(viewed, reached),
+            "post_rate": _rate(posted, for_review),
+            "post_rate_of_viewed": _rate(posted_after_view, viewed),
+            "edit_rate": _rate(edited, posted),
+        },
+        "engagement": {
+            "views": views_total,
+            "distinct_reviewers": len(viewers),
+            "mean_dwell_seconds": round(sum(dwell) / len(dwell)) if dwell else None,
+            "edits_saved": edits_saved,
+            "chatbot_handoffs": handoffs,
+            "log_folder_opens": log_folders,
+        },
+        # 6. how long each step took
+        "turnaround": {
+            "processing": _spread(t_processing),
+            "ready_to_first_view": _spread(t_to_view),
+            "first_view_to_post": _spread(t_view_to_post),
+            "ready_to_post": _spread(t_to_post),
+        },
+        # 7. server work nobody has looked at
+        "unseen_backlog": {
+            "after_days": unseen_after_days,
+            "count": len(backlog),
+            "oldest": backlog[:_MAX_BACKLOG_ROWS],
+        },
+        "by_week": {
+            name: {"queued": w["queued"], "viewed": w["viewed"], "posted": w["posted"],
+                   "reviewers": len(w["reviewers"])}
+            for name, w in sorted(weeks.items())
+        },
+        "untracked_drafts": untracked,
     }
 
 

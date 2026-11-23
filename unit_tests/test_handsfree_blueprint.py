@@ -59,7 +59,7 @@ class TestHandsfreeBlueprintStructure(BaseTestCase):
             "/handsfree/queue", "/handsfree/queue/<draft_id>", "/handsfree/queue/<draft_id>/approve",
             "/handsfree/queue/<draft_id>/reject", "/handsfree/config", "/handsfree/discover_fields",
             "/handsfree/auto", "/handsfree/auto/run_now", "/handsfree/list_views",
-            "/handsfree/queue/<draft_id>/open_log_folder",
+            "/handsfree/queue/<draft_id>/open_log_folder", "/handsfree/queue/<draft_id>/viewed",
             # server / client roles, reviewer sign-in, email intake, hand-off
             "/handsfree/login", "/handsfree/requests", "/handsfree/latest_driver/refresh",
             "/handsfree/email/run_case", "/handsfree/email/check_now",
@@ -547,7 +547,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
 
         # Assert
         self.assertEqual(resp.get_json(), {"ok": True})
-        mock_orch.reject.assert_called_once_with("d-1", reason="wrong case")
+        mock_orch.reject.assert_called_once_with("d-1", reason="wrong case", via="")
 
     def test_reject_without_reason_defaults_to_empty(self, mock_orch):
         """reject defaults the reason to empty.
@@ -562,7 +562,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.client.post("/handsfree/queue/d-1/reject")
 
         # Assert
-        mock_orch.reject.assert_called_once_with("d-1", reason="")
+        mock_orch.reject.assert_called_once_with("d-1", reason="", via="")
 
     def test_discover_fields_success(self, mock_orch):
         """discover_fields returns the discovered REST fields.

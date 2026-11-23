@@ -112,6 +112,51 @@ def start_check_now(owner_name: Optional[str] = None,
     return {"ok": True, "owner": owner}
 
 
+def _track_event(kind: str, *, draft_id: str = "", case_nbr: str = "", via: str = "",
+                 key: str = "", **details) -> None:
+    """Usage record of one step of a draft's life before the post
+    (gather_service.record_handsfree_event): the server processed a case, a
+    reviewer opened / edited / rejected a draft. Never raises and never
+    delays the caller - the write runs on the Gather service's own thread."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        gather_service.record_handsfree_event(
+            kind, draft_id=draft_id, case_nbr=case_nbr, via=via, key=key,
+            handsfree_role=scheduler.role(), details=details)
+    except Exception as e:
+        print(f"[handsfree] {kind} of {draft_id or case_nbr} not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
+def _track_listed(rows: list, *, via: str = "") -> None:
+    """Usage record of the drafts shown in a reviewer's queue
+    (gather_service.record_handsfree_listed). Never raises."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        gather_service.record_handsfree_listed(rows, via=via, handsfree_role=scheduler.role())
+    except Exception as e:
+        print(f"[handsfree] queue listing not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
+def _track_processed(rec: dict, *, outcome: str, primary: bool, started: float) -> None:
+    """One `processed` event per queue row the server wrote: the denominator
+    of the review funnel. `trigger` is the run that produced it (the run
+    state's mode: "auto-scan (scheduled)", "single-case", ...)."""
+    with _state_lock:
+        trigger = str(_run_state.get("mode") or "check")
+    _track_event(
+        "processed", draft_id=str(rec.get("draft_id") or ""),
+        case_nbr=str(rec.get("case_nbr") or ""),
+        outcome=outcome, primary=primary, trigger=trigger,
+        mode=str(rec.get("mode") or ""), source=str(rec.get("source") or "ips"),
+        trial=bool(rec.get("trial")), owner_name=str(rec.get("owner_name") or ""),
+        confidence=rec.get("confidence"),
+        processing_seconds=round(max(0.0, time.time() - started), 1))
+
+
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
                          owner_name: str = "",
@@ -133,6 +178,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                                     "owner_name": owner_name, "finished": False,
                                     "current_stage": "", "draft_id": "",
                                     "fr_draft_id": ""})
+    started = time.time()
     runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
     analysis = runner.analyze_case(case_nbr, case_ctx=case_ctx)
     _update_case_details(case_nbr, {"source": source})
@@ -150,6 +196,9 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                              analysis=analysis.to_dict())
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
         _update_case_details(case_nbr, {"skipped": analysis.error})
+        _track_processed({"draft_id": f"{case_nbr}__skipped", "case_nbr": case_nbr,
+                          "mode": "unsupported", "source": source, "owner_name": owner_name},
+                         outcome="skipped", primary=True, started=started)
         return None
 
     fr_rec = None
@@ -213,6 +262,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         shared_log_path=shared_log_path,
     )
     _update_case_details(case_nbr, {"draft_id": rec["draft_id"]})
+    _track_processed(rec, outcome="error" if analysis.mode == "error" else "queued",
+                     primary=True, started=started)
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
         f"(mode={analysis.mode}, confidence={draft['confidence']}"
@@ -247,6 +298,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             shared_log_path=shared_log_path,
         )
         _update_case_details(case_nbr, {"fr_draft_id": fr_rec["draft_id"]})
+        _track_processed(fr_rec, outcome="queued", primary=False, started=started)
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
         _auto_post_first_response(store, fr_rec, fr)
@@ -1509,13 +1561,15 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
 
-def reject(draft_id: str, reason: str = "") -> dict:
+def reject(draft_id: str, reason: str = "", via: str = "") -> dict:
     store = _store()
     rec = store.update(draft_id, status="rejected",
                        post_result={"ok": False, "backend": "none",
                                     "error": f"rejected by reviewer: {reason}"})
     if rec is None:
         return {"ok": False, "error": f"draft not found: {draft_id}"}
+    _track_event("rejected", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                 via=via or "api", mode=str(rec.get("mode") or ""), reason=reason)
     return {"ok": True, "draft": rec}
 
 

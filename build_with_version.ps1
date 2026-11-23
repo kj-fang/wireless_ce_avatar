@@ -1,10 +1,10 @@
 # Local build script — mirrors the same 4-scenario version logic as CI:
 #
 #  Scenario 1 (PR build / local dev):  feature/* or fix/* branch
-#    → version: 99.2.<cycle_count>-dev.<sha1>   BUILD_TYPE: DEV
+#    → version: MAIN_MAJOR.MINOR.PATCH-dev.<sha1>   BUILD_TYPE: DEV
 #
 #  Scenario 2 (nightly):  main branch
-#    → version: 99.2.<cycle_count>               BUILD_TYPE: NIGHTLY
+#    → version: MAIN_MAJOR.MINOR.PATCH            BUILD_TYPE: NIGHTLY
 #
 #  Scenario 3 & 4 (release candidate):  release/X.Y branch
 #    → version: X.Y.<commit_count_on_branch>   BUILD_TYPE: RELEASE
@@ -23,13 +23,8 @@ param(
     [string]$HandsfreeRole = "none"
 )
 
-# ── Nightly version line ──────────────────────────────────────────────────────
-# To start a new nightly cycle, update $NightlyMinor and $NightlyBaseRef together.
-# build.yml has matching NIGHTLY_MAJOR, NIGHTLY_MINOR, and NIGHTLY_BASE_REF values.
-$NightlyMajor = 99
-$NightlyMinor = 2
-$NightlyBaseRef = "release/1.2"
-# ─────────────────────────────────────────────────────────────────────────────
+# Main version line is stored in configs/version_line.json. The commit that
+# changes that file is the .0 baseline; first-parent commits after it increment PATCH.
 
 Write-Host "===== IntelAvatar Build Script with Version Control =====" -ForegroundColor Cyan
 
@@ -41,15 +36,14 @@ try {
     $gitHash = git rev-parse --short HEAD
     $currentBranch = git rev-parse --abbrev-ref HEAD
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    $versionLine = Get-Content "configs/version_line.json" -Raw | ConvertFrom-Json
 
     if ($currentBranch -eq $Branch) {
         # ---- NIGHTLY build: on main branch ----
-        # Version 99.2.x — the third number counts check-ins in this nightly cycle.
-        git fetch origin $NightlyBaseRef --no-tags 2>$null
-        $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base unavailable" }
-        $commitCount = git rev-list --count "${nightlyBase}..HEAD"
-        $version = "$NightlyMajor.$NightlyMinor.$commitCount"
+        $versionBase = git log -1 --first-parent --format=%H HEAD -- configs/version_line.json
+        if ($LASTEXITCODE -ne 0 -or -not $versionBase) { throw "main version baseline unavailable" }
+        $commitCount = git rev-list --first-parent --count "${versionBase}..HEAD"
+        $version = "$($versionLine.main_major).$($versionLine.main_minor).$commitCount"
         $buildType = "NIGHTLY"
     } elseif ($currentBranch -match '^release/(\d+\.\d+)$') {
         # ---- RELEASE build: on a release/X.Y branch ----
@@ -71,25 +65,20 @@ try {
         $buildType = "RELEASE"
     } else {
         # ---- DEV build: on a feature/fix branch ----
-        # Version 99.2.<cycle_count>-dev.<sha1>
-        # cycle_count = commits in the nightly cycle at the branch point.
         try {
             $mergeBase = git merge-base HEAD $Branch 2>$null
             if ($LASTEXITCODE -ne 0 -or -not $mergeBase) { throw "merge-base failed" }
-            git fetch origin $NightlyBaseRef --no-tags 2>$null
-            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
-            $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
         } catch {
-            # Fallback: use the current main tip as the branch point.
             $mergeBase = git rev-parse $Branch
-            git fetch origin $NightlyBaseRef --no-tags 2>$null
-            $nightlyBase = git merge-base $Branch "origin/$NightlyBaseRef" 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) { throw "nightly cycle base failed" }
-            $baseCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
             Write-Host "⚠️  Could not determine branch point — using tip of '$Branch' as fallback (version may be approximate)" -ForegroundColor Yellow
         }
-        $version = "$NightlyMajor.$NightlyMinor.$baseCommitCount-dev.$gitHash"
+        $versionBase = git log -1 --first-parent --format=%H $mergeBase -- configs/version_line.json
+        if ($versionBase) {
+            $baseCommitCount = git rev-list --first-parent --count "${versionBase}..${mergeBase}"
+        } else {
+            $baseCommitCount = 0
+        }
+        $version = "$($versionLine.main_major).$($versionLine.main_minor).$baseCommitCount-dev.$gitHash"
         $buildType = "DEV"
     }
 
@@ -101,7 +90,7 @@ try {
 
 } catch {
     Write-Host "Error getting git information. Using defaults." -ForegroundColor Red
-    $version = "$NightlyMajor.$NightlyMinor.0-dev.unknown"
+    $version = "$($versionLine.main_major).$($versionLine.main_minor).0-dev.unknown"
     $gitHash = "unknown"
     $currentBranch = "unknown"
     $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"

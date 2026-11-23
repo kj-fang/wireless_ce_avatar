@@ -329,6 +329,35 @@ def build_assert_question(code: str, lookup_text: str, context: str = "",
     return "\n".join(parts)
 
 
+def build_customer_question(*, question: str, subject: str = "",
+                           radio: str = "") -> str:
+    """Contextualize a classified customer question for Echo KB."""
+    product = "Bluetooth" if str(radio or "").strip().lower() == "bt" else "Wi-Fi"
+    parts = [f"An Intel {product} support customer asked the following question."]
+    if subject.strip():
+        parts += ["", f"IPS case subject: {subject.strip()[:200]}"]
+    parts += ["", "Question:", question.strip()[:2000], "",
+              "Answer from the Intel wireless knowledge base. Be concise and factual. ",
+              "Do not infer a fix unless the documentation supports it. Cite the "
+              "documents or cases you rely on where possible."]
+    return "\n".join(parts)
+
+
+def answer_customer_question(*, request_type: str, question: str,
+                             subject: str = "", radio: str = "",
+                             ask: Optional[Callable[[str], str]] = None) -> dict:
+    """Ask Echo only for a pure question; preserve classification on failure."""
+    if request_type != "question":
+        return {"status": "skipped", "answer": "", "error": ""}
+    prompt = build_customer_question(question=question, subject=subject, radio=radio)
+    try:
+        answer = str((ask or ask_echo_kb)(prompt) or "")
+        return {"status": "answered" if answer.strip() else "empty",
+                "answer": answer, "error": ""}
+    except EchoUnavailable as exc:
+        return {"status": "unavailable", "answer": "", "error": str(exc)[:300]}
+
+
 def build_next_steps_question(*, subject: str = "", description: str = "",
                               domain: str = "", subcategory: str = "",
                               issue_times=None, missing_info=None,

@@ -102,9 +102,11 @@ Your tasks:
     given). "Worked before" WITHOUT a version is not a version — return "".
     The version the failure was observed on (task 7) is never the
     last-known-good one. Never invent one.
- 9. Classify the customer's latest request as exactly ONE type. Judge the
-    latest comment whose author tag starts with "Partner" or "Customer";
-    if there is no customer comment, judge the ISSUE DESCRIPTION.
+ 9. Classify the latest request as exactly ONE type. Judge the text in the
+    AUTHORITATIVE REQUEST CLASSIFICATION SOURCE block below. In the normal
+    production path that block is the latest "Partner"/"Customer" comment,
+    or the ISSUE DESCRIPTION when none exists. A classification-only POC may
+    explicitly select an Agent/FAE test comment instead.
     - "question": asks for an explanation, status, support statement, or
       how-to, with no new failure, reproduction time, or log evidence.
     - "debug": reports a failure, provides debugging evidence, uploads logs,
@@ -266,13 +268,18 @@ def _format_comments(rows: list[dict]) -> str:
 
 
 _CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
+_INTEL_TEST_AUTHOR_PREFIXES = ("agent", "fae")
 
 
-def request_classification_source(description: str, comments: Any) -> dict:
-    """Select the latest customer-owned comment, or the description."""
+def request_classification_source(description: str, comments: Any, *,
+                                  include_intel_comments: bool = False) -> dict:
+    """Select the latest allowed comment, or the description."""
+    allowed = _CUSTOMER_AUTHOR_PREFIXES
+    if include_intel_comments:
+        allowed += _INTEL_TEST_AUTHOR_PREFIXES
     rows = _normalize_comments(comments)
     for row in reversed(rows):
-        if row["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES):
+        if row["author"].strip().lower().startswith(allowed):
             return {"kind": "comment", "timestamp": row["ts"],
                     "author": row["author"], "text": row["text"]}
     return {"kind": "description", "timestamp": "", "author": "",
@@ -344,7 +351,8 @@ def _format_attachments(attachment_list: Any) -> str:
 
 def read_case_history(llm, *, subject: str, description: str,
                       comments: Any, attachment_list: Any,
-                      env_detail: Any = None) -> Optional[dict]:
+                      env_detail: Any = None,
+                      include_intel_comments: bool = False) -> Optional[dict]:
     """One LLM call. Returns the parsed reader dict, or None on any failure
     (callers fall back to description-only organize_issue_context)."""
     from services.ace.roles import _extract_json
@@ -362,7 +370,8 @@ def read_case_history(llm, *, subject: str, description: str,
         for name, d in checklist["domains"].items()
         if d.get("subcategories")) or "      (none)"
     normalized_description = (description or "").strip()[:_MAX_DESC_CHARS] or "(empty)"
-    classification_source = request_classification_source(description, comments)
+    classification_source = request_classification_source(
+        description, comments, include_intel_comments=include_intel_comments)
     source_label = classification_source["kind"]
     if source_label == "comment":
         source_label += f" ({classification_source['author']}, {classification_source['timestamp']})"

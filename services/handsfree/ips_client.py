@@ -407,7 +407,12 @@ class IpsClient:
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""
         return self._query_cases(build_open_cases_soql(owner_name, limit))
-
+    def case_by_number(self, case_nbr: str) -> Optional[CaseRef]:
+        """Resolve one case number directly from Salesforce REST."""
+        refs = self._query_cases(
+            "SELECT Id, CaseNumber, Subject, Status, CreatedDate, Owner.Name "
+            f"FROM Case WHERE CaseNumber = '{_soql_quote(case_nbr)}' LIMIT 1")
+        return refs[0] if refs else None
     def case_owner_name(self, case_id: str) -> str:
         """Owner.Name of one case, "" when unknown. A single-case run (the
         page's "Analyze this case", a client's request, the CLI's

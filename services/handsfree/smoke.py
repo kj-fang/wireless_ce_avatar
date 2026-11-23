@@ -148,7 +148,8 @@ def smoke_request_classifier() -> None:
         "next_action": "classify only",
     }
 
-    def classify(request_type, question="", *, description="x", comments=None):
+    def classify(request_type, question="", *, description="x", comments=None,
+                 include_intel_comments=False):
         captured = []
         payload = {**base, "request_type": request_type,
                    "customer_question": question}
@@ -157,7 +158,8 @@ def smoke_request_classifier() -> None:
                                       or json.dumps(payload)))
         result = read_case_history(
             fake, subject="classification POC", description=description,
-            comments=comments or [], attachment_list=[])
+            comments=comments or [], attachment_list=[],
+            include_intel_comments=include_intel_comments)
         return result, captured[0]
 
     result, prompt = classify("question", "Does this module support MLO?",
@@ -193,6 +195,19 @@ def smoke_request_classifier() -> None:
           str(fallback.get("request_source")))
     check("S2P.f prompt documents all three request types",
           all(value in READER_PROMPT for value in ("question", "debug", "mixed")))
+
+    test_comments = [["1", "Customer", "Original customer question"],
+                     ["2", "Agent", "Intel test comment"]]
+    customer_source, _ = classify("question", comments=test_comments)
+    intel_source, _ = classify("question", comments=test_comments,
+                               include_intel_comments=True)
+    check("S2P.g Intel comments require explicit POC opt-in",
+          customer_source["request_source"]["author"] == "Customer"
+          and customer_source["request_source"]["text"] == "Original customer question"
+          and intel_source["request_source"]["author"] == "Agent"
+          and intel_source["request_source"]["text"] == "Intel test comment",
+          f"customer={customer_source.get('request_source')} "
+          f"intel={intel_source.get('request_source')}")
 
 
 # ---------------------------------------------------------------- S2
@@ -2001,8 +2016,33 @@ def smoke_echo_kb() -> None:
     print("[S7] Echo KB client (detection + insights, no network)")
     from .runner import CaseAnalysis, IncidentReport
     from .composer import compose_plain
-    from .echo_client import (EchoUnavailable, find_assert_evidence,
-                              collect_echo_insights)
+    from .echo_client import (EchoUnavailable, answer_customer_question,
+                              find_assert_evidence, collect_echo_insights)
+
+    customer_queries: list[str] = []
+    customer_echo = answer_customer_question(
+        request_type="question", question="Which DSM value enables UHB?",
+        subject="BIOS DSM question", radio="bt",
+        ask=lambda prompt: (customer_queries.append(prompt) or "Use Function 3."))
+    skipped_echo = answer_customer_question(
+        request_type="mixed", question="Logs attached; which value?",
+        ask=lambda prompt: (_ for _ in ()).throw(AssertionError("Echo must be skipped")))
+    down_echo = answer_customer_question(
+        request_type="question", question="Which DSM value?",
+        ask=lambda prompt: (_ for _ in ()).throw(EchoUnavailable("backend down")))
+    check("S7.p1 classified question includes original text, subject and Bluetooth",
+          customer_echo["status"] == "answered"
+          and customer_echo["answer"] == "Use Function 3."
+          and len(customer_queries) == 1
+          and "Which DSM value enables UHB?" in customer_queries[0]
+          and "BIOS DSM question" in customer_queries[0]
+          and "Intel Bluetooth" in customer_queries[0], str(customer_echo))
+    check("S7.p2 mixed skips Echo and an outage preserves a non-fatal status",
+          skipped_echo["status"] == "skipped"
+          and down_echo["status"] == "unavailable"
+          and down_echo["answer"] == ""
+          and "backend down" in down_echo["error"],
+          f"skipped={skipped_echo} down={down_echo}")
 
     a = CaseAnalysis(case_nbr="01234567", mode="full", ok=True,
                      clean_description="WiFi dies during roam")

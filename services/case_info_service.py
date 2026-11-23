@@ -2,7 +2,8 @@ import os
 import json
 import threading
 import requests as _requests
-from flask import Blueprint, render_template, request, session, redirect, url_for, flash
+from flask import (Blueprint, render_template, request, session, redirect,
+                   url_for, flash, has_request_context)
 from concurrent.futures import ThreadPoolExecutor
 import shutil
 import time
@@ -290,7 +291,8 @@ class CaseService:
                 case_context.case_download_dir,
             )
             if case_context.id is None:
-                session.clear()
+                if has_request_context():
+                    session.clear()
                 case_context.error_message = sim_err or "Error downloading PDF"
                 return case_context
             case_context = case_utils.parse_pdf_for_all_info(case_context.ips_pdf_path, case_context)

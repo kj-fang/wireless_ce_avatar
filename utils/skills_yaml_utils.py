@@ -127,9 +127,15 @@ def today_dated_filename(d: Optional[date] = None) -> str:
 # --- Directory layout ----------------------------------------------------
 
 def resolve_cloud_skills_dir() -> Optional[str]:
-    """Return the reachable cloud (share folder) skills_config dir, or None."""
+    """Return the reachable cloud (share folder) skills_config dir, or None.
+
+    Cached: WiFi/BT/Linux all point at the SAME share pair, so whichever
+    domain resolves it first (probing is sequential in boot order) warms the
+    answer for the other two instead of each re-probing the same share.
+    """
     try:
-        path = helpers.get_load_path(SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup)
+        path = helpers.get_load_path_cached(
+            "skills_config_dir", SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, label="skills_config_dir")
         return path or None
     except Exception:
         return None

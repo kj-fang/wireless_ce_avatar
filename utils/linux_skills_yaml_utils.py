@@ -24,19 +24,19 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from configs.path_configs import (
-    SKILLS_CONFIG_DIR_prim,
-    SKILLS_CONFIG_DIR_bkup,
     LINUX_SKILLS_YAML_FILENAME,
     LINUX_SKILLS_YAML_DATED_RE,
     LINUX_SKILLS_YAML_DATED_TEMPLATE,
 )
-from utils import helpers
 from utils.skills_yaml_utils import (
     # Re-use the same on-disk roots so cloud/ and user/ are shared with
     # the WiFi (and BT) skill files. Only the filename prefix distinguishes
     # domain.
     local_cloud_baseline_dir,
     local_user_overrides_dir,
+    # Same SKILLS_CONFIG_DIR_prim/bkup share as WiFi/BT — reuse its cached
+    # resolver instead of probing the same share a third time.
+    resolve_cloud_skills_dir,
 )
 
 
@@ -122,14 +122,8 @@ def today_dated_filename(d: Optional[date] = None) -> str:
 # --- Directory layout ----------------------------------------------------
 # Cloud and user dirs are SHARED with the WiFi / BT sides — only filename
 # prefix differs. Imported from utils.skills_yaml_utils above.
-
-def resolve_cloud_skills_dir() -> Optional[str]:
-    """Return the reachable share-folder skills_config dir, or None."""
-    try:
-        path = helpers.get_load_path(SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup)
-        return path or None
-    except Exception:
-        return None
+# resolve_cloud_skills_dir() is also imported from there (cached, shared
+# across WiFi/BT/Linux so the share is only probed once).
 
 
 # --- Lookup helpers ------------------------------------------------------

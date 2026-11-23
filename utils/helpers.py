@@ -176,6 +176,21 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
 # one cache per key keeps that cost to once per process instead of once
 # per call site.
 _load_path_cache: dict = {}
+# Per-key locks (lazily created) so two concurrent callers resolving the SAME
+# cache_key serialize onto one probe, while different keys still run fully in
+# parallel (e.g. a boot-time warm-up thread and the real call site racing for
+# the same key).
+_load_path_cache_locks: dict = {}
+_load_path_cache_locks_guard = threading.Lock()
+
+
+def _get_cache_lock(cache_key: str) -> threading.Lock:
+    with _load_path_cache_locks_guard:
+        lock = _load_path_cache_locks.get(cache_key)
+        if lock is None:
+            lock = threading.Lock()
+            _load_path_cache_locks[cache_key] = lock
+        return lock
 
 
 def get_load_path_cached(cache_key: str, primary: str, backup: str, timeout_sec: int = 8,
@@ -187,13 +202,21 @@ def get_load_path_cached(cache_key: str, primary: str, backup: str, timeout_sec:
     action) where a stale answer from earlier in the session must not stick.
     """
     tag = f"[{label or cache_key}] "
-    if force or cache_key not in _load_path_cache:
+    if not force and cache_key in _load_path_cache:
+        print(f"{tag}get_load_path_cached({cache_key}): using cached result: {_load_path_cache[cache_key]}")
+        return _load_path_cache[cache_key]
+
+    with _get_cache_lock(cache_key):
+        # Re-check: another thread may have resolved this key while we were
+        # waiting for the lock (e.g. a boot-time warm-up thread finishing
+        # just before the real call site asks for the same key).
+        if not force and cache_key in _load_path_cache:
+            print(f"{tag}get_load_path_cached({cache_key}): using cached result (resolved while waiting): {_load_path_cache[cache_key]}")
+            return _load_path_cache[cache_key]
         reason = "force=True" if force else "cache miss"
         print(f"{tag}get_load_path_cached({cache_key}): {reason} — probing shared folder")
         _load_path_cache[cache_key] = get_load_path(
             primary, backup, timeout_sec=timeout_sec, label=label or cache_key)
-    else:
-        print(f"{tag}get_load_path_cached({cache_key}): using cached result: {_load_path_cache[cache_key]}")
     return _load_path_cache[cache_key]
 
 

@@ -370,10 +370,20 @@ def draft_viewed(draft_id: str):
     twice under one `view_id` of its own - when the draft opens, and when it
     closes with `dwell_seconds` - and both land in one record. Reading a
     draft (GET) is deliberately NOT the signal: the pages also poll it to
-    learn the outcome of an approval. Body: view_id, via, dwell_seconds."""
+    learn the outcome of an approval. Body: view_id, via, dwell_seconds.
+
+    A draft can leave the queue while it is open (a case reset archives it):
+    the closing report then finds no draft. It still completes the view it
+    belongs to - and only that: nothing is recorded unless that view's
+    opening report was."""
     body = request.get_json(silent=True) or {}
     rec = _store().get(draft_id)
     if rec is None:
+        view_id = str(body.get("view_id") or "")
+        if view_id and body.get("dwell_seconds") is not None:
+            orchestrator._track_event("viewed", draft_id=draft_id, key=view_id, update_only=True,
+                                      dwell_seconds=body.get("dwell_seconds"))
+            return jsonify({"ok": True})
         return jsonify({"ok": False, "error": "not found"}), 404
     details = {"draft_status": str(rec.get("status") or ""), "mode": str(rec.get("mode") or ""),
                "reviewer_name": _signed_in_name()}

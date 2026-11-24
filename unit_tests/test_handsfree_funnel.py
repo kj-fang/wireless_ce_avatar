@@ -165,6 +165,35 @@ class TestHandsfreeEventWriters(unittest.TestCase):
         self.assertIs(posts[0]["edit"]["changed"], False)
         self.assertIs(posts[0]["edit"]["echo_stripped"], True)
 
+    def test_an_update_only_report_completes_a_recorded_view_and_never_starts_one(self):
+        """The closing report of a view whose draft has left the queue."""
+        gather.record_handsfree_event("viewed", draft_id="ghost", key="v-1", update_only=True,
+                                      details={"dwell_seconds": 40})
+        gather.record_handsfree_event("viewed", draft_id="d-1", update_only=True,     # no view id
+                                      details={"dwell_seconds": 40})
+        self.assertEqual(self._records(), [])
+
+        gather.record_handsfree_event("viewed", draft_id="d-1", case_nbr="01090001",
+                                      via="beacon_page", key="v-1", details={"mode": "full"})
+        _settle()
+        gather.record_handsfree_event("viewed", draft_id="d-1", key="v-1", update_only=True,
+                                      details={"dwell_seconds": 40})
+
+        recs = self._records()
+        self.assertEqual(len(recs), 1)
+        self.assertEqual((recs[0]["dwell_seconds"], recs[0]["via"], recs[0]["case_nbr"], recs[0]["mode"]),
+                         (40, "beacon_page", "01090001", "full"))
+
+    def test_every_funnel_write_asks_for_a_rollup(self):
+        """Not only a processed case: a day of views alone must still reach
+        the published numbers (the helper itself spaces rebuilds out)."""
+        rebuild = gather._maybe_rebuild_aggregates_async          # the mock from setUp
+        gather.record_handsfree_event("viewed", draft_id="d-1", key="v-1")
+        gather.record_handsfree_event("edit_saved", draft_id="d-1")
+        gather.record_handsfree_listed([{"draft_id": "d-1", "case_nbr": "01090001"}], via="beacon_page")
+        _settle()
+        self.assertEqual(rebuild.call_count, 3)
+
     def test_draining_the_outbox_joins_the_days_listed_drafts_instead_of_replacing_them(self):
         """The share has the drafts shown before an outage, the local buffer
         those shown during it: after the drain the day's file names both."""
@@ -510,6 +539,26 @@ class TestHandsfreeViewRoute(BaseTestCase):
         self.assertEqual(resp.status_code, 404)
         mock_orch._track_event.assert_not_called()
 
+    def test_a_closing_report_for_a_draft_that_left_the_queue_completes_its_view(self, mock_store, _name, mock_orch):
+        """A case reset archives the draft while it is open; the page's
+        closing report must still deliver the time it was open."""
+        mock_store.return_value.get.return_value = None
+
+        resp = self.client.post("/handsfree/queue/d-1/viewed",
+                                json={"view_id": "v-1", "via": "beacon_page", "dwell_seconds": 75})
+
+        self.assertEqual(resp.get_json(), {"ok": True})
+        mock_orch._track_event.assert_called_once_with(
+            "viewed", draft_id="d-1", key="v-1", update_only=True, dwell_seconds=75)
+
+    def test_an_opening_report_for_an_unknown_draft_is_still_refused(self, mock_store, _name, mock_orch):
+        mock_store.return_value.get.return_value = None
+
+        resp = self.client.post("/handsfree/queue/d-1/viewed", json={"view_id": "v-1"})
+
+        self.assertEqual(resp.status_code, 404)
+        mock_orch._track_event.assert_not_called()
+
     def test_a_case_reset_reports_the_drafts_it_archived(self, mock_store, _name, mock_orch):
         mock_store.return_value.reset_case.return_value = {
             "case_nbr": "01090001", "archived": ["01090001__a", "01090001__skipped"],
@@ -546,6 +595,8 @@ class _FakeIps:
     def post_comment(self, case_id, rich_body, **kw):
         if _FakeIps.outcome == "unsupported":
             raise PostUnsupported("no verified field map for a public reply")
+        if _FakeIps.outcome == "timeout":
+            raise TimeoutError("read timed out")
         if _FakeIps.outcome == "http500":
             return PostResult(ok=False, backend="rest", error="HTTP 500: boom", detail={"status": 500})
         return PostResult(ok=True, backend="rest", comment_id="a0X0001", detail={})
@@ -610,6 +661,49 @@ class TestHandsfreeTrackingCallers(unittest.TestCase):
                 self.assertIs(track.call_args.kwargs["ok"], False)
                 self.assertEqual(track.call_args.kwargs["rec"]["status"], "post_failed")
                 self.assertEqual(track.call_args.kwargs["rec"]["post_result"]["backend"], "rest")
+
+    def test_a_rest_transport_error_is_recorded_as_a_failed_post_and_still_raised(self):
+        """A timeout may have gone through: no retry, the error surfaces as
+        before, the draft is left as it was - but the attempt is on record."""
+        _FakeIps.outcome = "timeout"
+        draft = self._draft("01100012")
+
+        with patch.object(orch, "_track_post") as track:
+            with self.assertRaises(TimeoutError):
+                orch.approve_and_post(draft["draft_id"], visibility="internal")
+
+        track.assert_called_once()
+        self.assertIs(track.call_args.kwargs["ok"], False)
+        self.assertEqual(track.call_args.kwargs["rec"]["post_result"],
+                         {"ok": False, "backend": "rest", "error": "TimeoutError: read timed out"})
+        after = self.store.get(draft["draft_id"])
+        self.assertEqual((after["status"], after["post_result"]), ("pending_review", None))
+
+    def test_a_draft_refused_as_a_second_first_response_leaves_the_queue_in_the_usage_numbers(self):
+        """The system marks it posted / rejected without posting anything:
+        not a post, not a reviewer's rejection, and no longer pending."""
+        self.store.mark_posted("01100013", comment_id="a0X0009", first_response=True)
+
+        def queued(mode):
+            return self.store.enqueue(case_nbr="01100013", case_id="50001100013", subject="s",
+                                      draft_plain=self.BODY, draft_html=compose_html(self.BODY),
+                                      confidence=None, mode=mode, analysis={"first_response_done": False})
+
+        for mode, status, reason in (("first_response", "posted", "first_response_already_sent"),
+                                     ("request_logs", "rejected", "overview_already_sent")):
+            with self.subTest(mode=mode):
+                draft = queued(mode)
+                with patch.object(orch, "_track_event") as event, patch.object(orch, "_track_post") as post:
+                    res = orch.approve_and_post(draft["draft_id"], visibility="external", via="beacon_page")
+
+                self.assertIs(res["ok"], False)
+                self.assertEqual(self.store.get(draft["draft_id"])["status"], status)
+                post.assert_not_called()                                 # nothing reached a backend
+                event.assert_called_once()
+                self.assertEqual(event.call_args.args, ("removed",))
+                self.assertEqual((event.call_args.kwargs["draft_id"], event.call_args.kwargs["reason"],
+                                  event.call_args.kwargs["via"]),
+                                 (draft["draft_id"], reason, "beacon_page"))
 
     # --------------------------------------------------------------- _track_post
     def test_track_post_uses_the_draft_it_is_given_and_does_nothing_when_collection_is_off(self):
@@ -685,6 +779,9 @@ class TestHandsfreeTrackingCallers(unittest.TestCase):
                 self.assertEqual(track.call_args.args, ("processed",))
                 self.assertEqual(track.call_args.kwargs["outcome"], "skipped")
                 self.assertIs(track.call_args.kwargs["trial"], expected)
+                # One record per RUN, not per case: the queue's single
+                # "<case>__skipped" row id would let a later run overwrite it.
+                self.assertRegex(track.call_args.kwargs["draft_id"], r"^01100030__skipped_\d{8}T\d{6}$")
 
     # ----------------------------------------------------------------- removals
     def test_cleanup_reports_the_open_drafts_it_removes_with_the_reason(self):

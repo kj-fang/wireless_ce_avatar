@@ -2349,16 +2349,20 @@ def _event_details(details: Optional[dict]) -> dict:
     return out
 
 
-def _do_record_handsfree_event(event: dict) -> None:
+def _do_record_handsfree_event(event: dict, update_only: bool = False) -> None:
     """Write one funnel event. A second write of the same event id keeps the
     EARLIER of the two times and adds what the later call knows (a view is
     reported when the draft is opened and again, with its duration, when it
     closes). Each report has its own writer thread, so the closing one can
-    get here first: the time kept is the earlier one, not the first written."""
+    get here first: the time kept is the earlier one, not the first written.
+    `update_only` adds to a record that is already there and writes nothing
+    when there is none."""
     user = _current_user()
     try:
         path = _handsfree_event_path(event["event_id"], user)
         with _lock_for(path):
+            if update_only and not path.exists():
+                return
             record = {
                 "schema_version": GATHER_SCHEMA_VERSION,
                 "record_type": "handsfree_event",
@@ -2393,10 +2397,11 @@ def _do_record_handsfree_event(event: dict) -> None:
     except Exception as e:
         print(f"[gather] handsfree event failed (event={event.get('event_id')}): {e}")
         return
-    # Only the coarse event schedules a rollup; views and edits ride along
-    # with the next one (see _AGG_COOLDOWN_SEC).
-    if event.get("kind") == "processed":
-        _maybe_rebuild_aggregates_async()
+    # Every kind asks for a rollup: a quiet day with views but no new case
+    # and no post would otherwise leave the published reach, view and
+    # backlog numbers standing still. The helper itself keeps rebuilds
+    # apart (_AGG_COOLDOWN_SEC), so a burst of events costs one.
+    _maybe_rebuild_aggregates_async()
 
 
 def record_handsfree_event(
@@ -2408,6 +2413,7 @@ def record_handsfree_event(
     key: str = "",
     handsfree_role: str = "",
     details: Optional[dict] = None,
+    update_only: bool = False,
 ) -> str:
     """Record one step of a Beacon draft's life (HANDSFREE_EVENT_KINDS).
 
@@ -2416,11 +2422,18 @@ def record_handsfree_event(
     Without one, a once-per-draft kind is written to the draft's single file
     for that kind and any other kind gets a new file each time.
 
+    `update_only` (needs a `key`) is for a report that can only add to an
+    event already recorded - the closing report of a view whose draft has
+    left the queue since it was opened. Nothing is written when that event
+    was never recorded, so a made-up draft id cannot create one.
+
     Like every Gather write: on a background thread, never raises, and silent
     when collection is off for this build. Returns the event id ("" when
     nothing was recorded)."""
     kind = str(kind or "").strip().lower()
     if kind not in HANDSFREE_EVENT_KINDS or not (draft_id or case_nbr) or not _collection_enabled():
+        return ""
+    if update_only and not key:
         return ""
     try:
         subject = _safe_id(draft_id) if draft_id else "case_" + _safe_id(case_nbr)
@@ -2446,8 +2459,8 @@ def record_handsfree_event(
             "case_nbr": (check_ips_utils.normalise_ips(str(case_nbr or ""))
                          or str(case_nbr or "")[:20]),
         }
-        threading.Thread(target=_do_record_handsfree_event, args=(event,), daemon=True,
-                         name="gather-handsfree-event").start()
+        threading.Thread(target=_do_record_handsfree_event, args=(event, bool(update_only)),
+                         daemon=True, name="gather-handsfree-event").start()
         return event["event_id"]
     except Exception as e:
         print(f"[gather] handsfree event dispatch failed: {e}")
@@ -2486,6 +2499,8 @@ def _do_record_handsfree_listed(day: str, stamp: str, via: str, role: str, fresh
             _write_json_atomic(path, record)
     except Exception as e:
         print(f"[gather] handsfree listed failed: {e}")
+        return
+    _maybe_rebuild_aggregates_async()      # reach changed; cooldown-limited
 
 
 def record_handsfree_listed(drafts: Any, *, via: str = "", handsfree_role: str = "") -> int:
@@ -3203,10 +3218,11 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
     is left out. Drafts that were viewed or posted but were queued before
     this tracking existed are counted as `untracked_drafts` only.
 
-    A draft that left the queue with no decision (its case closed, it passed
-    the retention age, or the case was reset: a `removed` event) keeps its
-    place in the counts up to that point, but is `removed`, not `pending`,
-    and is not backlog: nobody can open it any more."""
+    A draft that left the queue without being posted or rejected by a
+    reviewer (its case closed, it passed the retention age, the case was
+    reset, or the system refused it as a second first response: a `removed`
+    event) keeps its place in the counts up to that point, but is `removed`,
+    not `pending`, and is not backlog: nobody can act on it any more."""
     now_ts = time.time() if now is None else float(now)
     drafts: dict[str, dict] = {}
 
@@ -3386,7 +3402,8 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
         "posted_as_suggested": posted - edited,
         "posted_after_edit": edited,
         "rejected": rejected,
-        # left the queue undecided: case closed, retention age, or case reset
+        # left the queue neither posted nor rejected by a reviewer: case
+        # closed, retention age, case reset, or a duplicate first response
         "removed": removed,
         "removed_by_reason": dict(removed_by_reason),
         "pending": for_review - posted - rejected - removed,

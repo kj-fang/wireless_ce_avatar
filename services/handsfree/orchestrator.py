@@ -113,17 +113,19 @@ def start_check_now(owner_name: Optional[str] = None,
 
 
 def _track_event(kind: str, *, draft_id: str = "", case_nbr: str = "", via: str = "",
-                 key: str = "", **details) -> None:
+                 key: str = "", update_only: bool = False, **details) -> None:
     """Usage record of one step of a draft's life before the post
     (gather_service.record_handsfree_event): the server processed a case, a
-    reviewer opened / edited / rejected a draft. Never raises and never
-    delays the caller - the write runs on the Gather service's own thread."""
+    reviewer opened / edited / rejected a draft. `update_only` adds to an
+    event already recorded under `key` and never starts one. Never raises
+    and never delays the caller - the write runs on the Gather service's
+    own thread."""
     try:
         from services import gather_service
         from . import scheduler
         gather_service.record_handsfree_event(
             kind, draft_id=draft_id, case_nbr=case_nbr, via=via, key=key,
-            handsfree_role=scheduler.role(), details=details)
+            handsfree_role=scheduler.role(), details=details, update_only=update_only)
     except Exception as e:
         print(f"[handsfree] {kind} of {draft_id or case_nbr} not recorded for usage tracking: "
               f"{type(e).__name__}: {e}")
@@ -226,7 +228,12 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                              analysis=analysis.to_dict())
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
         _update_case_details(case_nbr, {"skipped": analysis.error})
-        _track_processed({"draft_id": f"{case_nbr}__skipped", "case_nbr": case_nbr,
+        # The queue keeps ONE skipped row per case (a re-run overwrites it),
+        # but every run that skipped the case is a run of its own in the
+        # usage numbers: under the row's id a later run - a trial one, say -
+        # would rewrite the record of an earlier one.
+        run_stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime(started))
+        _track_processed({"draft_id": f"{case_nbr}__skipped_{run_stamp}", "case_nbr": case_nbr,
                           "mode": "unsupported", "source": source, "owner_name": owner_name,
                           "trial": trial},
                          outcome="skipped", primary=True, started=started)
@@ -1509,6 +1516,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             store.update(draft_id, status="posted",
                          post_result={"ok": False, "backend": "none",
                                       "error": "first response already sent on this case"})
+            # Nothing was posted, and no reviewer rejected it: for the usage
+            # numbers the draft left the queue (not a post, not pending).
+            _track_event("removed", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                         via=getattr(_approval, "via", ""), reason="first_response_already_sent",
+                         draft_status="posted", mode=str(rec.get("mode") or ""))
             return {"ok": False,
                     "error": "the first-response overview was already sent on this "
                              "case (it goes out once); marked as posted",
@@ -1522,6 +1534,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                    "re-run the case for a targeted request")
             store.update(draft_id, status="rejected",
                          post_result={"ok": False, "backend": "none", "error": err})
+            # Refused by the system, not rejected by the reviewer (who
+            # approved it): it left the queue, like the case above.
+            _track_event("removed", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                         via=getattr(_approval, "via", ""), reason="overview_already_sent",
+                         draft_status="rejected", mode=str(rec.get("mode") or ""))
             return {"ok": False, "error": err, "draft": store.get(draft_id)}
 
     backend = (cfg.get("post_backend") or "auto").lower()
@@ -1547,6 +1564,15 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                 _track_post(store, draft_id, ok=False, rec=failed)
                 return {"ok": False, "error": str(e), "draft": store.get(draft_id)}
             result = None   # fall through to UI
+        except Exception as e:
+            # A connection failure or a timeout. The insert may or may not
+            # have gone through, so nothing is retried and the error is
+            # raised as before; the attempt is only put on record first
+            # (the draft itself is left as it was).
+            _track_post(store, draft_id, ok=False,
+                        rec={**rec, "post_result": {"ok": False, "backend": "rest",
+                                                    "error": f"{type(e).__name__}: {e}"}})
+            raise
         if result is not None and not result.ok and (result.detail or {}).get("identity_mismatch"):
             # The session is no longer the reviewer's. That is not a REST
             # problem the UI poster could work around: stop, the reviewer

@@ -117,6 +117,10 @@ standby_wowlan_arming:
     - "Wakeup due to:"
     - "WAKEUP_BY_"
     - "NLO"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "* SUSPEND *"
+    - "* RESUME "
   exclusive:
     - "qosSeqCounter"
     - "GTK entry"
@@ -245,6 +249,8 @@ standby_os_command_activity:
     - "WakeupReason"
     - "OS issued D0 Entry"
     - "OS issued D0 Exit"
+    - "* SUSPEND *"
+    - "* RESUME "
     - "drvKeyId"
   exclusive:
     - "WDI_GET_BSS_ENTRY_LIST_UPDATE"
@@ -300,6 +306,8 @@ standby_scan_roam:
     - "Deactivating NLO"
     - "OS issued D0 Entry"
     - "OS issued D0 Exit"
+    - "* SUSPEND *"
+    - "* RESUME "
     - "drvKeyId"
   exclusive:
     - "TASK_SCAN_PARAMS"
@@ -393,6 +401,8 @@ standby_device_power_save:
     - "PSM"
     - "OS issued D0 Entry"
     - "OS issued D0 Exit"
+    - "* SUSPEND *"
+    - "* RESUME "
     - "Soc latency"
     - "MISSED_BEACON"
     - "CONNECTED - to"

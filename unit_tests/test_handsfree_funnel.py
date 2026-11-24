@@ -165,6 +165,54 @@ class TestHandsfreeEventWriters(unittest.TestCase):
         self.assertIs(posts[0]["edit"]["changed"], False)
         self.assertIs(posts[0]["edit"]["echo_stripped"], True)
 
+    def test_draining_the_outbox_joins_the_days_listed_drafts_instead_of_replacing_them(self):
+        """The share has the drafts shown before an outage, the local buffer
+        those shown during it: after the drain the day's file names both."""
+        share, local = self.tmp / "share", self.tmp / "local"
+        name = "listed__20261123.json"
+
+        def listed(root, drafts, updated_at):
+            path = gather._mode_root(root) / "handsfree_events" / "ann" / name
+            gather._write_json_atomic(path, {"record_type": "handsfree_listed_day", "user_name": "ann",
+                                             "drafts": drafts, "updated_at": updated_at})
+            return path
+
+        for label, local_stamp, shared_stamp in (("the buffered copy is newer", "2026-11-23T12:00:00+08:00",
+                                                  "2026-11-23T09:00:00+08:00"),
+                                                 ("the shared copy is newer", "2026-11-23T09:00:00+08:00",
+                                                  "2026-11-23T12:00:00+08:00")):
+            with self.subTest(label):
+                on_share = listed(share, {"A": {"at": "2026-11-23T08:00:00+08:00", "via": "beacon_page"},
+                                          "C": {"at": "2026-11-23T08:30:00+08:00", "via": "beacon_page"}},
+                                  shared_stamp)
+                buffered = listed(local, {"B": {"at": "2026-11-23T11:00:00+08:00", "via": "home_dashboard"},
+                                          "C": {"at": "2026-11-23T11:30:00+08:00", "via": "home_dashboard"}},
+                                  local_stamp)
+
+                gather._drain_outbox(local, share)
+
+                merged = json.loads(on_share.read_text(encoding="utf-8"))
+                self.assertEqual(sorted(merged["drafts"]), ["A", "B", "C"])
+                self.assertEqual(merged["drafts"]["C"]["at"], "2026-11-23T08:30:00+08:00")   # first shown
+                self.assertEqual(merged["updated_at"], "2026-11-23T12:00:00+08:00")
+                self.assertFalse(buffered.exists())
+
+    def test_draining_the_outbox_still_lets_the_later_snapshot_of_an_event_win(self):
+        share, local = self.tmp / "share", self.tmp / "local"
+
+        def event(root, dwell, updated_at):
+            path = gather._mode_root(root) / "handsfree_events" / "ann" / "d-1__viewed__v-1.json"
+            gather._write_json_atomic(path, {"record_type": "handsfree_event", "kind": "viewed",
+                                             "dwell_seconds": dwell, "updated_at": updated_at})
+            return path
+
+        on_share = event(share, 10, "2026-11-23T09:00:00+08:00")
+        event(local, 300, "2026-11-23T12:00:00+08:00")
+
+        gather._drain_outbox(local, share)
+
+        self.assertEqual(json.loads(on_share.read_text(encoding="utf-8"))["dwell_seconds"], 300)
+
     def test_repeatable_kinds_get_a_record_each_and_bad_input_is_ignored(self):
         gather.record_handsfree_event("edit_saved", draft_id="d-1", via="beacon_page")
         gather.record_handsfree_event("edit_saved", draft_id="d-1", via="somewhere_else")
@@ -379,6 +427,51 @@ class TestHandsfreeFunnelMath(unittest.TestCase):
         self.assertEqual(f["turnaround"]["ready_to_post"]["count"], 0)
         # Odd records are skipped, never raised on.
         gather.handsfree_funnel([None, {"ok": True}], [None, {"kind": "viewed"}, {"record_type": "handsfree_listed_day"}])
+
+
+class TestEditSummaryBounds(unittest.TestCase):
+    """summarise_edit keeps its work bounded on long or repetitive texts and
+    says how it compared them."""
+
+    def test_a_small_change_in_a_long_repetitive_text_is_still_compared_exactly(self):
+        lines = ["Please collect the WRT logs."] * 1500
+        edited = lines[:700] + ["Please also share the AP model."] + lines[701:]
+
+        e = gather.summarise_edit("\n".join(lines), "\n".join(edited))
+
+        self.assertEqual(e["comparison"], "exact")          # only the changed part is diffed
+        self.assertEqual((e["removed_lines"], e["added_lines"]),
+                         (["Please collect the WRT logs."], ["Please also share the AP model."]))
+        self.assertEqual((e["suggested_lines"], e["posted_lines"], e["kept_lines"]), (1500, 1500, 1499))
+        self.assertIs(e["changed"], True)
+        self.assertEqual(e["similarity"], 0.999)
+
+    def test_a_large_changed_part_is_compared_approximately(self):
+        a = "\n".join(f"old line {i}" for i in range(6)) + "\nshared tail"
+        b = "\n".join(f"new line {i}" for i in range(6)) + "\nshared tail"
+
+        with patch.object(gather, "_DIFF_EXACT_CELLS", 10):
+            e = gather.summarise_edit(a, b)
+
+        self.assertEqual(e["comparison"], "approximate")
+        self.assertEqual((e["kept_lines"], e["removed_count"], e["added_count"]), (1, 6, 6))
+
+    def test_lines_past_the_limit_are_checked_for_being_the_same_only(self):
+        with patch.object(gather, "_MAX_DIFF_LINES", 5):
+            same_start = "\n".join(f"line {i}" for i in range(5))
+            e = gather.summarise_edit(same_start + "\nextra one", same_start + "\nextra two")
+            unchanged = gather.summarise_edit(same_start + "\nextra", same_start + "\nextra")
+
+        self.assertEqual(e["comparison"], "truncated")
+        self.assertIs(e["changed"], True)                   # the difference lies past the limit
+        self.assertEqual((e["suggested_lines"], e["posted_lines"], e["kept_lines"]), (6, 6, 5))
+        self.assertEqual(e["removed_lines"], [])
+        self.assertIs(unchanged["changed"], False)
+
+    def test_equal_and_empty_texts(self):
+        self.assertEqual(gather.summarise_edit("a\nb", "a\nb")["similarity"], 1.0)
+        self.assertIs(gather.summarise_edit("", "")["changed"], False)
+        self.assertEqual(gather.summarise_edit(None, "new")["added_lines"], ["new"])
 
 
 @patch(f"{ROUTES}.orchestrator")

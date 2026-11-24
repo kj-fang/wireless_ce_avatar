@@ -152,6 +152,8 @@ _MAX_ATTACHMENT_FILES = 1000  # defensive cap for unusually large cases
 _MAX_POST_CHARS = 60000       # cap each stored Beacon draft text (suggested / posted)
 _MAX_EDIT_LINES = 200         # cap the removed / added line lists of an edit summary
 _MAX_EDIT_LINE_CHARS = 500    # cap one line in those lists
+_MAX_DIFF_LINES = 2000        # lines of each text an edit summary compares
+_DIFF_EXACT_CELLS = 250_000   # changed-part size (lines x lines) still compared line for line
 
 # Minimum seconds between async aggregate rebuilds (per process). Each write
 # schedules a rebuild but only one runs per cooldown window, so a burst of
@@ -332,6 +334,37 @@ def _record_stamp(path: Path) -> str:
         return ""
 
 
+def _merged_listed_day(src: Path, dst: Path) -> Optional[dict]:
+    """The union of a buffered and a shared "drafts shown today" file
+    (record_handsfree_listed), or None when either is not one.
+
+    Every other record is a whole snapshot, so the later file is the whole
+    truth. This one is a running list: the copy written while the share was
+    down names only the drafts shown during the outage, and the shared copy
+    only those shown before it. Neither replaces the other - the day's list
+    is both, and a draft named in both keeps its earlier time."""
+    try:
+        local = json.loads(src.read_text(encoding="utf-8"))
+        shared = json.loads(dst.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    for rec in (local, shared):
+        if (not isinstance(rec, dict) or rec.get("record_type") != "handsfree_listed_day"
+                or not isinstance(rec.get("drafts"), dict)):
+            return None
+    newer, older = ((local, shared)
+                    if str(local.get("updated_at") or "") > str(shared.get("updated_at") or "")
+                    else (shared, local))
+    drafts = dict(older["drafts"])
+    for draft_id, info in newer["drafts"].items():
+        had = drafts.get(draft_id)
+        was = _iso_ts((had or {}).get("at")) if isinstance(had, dict) else None
+        now = _iso_ts((info or {}).get("at")) if isinstance(info, dict) else None
+        if had is None or was is None or (now is not None and now < was):
+            drafts[draft_id] = info
+    return {**newer, "drafts": dict(list(drafts.items())[:_MAX_LISTED_PER_DAY])}
+
+
 def _drain_kind(src_dir: Path, dst_dir: Path) -> tuple[int, int, int]:
     """Move one buffered ``<kind>`` folder up to its place on the share."""
     moved = stale = failed = 0
@@ -343,6 +376,12 @@ def _drain_kind(src_dir: Path, dst_dir: Path) -> tuple[int, int, int]:
         for f in user_dir.glob("*.json"):
             dst = dst_dir / user_dir.name / f.name
             try:
+                merged = _merged_listed_day(f, dst) if dst.exists() else None
+                if merged is not None:
+                    _write_json_atomic(dst, merged)
+                    f.unlink()
+                    moved += 1
+                    continue
                 if dst.exists() and _record_stamp(f) <= _record_stamp(dst):
                     f.unlink()
                     stale += 1
@@ -366,6 +405,9 @@ def _drain_outbox(local: Path, share: Path) -> None:
     Each machine only ever writes its own user folder, so a collision means
     the same machine reached the share between two writes of the same record;
     the later snapshot wins because a record is always rewritten in full.
+    The one exception is the per-day list of drafts shown to a reviewer,
+    which grows through the day: its two copies are joined
+    (_merged_listed_day), never replaced.
 
     Every mode is drained, not only this process's own: whichever run reaches
     the share first should deliver everything the machine has buffered. Both
@@ -2071,13 +2113,38 @@ def summarise_edit(suggested: Any, posted: Any) -> dict:
     line: how alike the two texts are, which suggested lines were dropped and
     which lines were written in. This is the learning signal - the dropped
     lines are what reviewers do NOT pass on to a customer. Blank lines and
-    trailing spaces are ignored. Pure; never raises on odd input."""
+    trailing spaces are ignored. Pure; never raises on odd input.
+
+    The work is bounded, because a line-by-line comparison of two long,
+    repetitive texts can take time out of all proportion to what it tells:
+
+      * the lines both texts start and end with are set aside first - a post
+        is the suggestion with a few changes, so what is left to compare is
+        normally a handful of lines;
+      * when what is left is still large (_DIFF_EXACT_CELLS), lines that
+        repeat many times are no longer matched one by one
+        (`comparison`: "approximate");
+      * lines past _MAX_DIFF_LINES are only checked for being the same
+        (`comparison`: "truncated")."""
     import difflib
-    a, b = _post_lines(suggested), _post_lines(posted)
+    all_a, all_b = _post_lines(suggested), _post_lines(posted)
+    a, b = all_a[:_MAX_DIFF_LINES], all_b[:_MAX_DIFF_LINES]
+    beyond_differs = all_a[_MAX_DIFF_LINES:] != all_b[_MAX_DIFF_LINES:]
+    truncated = len(all_a) > len(a) or len(all_b) > len(b)
+    shorter = min(len(a), len(b))
+    head = 0
+    while head < shorter and a[head] == b[head]:
+        head += 1
+    tail = 0
+    while tail < shorter - head and a[-1 - tail] == b[-1 - tail]:
+        tail += 1
+    mid_a, mid_b = a[head:len(a) - tail], b[head:len(b) - tail]
+    exact = len(mid_a) * len(mid_b) <= _DIFF_EXACT_CELLS
     removed: list[str] = []
     added: list[str] = []
-    kept = 0
-    matcher = difflib.SequenceMatcher(None, a, b, autojunk=False)
+    kept = head + tail
+    matcher = difflib.SequenceMatcher(None, mid_a, mid_b, autojunk=not exact)
+    a, b = mid_a, mid_b
     for tag, i1, i2, j1, j2 in matcher.get_opcodes():
         if tag == "equal":
             kept += i2 - i1
@@ -2087,11 +2154,14 @@ def summarise_edit(suggested: Any, posted: Any) -> dict:
         if tag in ("insert", "replace"):
             added.extend(b[j1:j2])
     clip = lambda lines: [ln[:_MAX_EDIT_LINE_CHARS] for ln in lines[:_MAX_EDIT_LINES]]
+    compared = min(len(all_a), _MAX_DIFF_LINES) + min(len(all_b), _MAX_DIFF_LINES)
     return {
-        "changed": bool(removed or added),
-        "similarity": round(matcher.ratio(), 3) if (a or b) else 1.0,
-        "suggested_lines": len(a),
-        "posted_lines": len(b),
+        "changed": bool(removed or added or beyond_differs),
+        # 2 x matching lines / all lines, as difflib's ratio() defines it
+        "similarity": round(2 * kept / compared, 3) if compared else 1.0,
+        "comparison": "truncated" if truncated else ("exact" if exact else "approximate"),
+        "suggested_lines": len(all_a),
+        "posted_lines": len(all_b),
         "kept_lines": kept,
         "removed_count": len(removed),
         "added_count": len(added),

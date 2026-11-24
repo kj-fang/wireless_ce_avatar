@@ -196,6 +196,7 @@ d3_resume_firmware_health:
     - "uCode assert was detected"
     - "FATAL_ERROR"
     - "FW is dead"
+    - "CONNECTED - to"
     - "drvKeyId"
   exclusive:
     - "mhiffBuildRfiCnfCmd"
@@ -515,6 +516,7 @@ standby_wake_loop_signatures:
     - "PROP_SET_ADD_CIPHER_KEYS"
     - "Got Command (M1 Message) TASK_CONNECT"
     - "Got Command (M1 Message) TASK_DISCONNECT"
+    - "CONNECTED - to"
     - "drvKeyId"
   exclusive:
     - "mhiffBuildRfiCnfCmd"

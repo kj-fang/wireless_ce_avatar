@@ -1357,6 +1357,23 @@ class TestFilterRoutes(LogParserTestCase):
         # Assert
         self.assertEqual(resp.get_json(), {"success": False, "message": "Failed to read filter: locked"})
 
+    @patch(f"{ROUTES}.get_log_parser_dir", return_value=None)
+    def test_get_filter_details_dir_unavailable_returns_503(self, mock_dir):
+        """get_filter_details reports 503 when both shares are unreachable.
+
+        Input: POST /get_filter_details when get_log_parser_dir() returns None.
+        Expected: 503 with a shared-folder-unavailable message.
+        """
+        # Act
+        resp = self.client.post("/log_parser/get_filter_details", json={"filter_file": "wifi.tat"})
+
+        # Assert
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.get_json(), {
+            "success": False,
+            "message": "Log parser shared folder is unavailable. Please try again later.",
+        })
+
     @patch(f"{ROUTES}.os.path.exists", return_value=False)
     def test_get_all_filter_details_missing_dir(self, mock_exists):
         """get_all_filter_details reports a missing filter directory.
@@ -1404,6 +1421,23 @@ class TestFilterRoutes(LogParserTestCase):
 
         # Assert
         self.assertEqual(resp.get_json(), {"success": False, "message": "Failed to load filters: denied"})
+
+    @patch(f"{ROUTES}.get_log_parser_dir", return_value=None)
+    def test_get_all_filter_details_dir_unavailable_returns_503(self, mock_dir):
+        """get_all_filter_details reports 503 when both shares are unreachable.
+
+        Input: POST /get_all_filter_details when get_log_parser_dir() returns None.
+        Expected: 503 with a shared-folder-unavailable message.
+        """
+        # Act
+        resp = self.client.post("/log_parser/get_all_filter_details")
+
+        # Assert
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.get_json(), {
+            "success": False,
+            "message": "Log parser shared folder is unavailable. Please try again later.",
+        })
 
 
 class TestEstimateTokens(LogParserTestCase):
@@ -1454,6 +1488,29 @@ class TestEstimateTokens(LogParserTestCase):
         self.assertEqual(resp.status_code, 400)
         self.assertEqual(resp.get_json()["message"], r"Filter file not found: ..\..\wifi.tat")
         mock_exists.assert_called_with(os.path.join(FILTER_DIR, "wifi.tat"))  # basename only
+
+    @patch(f"{ROUTES}.get_log_parser_dir", return_value=None)
+    @patch(f"{ROUTES}.os.path.exists", side_effect=lambda p: p == TestEstimateTokens.LOG)
+    def test_dir_unavailable_returns_503(self, mock_exists, mock_dir):
+        """estimate_tokens reports 503 when both shares are unreachable.
+
+        Input: POST /estimate_tokens with a filter file and a session log, but
+        get_log_parser_dir() returns None.
+        Expected: 503 with a shared-folder-unavailable message, checked before
+        the filter file's own existence.
+        """
+        # Arrange
+        self.seed_session(log_path=self.LOG)
+
+        # Act
+        resp = self.client.post("/log_parser/estimate_tokens", json={"filter_file": "wifi.tat"})
+
+        # Assert
+        self.assertEqual(resp.status_code, 503)
+        self.assertEqual(resp.get_json(), {
+            "success": False,
+            "message": "Log parser shared folder is unavailable. Please try again later.",
+        })
 
     @patch(f"{ROUTES}.log_parser_service")
     @patch("utils.log_parser_preprocess.group_similar_logs", return_value=["g1"])

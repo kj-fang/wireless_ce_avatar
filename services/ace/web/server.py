@@ -237,7 +237,10 @@ def _resolve_key_module(force: bool = False) -> object:
     with _KEY_CACHE_LOCK:
         if not force and _KEY_CACHE is not None:
             return _KEY_CACHE[1]
-        key_path = path_configs.get_key_path(force=force)
+        # Reaching here means _KEY_CACHE has no success to fall back on, so
+        # always re-probe — a stale cached None from a failed boot warm-up
+        # must not outlive the VPN reconnecting.
+        key_path = path_configs.get_key_path(force=True)
         if key_path is None:
             raise RuntimeError("Could not resolve key share — VPN reachable?")
         mod = helpers.load_module(key_path, "key_module")

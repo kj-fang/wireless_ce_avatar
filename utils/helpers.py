@@ -129,7 +129,10 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
     for slot, path in (("prim", primary), ("bkup", backup)):
         result = {"exists": False, "error": None,
                    "parent_exists": None, "parent_error": None}
-        def check():
+        # Bind path/result as defaults so a straggler thread from a prior,
+        # abandoned (timed-out) iteration keeps its OWN values instead of
+        # reading whatever the loop variables were reassigned to.
+        def check(path=path, result=result):
             try:
                 if Path(path).exists():
                     result["exists"] = True
@@ -176,6 +179,13 @@ def get_load_path(primary, backup, timeout_sec=8, label=None):
 # one cache per key keeps that cost to once per process instead of once
 # per call site.
 _load_path_cache: dict = {}
+# Monotonic timestamp of the last failed (None) probe per cache_key. A failed
+# probe is remembered for FAILED_PROBE_RETRY_SEC so back-to-back lookups in
+# the same request (e.g. a page that resolves the same share twice) don't
+# each pay the full prim/bkup timeout; once the window elapses the next call
+# re-probes, so a VPN reconnect is picked up without restarting the process.
+_load_path_cache_fail_at: dict = {}
+FAILED_PROBE_RETRY_SEC = 30
 # Per-key locks (lazily created) so two concurrent callers resolving the SAME
 # cache_key serialize onto one probe, while different keys still run fully in
 # parallel (e.g. a boot-time warm-up thread and the real call site racing for
@@ -197,27 +207,60 @@ def get_load_path_cached(cache_key: str, primary: str, backup: str, timeout_sec:
                           label: str = None, force: bool = False):
     """Return whichever of ``primary``/``backup`` is reachable (``None`` if neither is).
 
-    Cached per process, per ``cache_key``, unless ``force=True``, which always
-    re-probes and refreshes the cache — for callers (e.g. a rare, user-triggered
-    action) where a stale answer from earlier in the session must not stick.
+    Successful resolutions are cached per process, per ``cache_key``, unless
+    ``force=True``, which always re-probes and refreshes the cache — reserved
+    for an explicit, user-triggered retry where a stale answer from earlier
+    in the session must not stick. A failed resolution (``None``, e.g.
+    probed before the VPN connected) is cached for ``FAILED_PROBE_RETRY_SEC``
+    only: callers within that window get the recent failure back instead of
+    re-paying the full timeout, but once it elapses the next call re-probes
+    so a VPN reconnect heals the result without a restart.
     """
     tag = f"[{label or cache_key}] "
-    if not force and cache_key in _load_path_cache:
-        print(f"{tag}get_load_path_cached({cache_key}): using cached result: {_load_path_cache[cache_key]}")
-        return _load_path_cache[cache_key]
+
+    def _recent_failure():
+        failed_at = _load_path_cache_fail_at.get(cache_key)
+        if failed_at is None:
+            return False
+        age = time.monotonic() - failed_at
+        if age < FAILED_PROBE_RETRY_SEC:
+            print(f"{tag}get_load_path_cached({cache_key}): recent failed probe "
+                  f"({age:.1f}s ago) — reusing None instead of re-probing")
+            return True
+        return False
+
+    if not force:
+        cached = _load_path_cache.get(cache_key)
+        if cached is not None:
+            print(f"{tag}get_load_path_cached({cache_key}): using cached result: {cached}")
+            return cached
+        if _recent_failure():
+            return None
 
     with _get_cache_lock(cache_key):
         # Re-check: another thread may have resolved this key while we were
         # waiting for the lock (e.g. a boot-time warm-up thread finishing
         # just before the real call site asks for the same key).
-        if not force and cache_key in _load_path_cache:
-            print(f"{tag}get_load_path_cached({cache_key}): using cached result (resolved while waiting): {_load_path_cache[cache_key]}")
-            return _load_path_cache[cache_key]
+        if not force:
+            if cache_key in _load_path_cache:
+                print(f"{tag}get_load_path_cached({cache_key}): using cached result (resolved while waiting): {_load_path_cache[cache_key]}")
+                return _load_path_cache[cache_key]
+            if _recent_failure():
+                return None
         reason = "force=True" if force else "cache miss"
         print(f"{tag}get_load_path_cached({cache_key}): {reason} — probing shared folder")
-        _load_path_cache[cache_key] = get_load_path(
-            primary, backup, timeout_sec=timeout_sec, label=label or cache_key)
-    return _load_path_cache[cache_key]
+        result = get_load_path(primary, backup, timeout_sec=timeout_sec, label=label or cache_key)
+        if result is None:
+            _load_path_cache.pop(cache_key, None)
+            _load_path_cache_fail_at[cache_key] = time.monotonic()
+            return None
+        _load_path_cache[cache_key] = result
+        _load_path_cache_fail_at.pop(cache_key, None)
+    # Return the locally-resolved result, not a fresh dict lookup: a
+    # concurrent forced retry (e.g. BSOD) can pop this cache_key after we
+    # release the lock but before the line below would run, turning a
+    # successful probe into a KeyError.
+    return result
 
 
 def read_log_file(path: str) -> List[str]:

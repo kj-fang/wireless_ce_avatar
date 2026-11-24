@@ -8,23 +8,41 @@ from utils.log_parser_file_utils import get_available_filters, get_available_pro
 class FileManagerService:
     def __init__(self):
         self.log_parser_dir = get_log_parser_dir()
-    
+
+    def _resolve_log_parser_dir(self) -> str:
+        """Re-probe if the dir was never resolved, so a VPN reconnect heals it.
+
+        Not forced: the shared cache retries a failed probe on its own after
+        a bounded interval, so repeated lookups right after each other (e.g.
+        within one page load) reuse the recent failure instead of each
+        paying the full prim/bkup timeout.
+        """
+        if not self.log_parser_dir:
+            self.log_parser_dir = get_log_parser_dir()
+        return self.log_parser_dir
+
     def handle_file_upload(self, upload_type: str, files) -> Dict[str, Any]:
+        log_parser_dir = self._resolve_log_parser_dir()
         if upload_type == 'filter':
-            return self._handle_filter_upload(files, self.log_parser_dir)
+            return self._handle_filter_upload(files, log_parser_dir)
         elif upload_type == 'prompt':
-            return self._handle_prompt_upload(files, self.log_parser_dir)
+            return self._handle_prompt_upload(files, log_parser_dir)
         else:
             return {'success': False, 'message': 'Invalid upload type'}
     
     def handle_prompt_operation(self, action: str, filename: str, content: str) -> Dict[str, Any]:
         if not filename or not content:
             return {'success': False, 'message': 'Filename and content are required'}
-        
+
+        log_parser_dir = self._resolve_log_parser_dir()
+        if not log_parser_dir:
+            return {'success': False,
+                    'message': 'Log parser shared folder is unavailable. Please try again later.'}, 503
+
         if action == 'save':
-            return self._handle_save_prompt(filename, content, self.log_parser_dir)
+            return self._handle_save_prompt(filename, content, log_parser_dir)
         elif action == 'update':
-            return self._handle_update_prompt(filename, content, self.log_parser_dir)
+            return self._handle_update_prompt(filename, content, log_parser_dir)
         else:
             return {'success': False, 'message': 'Invalid action'}
         
@@ -40,7 +58,7 @@ class FileManagerService:
             return jsonify({'success': False, 'message': 'Please select a .tat file'})
         
         try:
-            file_path = os.path.join(self.log_parser_dir, "filter", file.filename)
+            file_path = os.path.join(self._resolve_log_parser_dir(), "filter", file.filename)
             
             if os.path.exists(file_path):
                 return jsonify({'success': False, 'message': f'File "{file.filename}" already exists'})
@@ -72,7 +90,7 @@ class FileManagerService:
             return jsonify({'success': False, 'message': 'Please select a .py file'})
         
         try:
-            file_path = os.path.join(self.log_parser_dir, "custom_prompt", file.filename)
+            file_path = os.path.join(self._resolve_log_parser_dir(), "custom_prompt", file.filename)
             
             if os.path.exists(file_path):
                 return jsonify({'success': False, 'message': f'File "{file.filename}" already exists'})

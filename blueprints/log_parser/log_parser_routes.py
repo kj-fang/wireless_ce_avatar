@@ -336,6 +336,22 @@ def _render_safe_markdown_html(text: str) -> str:
         strip=True,
     )
 
+
+def _log_parser_dir_or_503():
+    """Resolve the log-parser shared dir, or a ready-to-return 503 response.
+
+    get_log_parser_dir() is None when both the primary and backup shares are
+    unreachable; without this guard the caller's os.path.join(None, ...)
+    raises TypeError instead of a JSON error.
+    """
+    log_parser_dir = get_log_parser_dir()
+    if not log_parser_dir:
+        return None, (jsonify({
+            'success': False,
+            'message': 'Log parser shared folder is unavailable. Please try again later.'
+        }), 503)
+    return log_parser_dir, None
+
 #------------Section for Local dmp file upload bar -------------#
 def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024, cancel_event=None) -> None:
     total_size = os.path.getsize(src_path)
@@ -1187,8 +1203,11 @@ def get_filter_details():
     filter_file = data.get('filter_file', '')
     if not filter_file:
         return jsonify({'success': False, 'message': 'No filter file specified'})
-    
-    filter_path = os.path.join(get_log_parser_dir(), "filter", filter_file)
+
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_path = os.path.join(log_parser_dir, "filter", filter_file)
     if not os.path.exists(filter_path):
         return jsonify({'success': False, 'message': f'Filter file not found: {filter_file}'})
     
@@ -1202,7 +1221,10 @@ def get_filter_details():
 @log_parser_bp.route("/get_all_filter_details", methods=["POST"])
 def get_all_filter_details():
     """Return ALL .tat files with ALL their keywords and enabled status."""
-    filter_dir = os.path.join(get_log_parser_dir(), "filter")
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_dir = os.path.join(log_parser_dir, "filter")
     if not os.path.exists(filter_dir):
         return jsonify({'success': False, 'message': 'Filter directory not found'})
     
@@ -1247,7 +1269,10 @@ def estimate_tokens():
     if not log_path or not os.path.exists(log_path):
         return jsonify({'success': False, 'message': 'Log file not found in session'}), 400
 
-    filter_path = os.path.join(get_log_parser_dir(), "filter", os.path.basename(selected_filter))
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_path = os.path.join(log_parser_dir, "filter", os.path.basename(selected_filter))
     if not os.path.exists(filter_path):
         return jsonify({'success': False, 'message': f'Filter file not found: {selected_filter}'}), 400
 

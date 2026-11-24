@@ -2420,6 +2420,7 @@ class TestSkillsYamlLifecycle(BtChatbotTestCase):
 
         # Assert
         self.activate.assert_called_once_with(self.CLOUD)
+        self.refresh.assert_called_once_with(force=True)
         self.assertEqual((body["filename"], body["local_date"], body["skills"]),
                          (self.CLOUD.name, "2026-09-01", SKILLS))
 
@@ -2744,6 +2745,7 @@ class TestUploadModifiedYaml(BtChatbotTestCase):
         # Assert
         self.mkdir.assert_called_once_with(parents=True, exist_ok=True)
         self.copy2.assert_called_once_with(self.local, str(expected))
+        self.cloud_dir.assert_called_once_with(force=True)
         self.assertEqual(body["uploaded_to"], str(expected))
         self.assertTrue(body["success"])
 

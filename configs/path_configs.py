@@ -43,9 +43,10 @@ def get_classify_path():
     return _helpers.get_load_path_cached("classify_path", CLASSIFY_PATH_prim, CLASSIFY_PATH_bkup, label="classify_path")
 
 
-def get_log_parser_dir():
+def get_log_parser_dir(force: bool = False):
     """Resolve LOG_PARSER_DIR_prim/bkup — whichever share answers first."""
-    return _helpers.get_load_path_cached("log_parser_dir", LOG_PARSER_DIR_prim, LOG_PARSER_DIR_bkup, label="log_parser_dir")
+    return _helpers.get_load_path_cached("log_parser_dir", LOG_PARSER_DIR_prim, LOG_PARSER_DIR_bkup,
+                                         label="log_parser_dir", force=force)
 
 
 # log_parser_data (skills/prompts/filters for chatbot)

@@ -44,7 +44,20 @@ class LogParserService:
         self.chat_system_prompt = None   # system prompt used during analysis
         self.chat_log_context = None     # preprocessed log content for context
         self.raw_log_lines = None        # raw log lines for re-filtering in chat
-    
+
+    def _resolve_log_parser_dir(self) -> str:
+        """Re-probe if the dir was never resolved, so a VPN reconnect heals it.
+
+        Not forced: the shared cache retries a failed probe on its own after
+        a bounded interval, so repeated lookups right after each other (e.g.
+        check_auto_analysis_availability then get_available_resources on the
+        same page load) reuse the recent failure instead of each paying the
+        full prim/bkup timeout.
+        """
+        if not self.log_parser_dir:
+            self.log_parser_dir = get_log_parser_dir()
+        return self.log_parser_dir
+
     # -------------------- setup and check avalibility ------------- 
     def set_up(self, download_path: str) -> str:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -55,15 +68,16 @@ class LogParserService:
     def check_auto_analysis_availability(self, classification: Dict) -> Tuple[bool, Optional[Dict]]:
         if 'issue_type' not in classification or classification['issue_type'] == "Unclassified":
             return False, None
-        if not self.log_parser_dir:
+        log_parser_dir = self._resolve_log_parser_dir()
+        if not log_parser_dir:
             return False, None
 
         issue_type = classification['issue_type'].lower()
         filter_file = f"{issue_type}.tat"
         prompt_file = f"{issue_type}.py"
         
-        filter_path = os.path.join(self.log_parser_dir, "filter", filter_file)
-        prompt_path = os.path.join(self.log_parser_dir, "prompt", prompt_file)
+        filter_path = os.path.join(log_parser_dir, "filter", filter_file)
+        prompt_path = os.path.join(log_parser_dir, "prompt", prompt_file)
         
         if os.path.exists(filter_path) and os.path.exists(prompt_path):
             return True, {
@@ -87,10 +101,10 @@ class LogParserService:
         return log_path
     
     def get_available_resources(self) -> Tuple[list, Tuple[list, list]]:
-
+        log_parser_dir = self._resolve_log_parser_dir()
         with ThreadPoolExecutor(max_workers=2) as executor:
-            future_filters = executor.submit(get_available_filters, self.log_parser_dir)
-            future_prompts = executor.submit(get_available_prompts, self.log_parser_dir)
+            future_filters = executor.submit(get_available_filters, log_parser_dir)
+            future_prompts = executor.submit(get_available_prompts, log_parser_dir)
             
             available_filters = future_filters.result()
             available_prompts, available_custom_prompts = future_prompts.result()
@@ -108,11 +122,14 @@ class LogParserService:
         return True, ""
     
     def load_prompt_content(self, prompt_type: str, prompt_file: str) -> str:
+        log_parser_dir = self._resolve_log_parser_dir()
+        if not log_parser_dir:
+            return ""
 
         if prompt_type == 'template':
-            prompt_dir = os.path.join(self.log_parser_dir, "prompt")
+            prompt_dir = os.path.join(log_parser_dir, "prompt")
         else:
-            prompt_dir = os.path.join(self.log_parser_dir, "custom_prompt")
+            prompt_dir = os.path.join(log_parser_dir, "custom_prompt")
         
         file_path = os.path.join(prompt_dir, prompt_file)
         return get_sys_prompt_content(file_path)

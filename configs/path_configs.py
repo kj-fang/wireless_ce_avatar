@@ -60,6 +60,14 @@ LINUX_SKILLS_YAML_DATED_GLOB = "linux_skills_*.yaml"              # e.g. linux_s
 LINUX_SKILLS_YAML_DATED_RE = r"^linux_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
 LINUX_SKILLS_YAML_DATED_TEMPLATE = "linux_skills_{date}.yaml"     # date = YYYY-MM-DD
 
+# Generic skills YAML — same shared skills_config dir, `generic_` prefix so
+# this domain coexists with Wi-Fi/BT/Linux without name collisions. Loaded at
+# startup by set_up_app to populate the generic_chatbot_agent.
+GENERIC_SKILLS_YAML_FILENAME = "generic_skills.yaml"
+GENERIC_SKILLS_YAML_DATED_GLOB = "generic_skills_*.yaml"
+GENERIC_SKILLS_YAML_DATED_RE = r"^generic_skills_(\d{4}-\d{2}-\d{2})\.yaml$"
+GENERIC_SKILLS_YAML_DATED_TEMPLATE = "generic_skills_{date}.yaml"
+
 # Wireless knowledge topics used by the home page.
 WIRELESS_TOPICS_DIR = rf"\\infs089.iil.intel.com\HOME\WirelessCE\Intel_WirelessCE_Avatar\WiFi_BT_knowledge_yaml"
 

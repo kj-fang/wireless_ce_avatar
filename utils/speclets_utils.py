@@ -73,7 +73,7 @@ from configs.path_configs import (
 )
 
 #: Profiles that own prompt documents. Keys match AgentCapabilityPolicy.profile.
-PROFILES = ("wifi", "bt", "nw", "linux")
+PROFILES = ("wifi", "bt", "nw", "linux", "generic")
 
 #: The documents each profile owns.
 #:   agent         all three of the below in one file, as ``## prompt`` /

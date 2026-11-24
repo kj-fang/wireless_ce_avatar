@@ -222,6 +222,16 @@ LINUX_AGENT_POLICY = AgentCapabilityPolicy(
     disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
     log_in_decode_host_clock=False,
 )
+# A log of unknown/arbitrary domain cannot assume the Wi-Fi/BT firmware
+# assert-code lookup or the Wi-Fi SoftAP channel check have any meaning, so
+# both are disabled -- the only two tools in the registry tied to a specific
+# subsystem. It is also read straight off the reporting machine with no
+# decode step, so its timestamps are already the customer's clock.
+GENERIC_AGENT_POLICY = AgentCapabilityPolicy(
+    profile="generic",
+    disabled_tools=frozenset({"lookup_assert_code", "softAP_supported_channel"}),
+    log_in_decode_host_clock=False,
+)
 
 
 # ---------------------------------------------------------
@@ -460,7 +470,7 @@ from services.chatbot.engine.tool_execution import (
 # the same import-time guard handler_map() applies to route endpoints. The
 # policies are declared before this import can happen (tool_execution imports
 # nothing from here), so this is the first point where both are visible.
-for _policy in (WIFI_AGENT_POLICY, NW_AGENT_POLICY, BT_AGENT_POLICY, LINUX_AGENT_POLICY):
+for _policy in (WIFI_AGENT_POLICY, NW_AGENT_POLICY, BT_AGENT_POLICY, LINUX_AGENT_POLICY, GENERIC_AGENT_POLICY):
     _validate_disabled_tools(_policy.profile, _policy.disabled_tools)
 
 
@@ -609,6 +619,7 @@ class WifiLogAgentSystem(
         # In-memory caches for this agent session
         self._raw_log_cache: List[str] = []
         self._raw_log_cache_path: str = ""
+        self._raw_log_line_number_lookup = None
         self._filter_cache_by_skill: Dict[str, dict] = {}
         self._detail_cache: Dict[str, str] = {}
         self._detail_query_seen: set = set()

@@ -1,10 +1,10 @@
 # Scenario 1: Developer PR  → feature branch pushed, PR opened against main
 #   - Builds + runs linter, uploads artifact, posts version comment on PR
-#   - Version: 99.2.<cycle_count>-dev.<sha1>  (DEV)
+#   - Version: MAIN_MAJOR.MINOR.PATCH-dev.<sha1>  (DEV)
 #
 # Scenario 2: Merge to main  → PR merged (push to main)
 #   - Nightly build, uploads artifact, NO GitHub Release
-#   - Version: 99.2.<cycle_count>  (NIGHTLY)
+#   - Version: MAIN_MAJOR.MINOR.PATCH  (NIGHTLY)
 
 name: Build and Test
 
@@ -14,15 +14,6 @@ on:
   pull_request:
     branches: [ main ]         # Scenario 1: dev PR build
   workflow_dispatch:
-
-# ── Nightly version line ─────────────────────────────────────────────────────
-# To start a new nightly cycle, update NIGHTLY_MINOR and NIGHTLY_BASE_REF together.
-# build_with_version.ps1 has its own matching variables at the top of the file.
-env:
-  NIGHTLY_MAJOR: '99'
-  NIGHTLY_MINOR: '2'
-  NIGHTLY_BASE_REF: 'release/1.2'
-# ─────────────────────────────────────────────────────────────────────────────
 
 permissions:
   contents: write             # needed to create nightly pre-releases
@@ -52,35 +43,36 @@ jobs:
       id: version
       run: |
         git fetch origin main --no-tags 2>$null
-        git fetch origin "$env:NIGHTLY_BASE_REF" --no-tags 2>$null
-
-        $nightlyBase = git merge-base origin/main "origin/$env:NIGHTLY_BASE_REF" 2>$null
-        if ($LASTEXITCODE -ne 0 -or -not $nightlyBase) {
-          Write-Host "::error::Could not determine the nightly cycle base from $env:NIGHTLY_BASE_REF"
-          exit 1
-        }
 
         $gitHash   = git rev-parse --short HEAD
         $buildDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
-        $isNightly = ("${{ github.event_name }}" -eq "push") -and ("${{ github.ref }}" -eq "refs/heads/main")
+        $isNightly = ("${{ github.event_name }}" -ne "pull_request") -and ("${{ github.ref }}" -eq "refs/heads/main")
+        $versionLine = Get-Content "configs/version_line.json" -Raw | ConvertFrom-Json
 
         if ($isNightly) {
-          # Scenario 2: Merge to main — nightly build
-          # Count check-ins since the current nightly cycle began.
-          $commitCount = git rev-list --count "${nightlyBase}..HEAD"
-          $version     = "$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.$commitCount"
+          # The latest version-line edit is the baseline and is always patch zero.
+          $versionBase = git log -1 --first-parent --format=%H HEAD -- configs/version_line.json
+          if ($LASTEXITCODE -ne 0 -or -not $versionBase) {
+            Write-Host "::error::Could not determine main version baseline"
+            exit 1
+          }
+          $commitCount = git rev-list --first-parent --count "${versionBase}..HEAD"
+          $version     = "$($versionLine.main_major).$($versionLine.main_minor).$commitCount"
           $buildType   = "NIGHTLY"
         } else {
-          # Scenario 1: PR from feature branch — dev build
-          # Anchor patch to the commit count on main at the branch point so the dev
-          # version number clearly identifies which nightly it was branched from.
           $mergeBase = git merge-base HEAD origin/main 2>$null
           if ($LASTEXITCODE -ne 0 -or -not $mergeBase) {
             $mergeBase = git rev-parse origin/main
             Write-Host "::warning::Could not determine branch point — using tip of main as fallback"
           }
-          $cycleCommitCount = git rev-list --count "${nightlyBase}..${mergeBase}"
-          $version   = "$env:NIGHTLY_MAJOR.$env:NIGHTLY_MINOR.$cycleCommitCount-dev.$gitHash"
+          $versionBase = git log -1 --first-parent --format=%H $mergeBase -- configs/version_line.json
+          if ($versionBase) {
+            $cycleCommitCount = git rev-list --first-parent --count "${versionBase}..${mergeBase}"
+          } else {
+            # Bootstrap PR that introduces the version-line file.
+            $cycleCommitCount = 0
+          }
+          $version   = "$($versionLine.main_major).$($versionLine.main_minor).$cycleCommitCount-dev.$gitHash"
           $buildType = "DEV"
         }
 

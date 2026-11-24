@@ -418,7 +418,12 @@ def build_profile_yaml_helpers(
         # Keep history; clear rule/filter caches so the reloaded skills apply.
         agent.apply_updated_skills(skills)
         source_path = Path(yaml_path)
-        agent._session_skill_source = "cloud" if source_path.parent.name == "cloud" else "user"
+        # "user" only for an actual user/ override; everything else -- the
+        # cloud/ mirror, and a profile's bundled utils/ fallback when its own
+        # lookup resolves to it -- is the cloud baseline. Checking for "cloud"
+        # specifically (the old check) mislabelled a bundled path as "user"
+        # purely because its parent folder isn't literally named "cloud".
+        agent._session_skill_source = "user" if source_path.parent.name == "user" else "cloud"
         agent._session_skill_filename = source_path.name
         agent._session_skill_path = source_path
         return skills

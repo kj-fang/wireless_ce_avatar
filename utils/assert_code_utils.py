@@ -51,12 +51,9 @@ def _resolve_paths() -> tuple:
       - Dev:    utils/ (next to this file)
       - Frozen: sys._MEIPASS/utils/
 
-    Cache file (writable):
-      - Always: Downloads/IntelAvatar_files/assert_codes_cache.json
-      This keeps a single consistent location regardless of how the app is run,
-      avoids writing into the source tree in dev mode, and survives exe rebuilds
-      without needing to re-parse the headers on every fresh install.
-      Falls back to utils/ if the Downloads folder cannot be resolved.
+        Cache file:
+            - Dev:    utils/assert_codes_cache.json
+            - Frozen: sys._MEIPASS/utils/assert_codes_cache.json
     """
     frozen = getattr(sys, 'frozen', False)
     if frozen:
@@ -65,19 +62,7 @@ def _resolve_paths() -> tuple:
         cache     = utils_dir / "assert_codes_cache.json"
     else:
         utils_dir = Path(__file__).resolve().parent   # dev: utils/
-        try:
-            import winreg
-            key = winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
-            )
-            downloads = winreg.QueryValueEx(key, "{374DE290-123F-4565-9164-39C4925E467B}")[0]
-            winreg.CloseKey(key)
-            cache_dir = Path(downloads) / "IntelAvatar_files"
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            cache_dir = utils_dir   # fallback
-        cache = cache_dir / "assert_codes_cache.json"
+        cache = utils_dir / "assert_codes_cache.json"
 
     lmac = utils_dir / "assertLmac.h"
     umac = utils_dir / "assertUmac.h"

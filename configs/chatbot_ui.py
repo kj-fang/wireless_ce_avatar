@@ -170,6 +170,8 @@ LOG_CHATBOT_UI = {
     },
     "features": {
         **_COMMON_FEATURES,
+        "log_preview": True,
+        "echo_chat": True,
         "sidebar_toggle": True,
         "issue_time": True,
         "feedback": True,
@@ -256,11 +258,11 @@ NW_UI = {
 LINUX_UI = {
     "domain": "linux",
     "api": "/linux_chatbot",
-    # What this agent is good at comes from its prompt and its skills, both of
-    # which are editable without touching Python, so the page does not name one
-    # domain in its chrome. Kept in step with the home page's card in
-    # templates/index.html, which says the same words.
-    "title": "Generic Log Analysis Agent",
+    # This is the Linux-Wi-Fi-driver-flavored profile (dmesg/journalctl,
+    # iwlwifi/mac80211/wpa_supplicant) -- distinct from GENERIC_UI below,
+    # which is the actually domain-agnostic profile. Kept in step with the
+    # home page's card in templates/index.html, which says the same words.
+    "title": "Linux Log Chatbot",
     "back_url": "/linux_chatbot/back_to_avatar",
     "input_placeholder": "Describe the issue and ask a question about the log.",
     "accent": "#15803d",
@@ -317,6 +319,73 @@ LINUX_UI = {
         # First profile with the prompt editor: what this agent is an
         # expert in is its prompt and its skills, and both are now
         # editable from the page.
+        "prompt_editor": True,
+    },
+}
+
+GENERIC_UI = {
+    "domain": "generic",
+    "api": "/generic_chatbot",
+    # What this agent is good at comes from its prompt and its skills, both of
+    # which are editable without touching Python, so the page does not name one
+    # domain in its chrome. Kept in step with the home page's card in
+    # templates/index.html, which says the same words.
+    "title": "Generic Log Analysis Agent",
+    "back_url": "/generic_chatbot/back_to_avatar",
+    "input_placeholder": "Describe the issue and ask a question about the log.",
+    # Neutral slate -- not Wi-Fi blue, BT's own accent, or Linux green --
+    # to visually signal "unbranded" rather than borrowing another profile's
+    # color identity.
+    "accent": "#475569",
+    "accent_dark": "#334155",
+    "accent_light": "#64748b",
+    "accent_soft": "#f1f5f9",
+    "accent_border": "#e2e8f0",
+    "accent_hover": "#f8fafc",
+    "accent_rgb": "71,85,105",
+    "event_sources": [
+        ["wifi", "Wi-Fi"],
+        ["all", "All"],
+    ],
+    "event_source_default": "wifi",
+    # A log of unknown domain has no Windows System Event Log.
+    "windows_event_log": False,
+    "feedback_domain": "generic",
+    "feedback_conclusions": WIFI_FEEDBACK_CONCLUSIONS,
+    "allow_modified_yaml_upload": False,
+    "history_reset_before_set_log": True,
+    "stylesheets": ["/static/chatbot/css/full-agent.css"],
+    "runtime_strategy_script": "/static/chatbot/js/strategies/wifi-chat-runtime.js",
+    "profile_script": "/static/chatbot/js/profiles/wifi.js",
+    "template_parts": {
+        "sidebar": "chatbot/profiles/_sidebar_customer_clock.html",
+        "runtime": "chatbot/features/_issue_time_runtime.html",
+    },
+    "issue_time": {
+        "strategy_script": "/static/chatbot/js/strategies/wifi-issue-time.js",
+        # A log of unknown format may have no calendar date, just an
+        # elapsed/clock time, so time-only issue times must be accepted.
+        "allow_time_only": True,
+        # No decode step assumed for a log of unknown provenance, so there's
+        # no decode-host clock to reconcile against the customer's wall clock.
+        "customer_timezone": False,
+        "event_refinement": False,
+        "multi_select": True,
+        "prompt_title": "Issue Time needed",
+        "prompt_body": (
+            "An issue-time anchor lets the agent scope the analysis to a "
+            "narrow window of log lines around the event, instead of scanning "
+            "the entire file — faster turns and more focused answers."
+        ),
+    },
+    "features": {
+        **_COMMON_FEATURES,
+        "sidebar_toggle": True,
+        "issue_time": True,
+        "feedback": True,
+        "history": True,
+        "skill_editor": True,
+        "skill_append": True,
         "prompt_editor": True,
     },
 }

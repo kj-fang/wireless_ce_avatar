@@ -501,6 +501,7 @@
                         appendReport(result.data, '⚠️ Partial Analysis (Step Limit)', result.issue_time || null, turnId);
                     } else if (result && result.type === 'text') appendAssistantText(result.data || '_No response._', turnId);
                     else if (result) appendAssistantText('⚠️ ' + (result.data || 'Unknown response.'), turnId);
+                    if (result) document.dispatchEvent(new CustomEvent('chatbot:result-rendered', {detail: result}));
                 } else if (evt.type === 'error') {
                     removeTyping();
                     appendAssistantText('❌ Error: ' + (evt.content || 'Unknown error'));
@@ -573,7 +574,7 @@
     // the UI can't show messages the agent no longer remembers; there is
     // nothing meaningful to undo in that case.
     ChatRuntimeStrategyBase.prototype.resetChatForNewLog = function (data) {
-        const chatWindow = document.getElementById('chat-window');
+        const chatWindow = window.getChatRecipientWindow?.('avatar') || document.getElementById('chat-window');
         const alsoOnReload = !!this.profile.history_reset_before_set_log
                              && !!chatWindow.querySelector('.msg-row');
 
@@ -619,7 +620,8 @@
                 // feedback widgets in the restored HTML keep writing into the
                 // right snapshot. The agent's in-memory state for the old log
                 // is gone, but the user can re-load that log to re-prime.
-                chatWindow.innerHTML = undoCache.chatHTML;
+                const avatarWindow = window.getChatRecipientWindow?.('avatar') || chatWindow;
+                avatarWindow.innerHTML = undoCache.chatHTML;
                 window.__feedbackConversationId = undoCache.feedbackConvId;
                 window.__lastFeedback = undoCache.lastFeedback;
                 window.__turnContext  = undoCache.turnContext;
@@ -674,8 +676,9 @@
         // draft the user typed while the lookup was in flight.
         const input = document.getElementById('user-input');
         if (!input) return;
-        if (input.value.trim() && !replaceDraft) return;
-        const initialValue = input.value;
+        const getDraft = () => window.getChatRecipientDraft?.('avatar') ?? input.value;
+        if (getDraft().trim() && !replaceDraft) return;
+        const initialValue = getDraft();
         try {
             const res = await fetch(`${this.api}/get_issue_context`);
             if (!res.ok) return;
@@ -688,15 +691,16 @@
             // replaceDraft means "replace what the previous case left there",
             // not "replace anything": typing while the lookup and the LLM
             // organize were running still wins the box, as it does without it.
-            if (input.value !== initialValue) return;
+            if (getDraft() !== initialValue) return;
             const description = String(context.description || '').replace(/\s+/g, ' ').trim();
             // A case changed to none leaves no description, and the box is
             // still showing the one the old case put there.
             if (!description && !replaceDraft) return;
-            input.value = description;
-            autoResize(input);
+            if (window.setChatRecipientDraft) window.setChatRecipientDraft('avatar', description);
+            else { input.value = description; autoResize(input); }
             const hint = document.getElementById('prefill-hint');
-            if (hint) hint.style.display = description ? 'block' : 'none';
+            if (window.setAvatarPrefillHint) window.setAvatarPrefillHint(!!description);
+            else if (hint) hint.style.display = description ? 'block' : 'none';
             if (typeof validateUserInput === 'function') validateUserInput();
         } catch (e) {
             console.warn('case description prefill failed', e);
@@ -802,6 +806,7 @@
                 }
             }
             logLoaded = true;
+            document.dispatchEvent(new Event('chatbot:context-changed'));
             // Enables the (collapsed) System Event Log panel when the capture
             // folder ships an .evt / .evtx next to the log.
             if (typeof updateEvtButton === 'function') {
@@ -989,15 +994,18 @@
                 descPart = trimTrailingTimeConnector(descPart.replace(/\s+/g, ' ').trim());
 
                 if (input) {
-                    input.value = descPart;
-                    autoResize(input);
-                    input.focus();
-                    const len = input.value.length;
-                    input.setSelectionRange(len, len);
+                    if (window.setChatRecipientDraft) window.setChatRecipientDraft('avatar', descPart);
+                    else { input.value = descPart; autoResize(input); }
+                    if (window.__chatRecipient !== 'echo') {
+                        input.focus();
+                        const len = input.value.length;
+                        input.setSelectionRange(len, len);
+                    }
                 }
                 isAutoFillMode = true;
                 const prefillHint = document.getElementById('prefill-hint');
-                if (prefillHint) prefillHint.style.display = 'block';
+                if (window.setAvatarPrefillHint) window.setAvatarPrefillHint(true);
+                else if (prefillHint) prefillHint.style.display = 'block';
                 validateUserInput();
                 this._afterAutoPrefill();
             }, 400);

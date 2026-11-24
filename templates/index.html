@@ -817,7 +817,7 @@
         .home-card .chatbot-tech-btn:hover { transform: none; border-color: #9eb4a4; color: #294b39; background: #f3f7f3; box-shadow: none; }
         .home-card .chatbot-tech-btn:active { transform: none; }
         [hidden] { display: none !important; }
-        .review-heading { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 17px; border-bottom: 1px solid #e4ebe5; }
+        .review-heading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 14px; padding-bottom: 17px; border-bottom: 1px solid #e4ebe5; }
         .review-heading h2 { margin: 0; }
         .home-card .btn { border-radius: 6px; font-size: 12px; font-weight: 600; transition: background .18s ease, color .18s ease, border-color .18s ease; }
         .home-card .btn-outline-secondary { color: #53675b; border-color: #cbd8ce; background: #fff; }
@@ -1185,6 +1185,10 @@
         .home-card .owner-check-inline #home-owner-check:hover:not(:disabled) { color: #fff; background: linear-gradient(115deg, #286eae, #20588f); box-shadow: 0 5px 14px rgba(40, 105, 170, .26); }
         .home-card .owner-check-inline #home-owner-check:disabled { color: #8793a0; background: #e7ebef; box-shadow: none; cursor: not-allowed; }
         .home-review-unframed .review-heading button, .home-review-unframed .review-toolbar button { border-radius: 999px; font-family: var(--font-body) !important; font-size: 12px; font-weight: 600; }
+        .review-heading-copy { display: flex; flex: 1 1 auto; min-width: 0; }
+        .review-heading-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; }
+        .handsfree-attribution { display: flex; flex: 0 0 auto; align-items: center; gap: 6px; margin: 0; color: #6b7886; font: 500 12px/1.35 var(--font-heading); white-space: nowrap; }
+        .handsfree-attribution img { width: 20px; height: 20px; flex: 0 0 20px; object-fit: contain; }
         @media (min-width: 881px) {
             body.home-dashboard-page { display: flex; flex-direction: column; height: 100dvh; min-height: 0; padding-top: 0; overflow: hidden; }
             body.home-dashboard-page > .workspace-masthead { flex: 0 0 auto; min-height: 96px; height: auto; margin: 0; }
@@ -1491,10 +1495,16 @@
     <main class="home-workspace">
     <section class="home-card home-review-unframed" aria-labelledby="home-review-title">
         <div class="review-heading">
-            <div>
+            <div class="review-heading-copy">
                 <h2 id="home-review-title"><span>What's Happening Today</span></h2>
             </div>
-            <button type="button" class="btn btn-sm btn-outline-secondary" id="home-refresh" title="Refresh review queue">&#8635; Refresh</button>
+            <div class="review-heading-actions">
+                <div class="handsfree-attribution">
+                    <img src="{{ url_for('static', filename='handsfree_logo.svg') }}" alt="" aria-hidden="true">
+                    <span>Powered by Handsfree</span>
+                </div>
+                <button type="button" class="btn btn-sm btn-outline-secondary" id="home-refresh" title="Refresh review queue">&#8635; Refresh</button>
+            </div>
         </div>
         <div class="review-toolbar">
             <span id="home-login-badge" class="review-pill" role="status">IPS: signing in...</span>

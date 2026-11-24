@@ -440,6 +440,8 @@ drips_blame_triage:
     - "FW is dead"
     - "Connection lost during D3"
     - "Got Set Power State cmd from OS"
+    - "Got Command (M1 Message) TASK_SCAN"
+    - "TASK_SCAN - ScanTrigger"
     - "prvMpmSendDevicePowerCommand"
     - "Device Power Command"
     - "Flags = 0x"

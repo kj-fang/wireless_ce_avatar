@@ -502,6 +502,11 @@ def reset_case(case_nbr: str):
         pass
     res = _store().reset_case(canonical, purge_downloads=bool(body.get("purge_downloads")),
                               case_dir=case_dir)
+    # The archived drafts are gone from every reviewer's queue: usage
+    # tracking must stop counting them as waiting for review.
+    orchestrator._track_removed(
+        [{"draft_id": draft_id, "case_nbr": canonical} for draft_id in res.get("archived") or []],
+        reason="case_reset")
     res["bsod_forgotten"] = bsod.forget_case(canonical)
     res["ok"] = True
     return jsonify(res)

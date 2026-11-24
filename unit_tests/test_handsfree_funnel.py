@@ -2,7 +2,9 @@
 ``services.gather_service``: the events written before a post
 (``record_handsfree_event`` / ``record_handsfree_listed``), the rollup that
 turns them into the overview (``handsfree_funnel``), and the route the pages
-report a view through (``POST /handsfree/queue/<draft_id>/viewed``).
+report a view through (``POST /handsfree/queue/<draft_id>/viewed``), and the
+orchestrator's calls into both (``TestHandsfreeTrackingCallers``, on a queue
+in a temp folder).
 
 Nothing here touches the shared Gather folder: the writer tests pin the root
 to a temp directory, and ``BaseTestCase`` keeps collection switched off for
@@ -15,10 +17,16 @@ import threading
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from blueprints.handsfree.handsfree_routes import handsfree_bp
 from services import gather_service as gather
+from services.handsfree import orchestrator as orch
+from services.handsfree.composer import (AI_MARKER, ECHO_SECTION_END, ECHO_SECTION_START,
+                                         compose_html)
+from services.handsfree.ips_client import IpsClient, PostResult, PostUnsupported
+from services.handsfree.queue import HandsfreeStore
 from unit_tests.base_test import BaseTestCase
 
 ROUTES = "blueprints.handsfree.handsfree_routes"
@@ -99,6 +107,63 @@ class TestHandsfreeEventWriters(unittest.TestCase):
         self.assertEqual(recs[0]["dwell_seconds"], 75)
         self.assertEqual(recs[0]["draft_status"], "pending_review")
         self.assertEqual(recs[0]["via"], "home_dashboard")
+
+    def test_a_closing_report_written_first_does_not_move_the_view_time(self):
+        """The opening and the closing report of a view have a writer thread
+        each; whichever writes first, the view happened when it was opened."""
+        opened = {"event_id": "d-1__viewed__v-9", "kind": "viewed", "draft_id": "d-1",
+                  "case_nbr": "01090001", "via": "home_dashboard", "handsfree_role": "client",
+                  "at": "2026-11-23T10:00:00+08:00"}
+        closed = {**opened, "at": "2026-11-23T10:05:00+08:00", "dwell_seconds": 300}
+
+        gather._do_record_handsfree_event(dict(closed))          # the closing report wins the race
+        gather._do_record_handsfree_event(dict(opened))
+
+        recs = self._records()
+        self.assertEqual(len(recs), 1)
+        self.assertEqual(recs[0]["at"], "2026-11-23T10:00:00+08:00")
+        self.assertEqual(recs[0]["dwell_seconds"], 300)
+
+        gather._do_record_handsfree_event(dict(closed))          # and in the usual order it stays put
+        self.assertEqual(self._records()[0]["at"], "2026-11-23T10:00:00+08:00")
+
+    def test_removed_is_one_record_per_draft_with_its_reason(self):
+        for _ in range(2):
+            gather.record_handsfree_event("removed", draft_id="d-1", case_nbr="01090001",
+                                          details={"reason": "case_closed"})
+            _settle()
+        recs = self._records()
+        self.assertEqual([(r["event_id"], r["kind"], r["reason"]) for r in recs],
+                         [("d-1__removed", "removed", "case_closed")])
+
+    def test_a_post_record_leaves_the_text_work_to_the_writer_thread(self):
+        """record_handsfree_post is called while an approval holds the post
+        lock: the line diff must not run on the caller's thread."""
+        diffed_on = []
+        real = gather.summarise_edit
+
+        def _spy(suggested, posted):
+            diffed_on.append(threading.current_thread().name)
+            return real(suggested, posted)
+
+        suggested = "Hello\nPlease collect logs.\nINTERNAL: firmware bug\n"
+        with patch.object(gather, "summarise_edit", side_effect=_spy):
+            gather.record_handsfree_post(
+                draft_id="d-1", case_nbr="01090001", via="beacon_page", ok=True,
+                suggested_plain=suggested, suggested_source="enqueue",
+                posted_plain="Hello\nPlease collect logs.\n", echo_stripped=True,
+                # the suggestion without the part the system took out, made on the writer thread
+                edit_baseline_plain=lambda text: text.replace("INTERNAL: firmware bug\n", ""))
+            _settle()
+
+        self.assertEqual(diffed_on, ["gather-handsfree-post"])
+        posts = [json.loads(p.read_text(encoding="utf-8"))
+                 for p in (gather._mode_root(self.tmp) / "handsfree_posts").rglob("*.json")]
+        self.assertEqual(len(posts), 1)
+        self.assertEqual(posts[0]["suggested"]["text"], suggested)
+        self.assertEqual(posts[0]["edit"]["baseline"], "suggested_without_echo")
+        self.assertIs(posts[0]["edit"]["changed"], False)
+        self.assertIs(posts[0]["edit"]["echo_stripped"], True)
 
     def test_repeatable_kinds_get_a_record_each_and_bad_input_is_ignored(self):
         gather.record_handsfree_event("edit_saved", draft_id="d-1", via="beacon_page")
@@ -261,6 +326,46 @@ class TestHandsfreeFunnelMath(unittest.TestCase):
         self.assertEqual(f["by_week"], {"2026-W45": {"queued": 4, "viewed": 3, "posted": 2, "reviewers": 2}})
         self.assertEqual(f["untracked_drafts"], 1)                     # Z
 
+    def test_a_view_after_the_post_did_not_lead_to_it(self):
+        """A posted draft can still be opened ("show posted"): that view counts
+        as a view, not as a view that turned into a post."""
+        events = [self._processed("A", "01000001"),
+                  self._viewed("A", "ann", "beacon_page", hours=5),      # looked at afterwards
+                  self._processed("B", "01000002"),
+                  self._viewed("B", "ann", "beacon_page", hours=1)]
+        posts = [self._post("A", "home_dashboard", hours=2), self._post("B", "beacon_page", hours=1)]
+
+        f = gather.handsfree_funnel(posts, events, now=(self.T0 + timedelta(days=1)).timestamp())
+
+        self.assertEqual((f["viewed"], f["posted"], f["posted_after_view"]), (2, 2, 1))
+        self.assertEqual(f["rates"]["post_rate_of_viewed"], 0.5)
+        self.assertEqual(f["turnaround"]["first_view_to_post"]["count"], 1)     # B, opened and posted at 1h
+
+    def test_a_removed_draft_is_neither_pending_nor_backlog(self):
+        """Cleanup and a case reset take drafts out of every queue. They stay
+        in what the server produced and what reviewers were shown, but nobody
+        can open them any more."""
+        def removed(draft_id, reason, hours):
+            return {"record_type": "handsfree_event", "kind": "removed", "draft_id": draft_id,
+                    "reason": reason, "at": self._at(hours=hours)}
+        events = [
+            self._processed("A", "01000001"), removed("A", "case_closed", 30),          # never opened
+            self._processed("B", "01000002"), self._viewed("B", "ann", "beacon_page", hours=1),
+            removed("B", "case_reset", 2),                                               # opened, then reset
+            self._processed("C", "01000003"), self._viewed("C", "ann", "beacon_page", hours=1),
+            removed("C", "retention", 800),                                              # posted first: posted
+            self._processed("D", "01000004"),                                            # still waiting
+            {"record_type": "handsfree_listed_day", "drafts": {"A": {"at": self._at(hours=1)}}},
+        ]
+        posts = [self._post("C", "beacon_page", hours=2)]
+
+        f = gather.handsfree_funnel(posts, events, now=(self.T0 + timedelta(days=40)).timestamp())
+
+        self.assertEqual((f["drafts_for_review"], f["reached"], f["viewed"]), (4, 3, 2))
+        self.assertEqual((f["posted"], f["rejected"], f["removed"], f["pending"]), (1, 0, 2, 1))
+        self.assertEqual(f["removed_by_reason"], {"case_closed": 1, "case_reset": 1})
+        self.assertEqual([row["draft_id"] for row in f["unseen_backlog"]["oldest"]], ["D"])
+
     def test_a_fresh_unopened_draft_is_not_backlog_yet(self):
         posts, events = self._fixture()
         f = gather.handsfree_funnel(posts, events, now=(self.T0 + timedelta(days=1)).timestamp())
@@ -312,6 +417,19 @@ class TestHandsfreeViewRoute(BaseTestCase):
         self.assertEqual(resp.status_code, 404)
         mock_orch._track_event.assert_not_called()
 
+    def test_a_case_reset_reports_the_drafts_it_archived(self, mock_store, _name, mock_orch):
+        mock_store.return_value.reset_case.return_value = {
+            "case_nbr": "01090001", "archived": ["01090001__a", "01090001__skipped"],
+            "kept_posted": ["01090001__p"], "archive_dir": "x", "ledger_kept": {}, "purged": []}
+
+        with patch("services.handsfree.bsod.forget_case", return_value=0):
+            resp = self.client.post("/handsfree/case/01090001/reset", json={})
+
+        self.assertIs(resp.get_json()["ok"], True)
+        mock_orch._track_removed.assert_called_once_with(
+            [{"draft_id": "01090001__a", "case_nbr": "01090001"},
+             {"draft_id": "01090001__skipped", "case_nbr": "01090001"}], reason="case_reset")
+
     def test_listing_the_own_queue_reports_open_drafts_only(self, mock_store, _name, mock_orch):
         items = [{"draft_id": "d-1", "status": "pending_review"},
                  {"draft_id": "d-2", "status": "posted"},
@@ -324,6 +442,191 @@ class TestHandsfreeViewRoute(BaseTestCase):
             self.client.get("/handsfree/queue?everyone=1")          # browsing others' drafts is not an impression
 
         mock_orch._track_listed.assert_called_once_with([items[0]], via="home_dashboard")
+
+
+class _FakeIps:
+    """Stands in for IPS: `outcome` is what the next REST post does."""
+    FIELD_RICH_BODY = IpsClient.FIELD_RICH_BODY
+    outcome = "ok"
+    closed_cases: set = set()
+
+    def post_comment(self, case_id, rich_body, **kw):
+        if _FakeIps.outcome == "unsupported":
+            raise PostUnsupported("no verified field map for a public reply")
+        if _FakeIps.outcome == "http500":
+            return PostResult(ok=False, backend="rest", error="HTTP 500: boom", detail={"status": 500})
+        return PostResult(ok=True, backend="rest", comment_id="a0X0001", detail={})
+
+    def get_case_comments(self, case_id):
+        return []
+
+    def comment_author(self, comment_id):
+        return {}
+
+    def _fill_case_states(self, refs):
+        for ref in refs:
+            ref.closed = ref.case_nbr in _FakeIps.closed_cases
+
+
+class TestHandsfreeTrackingCallers(unittest.TestCase):
+    """What the orchestrator reports, and when. The queue is a real store in a
+    temp folder; IPS is a fake; nothing reaches the Gather share (collection
+    is off unless a test stands in for the writer)."""
+
+    BODY = AI_MARKER + "\n\nHello,\n\nPlease collect WRT logs.\n\nThank you\n"
+    ECHO_BODY = (AI_MARKER + "\n\nAnalysis: the AP rejected the association.\n\n"
+                 + ECHO_SECTION_START + "\nINTERNAL: firmware bug HSD-123\n" + ECHO_SECTION_END + "\n")
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="handsfree_callers_"))
+        self.store = HandsfreeStore(self.tmp / "handsfree")
+        self.store.save_config({"dry_run": False, "post_backend": "auto"})
+        _FakeIps.outcome, _FakeIps.closed_cases = "ok", set()
+        self._patches = [
+            patch.object(orch, "_store", return_value=self.store),
+            patch.object(orch, "IpsClient", _FakeIps),
+            patch.object(orch, "_signed_in_identity",
+                         return_value={"user_id": "005A", "name": "Ann Reviewer", "email": "a@x"}),
+            patch.object(gather, "_collection_enabled", return_value=False),
+        ]
+        for p in self._patches:
+            p.start()
+
+    def tearDown(self):
+        for p in reversed(self._patches):
+            p.stop()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _draft(self, case_nbr, body=None, **extra):
+        body = self.BODY if body is None else body
+        return self.store.enqueue(case_nbr=case_nbr, case_id="500" + case_nbr, subject="s",
+                                  draft_plain=body, draft_html=compose_html(body), confidence=60,
+                                  mode="full", analysis={"first_response_done": True}, **extra)
+
+    # ------------------------------------------------------------ failed posts
+    def test_a_public_post_refused_or_failed_by_rest_is_recorded_as_a_failed_post(self):
+        for nbr, outcome in (("01100010", "unsupported"), ("01100011", "http500")):
+            with self.subTest(outcome=outcome):
+                _FakeIps.outcome = outcome
+                draft = self._draft(nbr)
+                with patch.object(orch, "_track_post") as track:
+                    res = orch.approve_and_post(draft["draft_id"], visibility="external")
+
+                self.assertIs(res["ok"], False)
+                track.assert_called_once()
+                self.assertIs(track.call_args.kwargs["ok"], False)
+                self.assertEqual(track.call_args.kwargs["rec"]["status"], "post_failed")
+                self.assertEqual(track.call_args.kwargs["rec"]["post_result"]["backend"], "rest")
+
+    # --------------------------------------------------------------- _track_post
+    def test_track_post_uses_the_draft_it_is_given_and_does_nothing_when_collection_is_off(self):
+        store = MagicMock()
+        rec = {"draft_id": "d-1", "case_nbr": "01090001", "draft_plain": "text",
+               "post_result": {"ok": True, "backend": "rest"}}
+
+        with patch.object(gather, "record_handsfree_post") as record:
+            orch._track_post(store, "d-1", ok=True)                      # collection is off
+            record.assert_not_called()
+            store.get.assert_not_called()
+
+            with patch.object(gather, "_collection_enabled", return_value=True):
+                orch._track_post(store, "d-1", ok=True, rec=rec)
+            store.get.assert_not_called()                                # no second read of the share
+            self.assertEqual(record.call_args.kwargs["posted_plain"], "text")
+            self.assertIs(record.call_args.kwargs["echo_stripped"], False)
+            self.assertIsNone(record.call_args.kwargs["edit_baseline_plain"])
+
+    def test_a_retry_after_a_failed_public_post_still_knows_the_system_removed_the_echo_section(self):
+        draft = self._draft("01100020", body=self.ECHO_BODY)
+        with patch.object(gather, "_collection_enabled", return_value=True), \
+                patch.object(gather, "record_handsfree_post") as record:
+            _FakeIps.outcome = "http500"
+            first = orch.approve_and_post(draft["draft_id"], visibility="external")
+            _FakeIps.outcome = "ok"
+            second = orch.approve_and_post(draft["draft_id"], visibility="external")   # no further edit
+
+        self.assertEqual((first["ok"], second["ok"]), (False, True))
+        self.assertIs(self.store.get(draft["draft_id"])["echo_stripped_by_system"], True)
+        failed, posted = (call.kwargs for call in record.call_args_list)
+        self.assertEqual((failed["ok"], posted["ok"]), (False, True))
+        for kwargs in (failed, posted):
+            self.assertIs(kwargs["echo_stripped"], True)
+            self.assertIn("HSD-123", kwargs["suggested_plain"])
+            self.assertNotIn("HSD-123", kwargs["posted_plain"])
+        content = gather._post_content(**{k: posted[k] for k in (
+            "suggested_plain", "suggested_source", "posted_plain", "echo_stripped", "edit_baseline_plain")})
+        self.assertEqual(content["edit"]["baseline"], "suggested_without_echo")
+        self.assertIs(content["edit"]["changed"], False)               # not the reviewer's edit
+
+    def test_text_that_goes_out_with_the_echo_section_was_not_stripped(self):
+        """After a failed public post the reviewer puts the section back and
+        posts inside Intel: the section went out, so nothing was removed."""
+        rec = {"draft_id": "d-1", "case_nbr": "01090001", "draft_plain": self.ECHO_BODY,
+               "suggested_plain": self.ECHO_BODY, "echo_stripped_by_system": True,
+               "post_result": {"ok": True, "backend": "rest"}}
+        with patch.object(gather, "_collection_enabled", return_value=True), \
+                patch.object(gather, "record_handsfree_post") as record:
+            orch._track_post(MagicMock(), "d-1", ok=True, rec=rec)
+
+        self.assertIs(record.call_args.kwargs["echo_stripped"], False)
+        self.assertIsNone(record.call_args.kwargs["edit_baseline_plain"])
+
+    # ------------------------------------------------------------ skipped cases
+    def test_a_case_skipped_during_a_trial_run_is_reported_as_trial(self):
+        analysis = SimpleNamespace(mode="unsupported", error="BT case", case_id="500X", subject="s",
+                                   to_dict=lambda: {})
+        runner = MagicMock()
+        runner.return_value.analyze_case.return_value = analysis
+        for label, trial_arg, config_trial, expected in (
+                ("the run's captured flag", True, False, True),
+                ("a manual run reads the setting", None, True, True),
+                ("a normal run", None, False, False)):
+            with self.subTest(label):
+                self.store.save_config({"trial_mode": config_trial})
+                with patch.object(orch, "HandsfreeRunner", runner), \
+                        patch.object(orch, "_case_owner", return_value=""), \
+                        patch.object(orch, "_track_event") as track:
+                    self.assertIsNone(orch._analyze_and_enqueue(self.store, "01100030", trial=trial_arg))
+
+                track.assert_called_once()
+                self.assertEqual(track.call_args.args, ("processed",))
+                self.assertEqual(track.call_args.kwargs["outcome"], "skipped")
+                self.assertIs(track.call_args.kwargs["trial"], expected)
+
+    # ----------------------------------------------------------------- removals
+    def test_cleanup_reports_the_open_drafts_it_removes_with_the_reason(self):
+        closed_open = self._draft("01100040")
+        closed_posted = self._draft("01100040")
+        self.store.update(closed_posted["draft_id"], status="posted")
+        old = self._draft("01100041")
+        path = self.store.queue_dir / f"{old['draft_id']}.json"
+        aged = json.loads(path.read_text(encoding="utf-8"))
+        aged["created_at"] = (datetime.now().astimezone() - timedelta(days=60)).isoformat(timespec="seconds")
+        path.write_text(json.dumps(aged), encoding="utf-8")
+        fresh = self._draft("01100042")
+        _FakeIps.closed_cases = {"01100040"}
+
+        with patch.object(orch, "_track_event") as track:
+            res = orch.cleanup_queue(self.store)
+
+        self.assertEqual(res["drafts_removed"], 3)
+        self.assertIsNotNone(self.store.get(fresh["draft_id"]))
+        reported = {call.kwargs["draft_id"]: (call.args[0], call.kwargs["reason"])
+                    for call in track.call_args_list}
+        self.assertEqual(reported, {closed_open["draft_id"]: ("removed", "case_closed"),
+                                    old["draft_id"]: ("removed", "retention")})
+
+    def test_track_removed_leaves_out_rows_that_were_never_an_open_draft(self):
+        rows = [{"draft_id": "01100050__a", "case_nbr": "01100050"},
+                {"draft_id": "01100050__skipped", "case_nbr": "01100050"},
+                {"draft_id": "01100050__r", "case_nbr": "01100050", "status": "rejected"},
+                {"case_nbr": "01100050"}]
+        with patch.object(orch, "_track_event") as track:
+            orch._track_removed(rows, reason="case_reset")
+
+        track.assert_called_once()
+        self.assertEqual(track.call_args.kwargs["draft_id"], "01100050__a")
+        self.assertEqual(track.call_args.kwargs["reason"], "case_reset")
 
 
 if __name__ == "__main__":

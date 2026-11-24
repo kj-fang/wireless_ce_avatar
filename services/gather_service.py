@@ -2106,10 +2106,32 @@ def _post_text(text: Any) -> dict:
             "lines": len(_post_lines(s)), "truncated": len(s) > _MAX_POST_CHARS}
 
 
-def _do_record_handsfree_post(event: dict) -> None:
-    """Write one Beacon post event; idempotent per post_event_id."""
+def _post_content(*, suggested_plain: Any, suggested_source: str, posted_plain: Any,
+                  echo_stripped: bool, edit_baseline_plain: Any) -> dict:
+    """The text part of a post record: what Beacon suggested, what went out,
+    and the reviewer's edit between the two. Runs on the writer thread - the
+    line diff of two long texts is the one costly step of a post record, and
+    the approval that reports it is holding the post lock."""
+    baseline = (edit_baseline_plain(suggested_plain) if callable(edit_baseline_plain)
+                else edit_baseline_plain)
+    return {
+        "suggested": {**_post_text(suggested_plain),
+                      "source": str(suggested_source or "")[:20]},
+        "posted": _post_text(posted_plain),
+        "edit": {**summarise_edit(suggested_plain if baseline is None else baseline,
+                                  posted_plain),
+                 "baseline": "suggested" if baseline is None else "suggested_without_echo",
+                 "echo_stripped": bool(echo_stripped)},
+    }
+
+
+def _do_record_handsfree_post(event: dict, texts: Optional[dict] = None) -> None:
+    """Write one Beacon post event; idempotent per post_event_id. `texts` are
+    the arguments of _post_content, turned into the record's text part here."""
     user = _current_user()
     try:
+        if texts:
+            event = {**event, **_post_content(**texts)}
         path = _handsfree_post_path(event["post_event_id"], user)
         record = {
             "schema_version": GATHER_SCHEMA_VERSION,
@@ -2167,11 +2189,14 @@ def record_handsfree_post(
     `edit` describes what the REVIEWER changed. When the system itself took
     something out before posting (the internal Echo section, `echo_stripped`),
     the caller passes `edit_baseline_plain` - the suggestion without that
-    part - and the edit is measured against it; `edit.baseline` says which
-    was used. The full suggestion is stored either way.
+    part, or a function that makes it from the suggestion - and the edit is
+    measured against it; `edit.baseline` says which was used. The full
+    suggestion is stored either way.
 
     Like every Gather write: independent of the caller, in a background
     thread, never raises, and silent when collection is off for this build.
+    The texts are only handed over here; clipping and comparing them is the
+    writer thread's work (_post_content), so the caller is not held up.
     Returns the event id ("" when nothing was recorded)."""
     if not draft_id or not _collection_enabled():
         return ""
@@ -2197,16 +2222,11 @@ def record_handsfree_post(
             "visibility": str(visibility or "")[:20],
             "error": str(error or "")[:500],
             "comment_id": str(comment_id or "")[:64],
-            "suggested": {**_post_text(suggested_plain),
-                          "source": str(suggested_source or "")[:20]},
-            "posted": _post_text(posted_plain),
-            "edit": {**summarise_edit(suggested_plain if edit_baseline_plain is None
-                                      else edit_baseline_plain, posted_plain),
-                     "baseline": ("suggested" if edit_baseline_plain is None
-                                  else "suggested_without_echo"),
-                     "echo_stripped": bool(echo_stripped)},
         }
-        threading.Thread(target=_do_record_handsfree_post, args=(event,), daemon=True,
+        texts = {"suggested_plain": suggested_plain, "suggested_source": suggested_source,
+                 "posted_plain": posted_plain, "echo_stripped": echo_stripped,
+                 "edit_baseline_plain": edit_baseline_plain}
+        threading.Thread(target=_do_record_handsfree_post, args=(event, texts), daemon=True,
                          name="gather-handsfree-post").start()
         return event_id
     except Exception as e:
@@ -2226,8 +2246,8 @@ def record_handsfree_post(
 # A kind that happens once per draft is written to one file (a repeat is the
 # same event); the others get a file per occurrence.
 HANDSFREE_EVENT_KINDS = ("processed", "viewed", "edit_saved", "rejected",
-                         "handoff", "log_folder")
-_HANDSFREE_ONCE_KINDS = ("processed", "rejected")
+                         "handoff", "log_folder", "removed")
+_HANDSFREE_ONCE_KINDS = ("processed", "rejected", "removed")
 
 # Where a reviewer saw a draft. A view has no "auto_post": nobody looked.
 HANDSFREE_VIEW_VIAS = ("beacon_page", "home_dashboard", "api")
@@ -2261,8 +2281,10 @@ def _event_details(details: Optional[dict]) -> dict:
 
 def _do_record_handsfree_event(event: dict) -> None:
     """Write one funnel event. A second write of the same event id keeps the
-    first one's time and adds what the later call knows (a view is reported
-    when the draft is opened and again, with its duration, when it closes)."""
+    EARLIER of the two times and adds what the later call knows (a view is
+    reported when the draft is opened and again, with its duration, when it
+    closes). Each report has its own writer thread, so the closing one can
+    get here first: the time kept is the earlier one, not the first written."""
     user = _current_user()
     try:
         path = _handsfree_event_path(event["event_id"], user)
@@ -2286,9 +2308,11 @@ def _do_record_handsfree_event(event: dict) -> None:
                 if isinstance(earlier, dict) and earlier:
                     merged = {**earlier,
                               **{k: v for k, v in record.items() if v not in ("", None)}}
-                    for keep in ("at", "date"):
-                        if earlier.get(keep):
-                            merged[keep] = earlier[keep]
+                    was, now = _iso_ts(earlier.get("at")), _iso_ts(record.get("at"))
+                    if was is not None and (now is None or was <= now):
+                        for keep in ("at", "date"):
+                            if earlier.get(keep):
+                                merged[keep] = earlier[keep]
                     try:
                         merged["dwell_seconds"] = max(int(earlier["dwell_seconds"]),
                                                       int(record["dwell_seconds"]))
@@ -3107,7 +3131,12 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
     (auto_post) never needed a reviewer and is reported on its own line
     rather than as an unviewed draft; a trial draft can never be posted and
     is left out. Drafts that were viewed or posted but were queued before
-    this tracking existed are counted as `untracked_drafts` only."""
+    this tracking existed are counted as `untracked_drafts` only.
+
+    A draft that left the queue with no decision (its case closed, it passed
+    the retention age, or the case was reset: a `removed` event) keeps its
+    place in the counts up to that point, but is `removed`, not `pending`,
+    and is not backlog: nobody can open it any more."""
     now_ts = time.time() if now is None else float(now)
     drafts: dict[str, dict] = {}
 
@@ -3116,6 +3145,7 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
             "processed": None, "listed_at": None, "viewed_at": None, "views": 0,
             "viewers": set(), "view_vias": set(), "dwell": [], "posted_at": None,
             "post_via": "", "edited": False, "rejected_at": None,
+            "removed_at": None, "removed_reason": "",
             "edit_saved": 0, "handoff": 0, "log_folder": 0,
         })
 
@@ -3149,6 +3179,9 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
                 d["dwell"].append(rec["dwell_seconds"])
         elif kind == "rejected":
             d["rejected_at"] = earliest(d["rejected_at"], at)
+        elif kind == "removed":
+            d["removed_at"] = earliest(d["removed_at"], at) or 0.0
+            d["removed_reason"] = str(rec.get("reason") or "unknown")
         elif kind in ("edit_saved", "handoff", "log_folder"):
             d[kind] += 1
 
@@ -3168,12 +3201,13 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
     by_source: Counter = Counter()
     viewed_by_via: Counter = Counter()
     posted_by_via: Counter = Counter()
+    removed_by_reason: Counter = Counter()
     weeks: dict[str, dict] = defaultdict(
         lambda: {"queued": 0, "viewed": 0, "posted": 0, "reviewers": set()})
     cases: set = set()
     viewers: set = set()
     trial = untracked = queued = auto_posted = 0
-    reached = viewed = posted = posted_after_view = edited = rejected = 0
+    reached = viewed = posted = posted_after_view = edited = rejected = removed = 0
     views_total = edits_saved = handoffs = log_folders = 0
     dwell: list = []
     t_processing: list = []
@@ -3236,12 +3270,18 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
             edited += 1 if d["edited"] else 0
             if created is not None and d["posted_at"]:
                 t_to_post.append(d["posted_at"] - created)
-            if is_viewed:
+            # A posted draft can still be opened ("show posted"): only a view
+            # that came before the post led to it. A post with no usable time
+            # cannot be placed, and is given the benefit of the doubt.
+            if is_viewed and (not d["posted_at"] or d["viewed_at"] <= d["posted_at"]):
                 posted_after_view += 1
                 if d["posted_at"]:
                     t_view_to_post.append(d["posted_at"] - d["viewed_at"])
         elif d["rejected_at"] is not None:
             rejected += 1
+        elif d["removed_at"] is not None:
+            removed += 1
+            removed_by_reason[d["removed_reason"]] += 1
         elif not is_viewed and created is not None:
             age_days = (now_ts - created) / 86400
             if age_days >= unseen_after_days:
@@ -3276,7 +3316,10 @@ def handsfree_funnel(posts: Any, events: Any, *, now: Optional[float] = None,
         "posted_as_suggested": posted - edited,
         "posted_after_edit": edited,
         "rejected": rejected,
-        "pending": for_review - posted - rejected,
+        # left the queue undecided: case closed, retention age, or case reset
+        "removed": removed,
+        "removed_by_reason": dict(removed_by_reason),
+        "pending": for_review - posted - rejected - removed,
         "rates": {
             "reach_rate": _rate(reached, for_review),
             "view_rate": _rate(viewed, for_review),

@@ -141,6 +141,27 @@ def _track_listed(rows: list, *, via: str = "") -> None:
               f"{type(e).__name__}: {e}")
 
 
+def _track_removed(rows: list, *, reason: str) -> None:
+    """Usage record of drafts that left the queue without a reviewer's
+    decision: cleaned up because the case closed ("case_closed") or the
+    draft passed the retention age ("retention"), or archived by a case
+    reset ("case_reset"). Without it such a draft would count as pending -
+    and, never opened, as unseen backlog - for good, though nobody can open
+    it any more. A posted or rejected draft already has its outcome and a
+    "skipped" row was never a draft; those are left out. Never raises."""
+    for row in rows or []:
+        try:
+            draft_id = str(row.get("draft_id") or "")
+            if (not draft_id or draft_id.endswith("__skipped")
+                    or row.get("status") in ("posted", "rejected", "skipped")):
+                continue
+            _track_event("removed", draft_id=draft_id, case_nbr=str(row.get("case_nbr") or ""),
+                         reason=reason, draft_status=str(row.get("status") or ""),
+                         mode=str(row.get("mode") or ""))
+        except Exception as e:
+            print(f"[handsfree] removal not recorded for usage tracking: {type(e).__name__}: {e}")
+
+
 def _track_processed(rec: dict, *, outcome: str, primary: bool, started: float) -> None:
     """One `processed` event per queue row the server wrote: the denominator
     of the review funnel. `trigger` is the run that produced it (the run
@@ -188,6 +209,15 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         owner_name = _case_owner(case_id or analysis.case_id)
         if owner_name:
             _update_case_details(case_nbr, {"owner_name": owner_name})
+
+    # Trial mode (Settings): tuning on historical / closed cases — every
+    # draft is flagged and can never be posted. Resolved before the first
+    # way out of this function, so a case skipped during a tuning run is
+    # reported as part of that run too.
+    if trial is None:
+        trial = bool(store.load_config().get("trial_mode"))
+    trial = bool(trial)
+
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
         store.record_skipped(case_nbr=case_nbr, case_id=case_id or analysis.case_id,
@@ -197,7 +227,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
         _update_case_details(case_nbr, {"skipped": analysis.error})
         _track_processed({"draft_id": f"{case_nbr}__skipped", "case_nbr": case_nbr,
-                          "mode": "unsupported", "source": source, "owner_name": owner_name},
+                          "mode": "unsupported", "source": source, "owner_name": owner_name,
+                          "trial": trial},
                          outcome="skipped", primary=True, started=started)
         return None
 
@@ -238,12 +269,6 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     # The customer-facing overview checklist goes out once per case: later
     # rounds (customer replied, new logs) get targeted asks only.
     analysis.first_response_done = store.first_response_posted(case_nbr)
-
-    # Trial mode (Settings): tuning on historical / closed cases — every
-    # draft is flagged and can never be posted.
-    if trial is None:
-        trial = bool(store.load_config().get("trial_mode"))
-    trial = bool(trial)
 
     shared_log_path = _share_decoded_log(store, case_nbr, analysis.log_path)
 
@@ -1052,12 +1077,12 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
                                     "subject": saved.get("subject", ""),
                                     "reply_all": reply_all,
                                     "in_reply_to": email.get("subject", "")})
-        store.update(draft_id, status="posted", post_result=result.to_dict())
-        _track_post(store, draft_id, ok=True, posted_plain=sent_plain)
+        done = store.update(draft_id, status="posted", post_result=result.to_dict())
+        _track_post(store, draft_id, ok=True, posted_plain=sent_plain, rec=done)
         return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
-    store.update(draft_id, status="post_failed",
-                 post_result={"ok": False, "backend": "outlook", "error": err})
-    _track_post(store, draft_id, ok=False, posted_plain=sent_plain)
+    failed = store.update(draft_id, status="post_failed",
+                          post_result={"ok": False, "backend": "outlook", "error": err})
+    _track_post(store, draft_id, ok=False, posted_plain=sent_plain, rec=failed)
     return {"ok": False, "error": err, "draft": store.get(draft_id)}
 # retention
 # ---------------------------------------------------------------------------
@@ -1093,9 +1118,11 @@ def cleanup_queue(store: HandsfreeStore) -> dict:
     removed, kept_cases = 0, set()
     for d in drafts:
         created = _parse_iso(d.get("created_at", ""))
-        if str(d.get("case_nbr")) in closed or (created and created < cutoff):
+        case_closed = str(d.get("case_nbr")) in closed
+        if case_closed or (created and created < cutoff):
             store.delete_draft(str(d.get("draft_id") or ""))
             removed += 1
+            _track_removed([d], reason="case_closed" if case_closed else "retention")
         else:
             kept_cases.add(str(d.get("case_nbr")))
 
@@ -1188,31 +1215,46 @@ POST_VIAS = ("beacon_page", "home_dashboard", "auto_post", "api")
 
 
 def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
-                posted_plain: Optional[str] = None) -> None:
+                posted_plain: Optional[str] = None,
+                rec: Optional[dict] = None) -> None:
     """Usage record of an approval that reached a posting backend: who
     posted, from which page, with what outcome, and the text that went out
     next to the text Beacon suggested (gather_service.record_handsfree_post).
-    Reads the draft as it stands after the post. Never raises and never
-    delays the answer - the write runs on the Gather service's own thread,
-    and a build with collection switched off records nothing."""
+
+    This runs while the approval holds _post_lock, so it does as little as
+    it can here: `rec` is the draft as the posting path just wrote it (what
+    store.update returned), so the shared queue is not read again; only the
+    approval's own fields are picked up on this thread, and working on the
+    texts is left to the Gather service's writer thread. A build with
+    collection switched off does nothing at all. Never raises."""
     try:
         from services import gather_service
         from . import scheduler
-        rec = store.get(draft_id) or {}
+        if not gather_service._collection_enabled():
+            return
+        if rec is None:
+            rec = store.get(draft_id) or {}
         result = rec.get("post_result") or {}
         analysis = rec.get("analysis") or {}
         backend = str(result.get("backend") or "")
         current = rec.get("draft_plain") or ""
+        sent = current if posted_plain is None else posted_plain
         suggested = rec["suggested_plain"] if "suggested_plain" in rec else current
-        echo_stripped = bool(getattr(_approval, "echo_stripped", False))
         # The Echo section is dropped by the SYSTEM (public IPS posts, every
         # Outlook reply), never by the reviewer: the reviewer's edit is
         # measured against the suggestion without it, or every such post
-        # would read as "the reviewer cut 30 lines".
+        # would read as "the reviewer cut 30 lines". A failed public post
+        # leaves the draft saved without the section, so the retry finds
+        # nothing to strip: the draft itself remembers that the system did
+        # it (echo_stripped_by_system). Text that goes out WITH the section
+        # was not stripped, whatever happened on an earlier attempt.
+        echo_stripped = (bool(getattr(_approval, "echo_stripped", False)
+                              or rec.get("echo_stripped_by_system"))
+                         and ECHO_SECTION_START not in sent)
         edit_baseline = None
         if echo_stripped:
             from .composer import strip_echo_section
-            edit_baseline = strip_echo_section(suggested)
+            edit_baseline = strip_echo_section       # applied by the writer thread
         who = result.get("posted_by") if isinstance(result.get("posted_by"), dict) else None
         gather_service.record_handsfree_post(
             draft_id=draft_id,
@@ -1234,7 +1276,7 @@ def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
             # separate copy: what it holds IS the suggestion.
             suggested_plain=suggested,
             suggested_source=str(rec.get("suggested_source") or "unchanged"),
-            posted_plain=current if posted_plain is None else posted_plain,
+            posted_plain=sent,
             echo_stripped=echo_stripped,
             edit_baseline_plain=edit_baseline,
         )
@@ -1418,8 +1460,12 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     if is_public_reply and ECHO_SECTION_START in (rec.get("draft_plain") or ""):
         from .composer import compose_html, strip_echo_section
         plain = strip_echo_section(rec.get("draft_plain") or "")
+        # echo_stripped_by_system: should this post fail, the retry finds a
+        # draft that no longer has the section, and usage tracking must not
+        # take the system's removal for the reviewer's edit (_track_post).
         rec = store.update(draft_id, draft_plain=plain,
-                           draft_html=compose_html(plain))
+                           draft_html=compose_html(plain),
+                           echo_stripped_by_system=True)
         _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section stripped from the public "
                    f"post of {draft_id}")
@@ -1496,16 +1542,17 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         except PostUnsupported as e:
             print(f"[handsfree] REST posting unsupported: {e}")
             if backend == "rest" or is_public_reply:
-                store.update(draft_id, status="post_failed",
-                             post_result={"ok": False, "backend": "rest", "error": str(e)})
+                failed = store.update(draft_id, status="post_failed",
+                                      post_result={"ok": False, "backend": "rest", "error": str(e)})
+                _track_post(store, draft_id, ok=False, rec=failed)
                 return {"ok": False, "error": str(e), "draft": store.get(draft_id)}
             result = None   # fall through to UI
         if result is not None and not result.ok and (result.detail or {}).get("identity_mismatch"):
             # The session is no longer the reviewer's. That is not a REST
             # problem the UI poster could work around: stop, the reviewer
             # signs in again and approves again.
-            store.update(draft_id, status="post_failed", post_result=result.to_dict())
-            _track_post(store, draft_id, ok=False)
+            failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            _track_post(store, draft_id, ok=False, rec=failed)
             return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
     if result is None or (not result.ok and backend == "auto"):
@@ -1514,8 +1561,9 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             # cannot post a public reply. REST-only for customer-facing posts.
             err = (result.error if result else
                    "REST backend unavailable — public replies post via REST only")
-            store.update(draft_id, status="post_failed",
-                         post_result={"ok": False, "backend": "rest", "error": err})
+            failed = store.update(draft_id, status="post_failed",
+                                  post_result={"ok": False, "backend": "rest", "error": err})
+            _track_post(store, draft_id, ok=False, rec=failed)
             return {"ok": False, "error": err, "draft": store.get(draft_id)}
         from .ui_commenter import UiCommenter
         ui = UiCommenter(locators=cfg.get("ui_locators"))
@@ -1544,8 +1592,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                     and author["name"].casefold() != reviewer_name.casefold():
                 print(f"[handsfree] WARNING: comment {result.comment_id} was created by "
                       f"{author['name']!r}, not the signed-in reviewer {reviewer_name!r}")
-        store.update(draft_id, status="posted", post_result=posted,
-                     posted_by=reviewer_name)
+        done = store.update(draft_id, status="posted", post_result=posted,
+                            posted_by=reviewer_name)
         # A request reply carries the overview checklist only on the first
         # round, so it counts as the first response exactly when no first
         # response was recorded before (mark_posted keeps the first record)
@@ -1553,11 +1601,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
                           first_response=draft_is_checklist and is_public_reply,
                           posted_by=reviewer_name)
-        _track_post(store, draft_id, ok=True)
+        _track_post(store, draft_id, ok=True, rec=done)
         return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
-    store.update(draft_id, status="post_failed", post_result=result.to_dict())
-    _track_post(store, draft_id, ok=False)
+    failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
+    _track_post(store, draft_id, ok=False, rec=failed)
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
 

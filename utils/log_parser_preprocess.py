@@ -116,9 +116,12 @@ def filter_log_by_keywords(log_lines: List[str], keywords: List[str]) -> List[st
 
 #: A dotted quad, with whatever word introduces it. `ver` captures only when
 #: that word says the quad is a version, which is the one case the IP
-#: redaction below must keep its hands off.
+#: redaction below must keep its hands off. "Intel WLAN" is the driver banner
+#: ("Intel WLAN 23.40.0.4, obj_rel_winA..., drvKeyId:..."), the only place a
+#: Wi-Fi log states the driver version.
 _IP_OR_VERSION_RE = re.compile(
-    r'(?P<ver>\b(?:version|ver|firmware|fw|build|revision|rev|release|patch)'
+    r'(?P<ver>\b(?:version|ver|firmware|fw|build|revision|rev|release|patch'
+    r'|intel\s+wlan)'
     r'\b[\s:=v]*)?'
     r'\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b',
     re.IGNORECASE,

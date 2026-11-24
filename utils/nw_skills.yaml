@@ -189,6 +189,7 @@ d3_resume_firmware_health:
     - "bIsSuspendFlowFailure"
     - "WAKEUP_BY_UCODE_ERROR"
     - "WakeupReason"
+    - "Wakeup due to:"
     - "SUSPEND FLOW STARTED"
     - "SUSPEND FLOW FINISHED"
     - "uCode assert was detected"
@@ -387,6 +388,7 @@ standby_device_power_save:
     - "OS issued D0 Entry"
     - "OS issued D0 Exit"
     - "Soc latency"
+    - "MISSED_BEACON"
     - "CONNECTED - to"
   exclusive:
     - "mhiffBuildRfiCnfCmd"

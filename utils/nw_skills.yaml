@@ -1,0 +1,581 @@
+# version sleepstudy_driver_skills_2026-11-13 features:
+#   name: skill name
+#   description: a brief description of the skill
+#   keywords: use "-" to represent each keyword
+#   exclusive: lines containing these terms are dropped after the keyword filter
+#   expert_rules: use "|" to start a multi-line string
+# Wake reasons: the driver's WOWLAN_WAKE_UP_REASON_API_E_VER_2 values (WakeupReason bit mask,
+#   "Wakeup due to: WAKEUP_BY_...") are decoded in modern_standby_wake and handed to the skill
+#   that explains each one (WoWLAN arming, firmware health, scan & roam, OS commands).
+# Ownership: rules that cite a WIFI-<number> come from the debugging threads of WIFI Jira bugs
+#   where a Sleep Study or SocWatch report blamed Intel Wi-Fi for low DRIPS / S0ix / SLP_S0 / PC10.
+#   The log lines, thresholds and fix versions in them are quoted from those threads. drips_blame_triage
+#   decides who owns a low-DRIPS session; the other skills explain each wake in detail.
+
+
+modern_standby_wake:
+  name: "Modern Standby Wake (D0/Dx)"
+  description: "Used for Modern Standby / Sleep Study battery drain: why the OS kept bringing the Wi-Fi driver back to D0 instead of letting it stay in Dx, what woke it, and what delayed its return to low power."
+  keywords:
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "RESUME FLOW STARTED"
+    - "RESUME FLOW FINISHED"
+    - "Need to reload FW"
+    - "SUSPEND FLOW STARTED"
+    - "SUSPEND FLOW FINISHED"
+    - "Wakeup due to:"
+    - "WakeupReason"
+    - "WAKEUP_BY_"
+    - "eWakeReason"
+    - "report wake reason"
+    - "SetNetWakeSource"
+    - "Add WOL patterns complete"
+    - "WoWLAN is active"
+    - "bIsWowEnabled"
+    - "Deactivating NLO"
+    - "Got Command (M1 Message)"
+    - "* SUSPEND *"
+    - "* RESUME "
+    - "drvKeyId"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: explain, from the Wi-Fi driver's side, why the device spent this Modern Standby window in D0 instead of Dx, what woke it, and what delayed its return to low power. Always cite timestamps and the exact log text for every claim.
+
+    1. D0 windows. Pair each "OS issued D0 Entry ... PreviousState=<4>" with the next "OS issued D0 Exit ... TargetState=<4>". For each pair give the entry time, exit time and D0 duration. Only the OS moves the device between D0 and Dx: the driver cannot return to Dx before the OS issues D0 Exit.
+       Example:
+         12:22:54:763 [OSC] OS issued D0 Entry Post Interrupts Enabled with PreviousState=<4>
+         12:32:05:989 [OSC] OS issued D0 Exit Pre Interrupts Disabled with TargetState=<4>
+         -> D0 for 9 min 11 s
+       Older and WDI (WinT) driver logs mark the same moments with "************************ SUSPEND ************************" and "************************ RESUME  ************************"; use them when the "OS issued" lines are absent.
+       Also give the Dx dwell (D0 Exit to the next D0 Entry) and the number of windows. Healthy connected standby wakes every several to tens of minutes and returns to Dx within about 1-3 s; a Dx dwell of seconds or less, repeating, is a loop (Standby Suspend/Resume Loop Signatures).
+
+    2. Wake reason. Read "Wakeup due to: <REASON>", "WakeupReason" (also in "mhiffDumpWowlanStatusesData: WakeupReason 0x........"), "eWakeReason" and "report wake reason" right after each D0 Entry.
+       WakeupReason is a bit mask (driver enum WOWLAN_WAKE_UP_REASON_API_E_VER_2): decode every set bit and name each one; 0x0 means no bit is set. A bit not listed below (for example 0x2000): quote the raw value, do not guess its meaning.
+       Map each reason to a verdict category (step 7), and use the skill named for it to explain it:
+       - NDIS / OS request: the Wi-Fi device did not wake the system.
+           WAKEUP_BY_NON_WIRELESS (0x0): the OS or the platform brought the device to D0; the OS commands right after the D0 Entry are the cause (Standby OS Command Activity). If no OS command follows, it is not the wireless device.
+           This value is also the firmware's default ('eWakeReasonUnknown' in "wake reason is ..."): it shows that no wireless frame woke the device, not who did. In the WIFI Jira cases it never proved a Wi-Fi fault by itself; when it repeats with a Dx dwell of about 100 ms the device is waking the system spuriously (Standby Suspend/Resume Loop Signatures, class a).
+       - Wake on packet: a received frame matched what was armed before D0 Exit (Standby WoWLAN & Offload Arming names the pattern).
+           WAKEUP_BY_MAGIC_PACKET (0x1), WAKEUP_BY_PATTERN (0x2), WAKEUP_BY_PATTERN_IPV4_TCP_SYN (0x40000), WAKEUP_BY_PATTERN_IPV4_TCP_SYN_WILDCARD (0x80000), WAKEUP_BY_PATTERN_IPV6_TCP_SYN (0x100000), WAKEUP_BY_PATTERN_IPV6_TCP_SYN_WILDCARD (0x200000), WAKEUP_BY_RXFRAME_FILTERED_IN (0x8000), WAKEUP_BY_BEACON_FILTERED_IN (0x10000), WAKEUP_BY_ACTION_FRAME (0x400000), WAKEUP_BY_REM_WAKE_WAKEUP_PACKET (0x1000, remote wake - wake packet), WAKEUP_BY_REM_WAKE_TCP_EXTERNAL (0x800, remote wake - TCP external).
+       - Wake on packet, key exchange: the AP started a key exchange that the D3 offload could not finish (Standby WoWLAN & Offload Arming checks the GTK rekey offload).
+           WAKEUP_BY_GTK_REKEY_FAILURE (0x10, EAPOL request failure), WAKEUP_BY_EAPOL_REQUEST (0x80, EAP Packet Request Identity), WAKEUP_BY_FOUR_WAY_HANDSHAKE (0x100).
+       - Other, link lost in D3: the connection dropped while asleep (Standby Scan & Roam follows the reconnect, scans and roams after the D0 Entry).
+           WAKEUP_BY_DISCONNECTION_ON_MISSED_BEACON (0x4), WAKEUP_BY_DISCONNECTION_ON_DEAUTH (0x8), WAKEUP_BY_11W_UNPROTECTED_DEAUTH_OR_DISASSOC (0x20000).
+       - Other, remote-wake session ended: the offloaded TCP remote-wake connection was lost or its signature table ended.
+           WAKEUP_BY_REM_WAKE_LINK_LOSS (0x200), WAKEUP_BY_REM_WAKE_SIGNATURE_TABLE (0x400).
+       - Other, firmware error in D3 (D3 Resume & Firmware Health checks whether the image survived and what the resume cost).
+           WAKEUP_BY_UCODE_ERROR (0x40).
+       - Wake on key or user: WAKEUP_BY_RFKILL_DEASSERTED (0x20), the radio kill switch was released.
+       - Timer: WAKEUP_BY_D3_WAKEUP_HOST_TIMER (0x4000), the host's D3 wake-up timer fired.
+       Count how many D0 Entries had each reason in the window, with the time of each.
+       Example:
+         [D3 MGR] hD3MgrWowNicQueryNotifHandlerApi : Wakeup due to: WAKEUP_BY_NON_WIRELESS
+         [UTIL] mhiffDumpWowlanStatusesData: WakeupReason              0x00000000
+         [LCM] freqwake - Delta 429929 mSec (TH 90 sec), eWakeReason: 0 => reset.
+
+    3. Resume cost. From "RESUME FLOW STARTED" to "RESUME FLOW FINISHED", give the duration, and say whether the firmware was reloaded ("Consolidated D3 image is not intact --> Need to reload FW", "Starting resume flow WITH reloading image").
+
+    4. OS requests while in D0. Count every "Got Command (M1 Message) <COMMAND>" between D0 Entry and D0 Exit, by command name, with the first and last time and the typical interval. Name the dominant command, how often it came, and whether it was periodic (service polling, a timer) or a one-off flow (a roam: TASK_SCAN -> TASK_CONNECT -> PROP_SET_ADD_CIPHER_KEYS).
+
+    5. Delay to Dx. Give the time from the last OS command to "OS issued D0 Exit", and from D0 Exit to "SUSPEND FLOW FINISHED".
+       - A long gap after the last command with nothing happening: the driver was idle in D0 waiting for the OS.
+       - Commands arriving up to D0 Exit: OS requests kept it busy.
+       - A long suspend flow, or "SUSPEND FLOW" failures: the driver itself delayed entering Dx.
+       - A gap of the same length every time has a known cause: about 5 s on a NetAdapter driver before 23.40, or one hold of about 175-183 s per session (Standby OS Command Activity, step 5).
+
+    6. Arming for the next sleep: "SetNetWakeSource - <SOURCE>", "Add WOL patterns complete", "WoWLAN is active", "bIsWowEnabled".
+
+    7. Verdict. Name one dominant wake cause: NDIS / OS request (name the command or OID and its rate), wake on packet (name the packet or pattern), wake on key or user, timer, app traffic, other. Say what kept the device out of Dx: the OS holding it in D0, OS requests, a firmware reload on resume, or the driver's suspend flow.
+       When the question is whether Wi-Fi is to blame for low SW/HW DRIPS, also name the owner the way DRIPS Blame Triage does (Wi-Fi driver, Wi-Fi firmware or hardware, OS, application or service, AP or network, BIOS or platform, other Intel component), with the driver version from the "Intel WLAN <version> ... drvKeyId" banner.
+
+standby_wowlan_arming:
+  name: "Standby WoWLAN & Offload Arming"
+  description: "Used for Modern Standby wake-on-packet questions: which wake sources, WoL patterns and protocol offloads (ARP/NS, GTK rekey, NLO) the driver armed before D0 Exit, and which one fired according to the WoWLAN status read back on resume."
+  keywords:
+    - "prvOscKmdfEvtDeviceArmWakeFromS0"
+    - "SupportedWoLPacketPatterns"
+    - "EnabledWoLPacketPatterns"
+    - "bssVifAddWolPatternApi"
+    - "SetNetWakeSource"
+    - "Add WOL patterns complete"
+    - "Remove WOL patterns complete"
+    - "ARP offload"
+    - "ARPandNSOffloading"
+    - "ProtocolOffloads"
+    - "bIsProtocolOffloadEnabled"
+    - "WOWLAN_PATTERNS"
+    - "WoWLAN is active"
+    - "Dump Wowlan statuses"
+    - "WakeupReason"
+    - "PatternNumber"
+    - "numOf_GTK_ReKeys"
+    - "numOfReceivedBeacons"
+    - "Wakeup due to:"
+    - "WAKEUP_BY_"
+    - "NLO"
+  exclusive:
+    - "qosSeqCounter"
+    - "GTK entry"
+    - "iGTK entry"
+    - "BiGTK entry"
+  expert_rules: |
+    Goal: for a Modern Standby window, list exactly what the driver armed to wake the system before it left D0, and which wake source fired, so a "wake on packet" can be named or ruled out. Always cite timestamps and the exact log text.
+
+    Background: a Modern Standby Wi-Fi device is expected to offload ARP and IPv6 NS, offload GTK rekey, support NLO and wake on WoL patterns; the OS sends the patterns (OID_PM_ADD_WOL_PATTERN / WiFiCx power offload) before the device leaves D0.
+
+    1. Arming sequence before each D0 Exit. From "prvOscKmdfEvtDeviceArmWakeFromS0" to "Add WOL patterns complete", report:
+       - SupportedWoLPacketPatterns and EnabledWoLPacketPatterns masks (quote the hex values; compare supported vs enabled).
+       - Each "bssVifAddWolPatternApi : Packet type is <type>" and "Total number of patterns = N".
+       - "SetNetWakeSource - <SOURCE>" lines (e.g. DRV_WOL_PACKET_MAGIC_PACKET).
+       - ARP / NS offload ("bssVifAddARPProtocolOffloadApi", "bssVifConfigARPandNSOffloadingApi : expected number of IPv6 targets ...") and "bIsProtocolOffloadEnabled".
+       Example:
+         [OSC] prvOscKmdfSetWolParamsJob - wowPowerCapabilites.SupportedWoLPacketPatterns is 0x10a1f
+         [BSS VIF] bssVifAddWolPatternApi : Packet type is magic (2) - ID: 65534
+         [BSS VIF] bssVifAddWolPatternApi :  Total number of patterns = 0
+         [OSC] prvOscKmdfSetNetWakeSource - DRV_WOL_PACKET_MAGIC_PACKET on primary, rc = 0x0
+         [OSC] pSetPowerConfiguration->requestedWakeEventMask.EnabledWoLPacketPatterns = 0x10012
+
+    2. What fired. After the next D0 Entry, read the WoWLAN status dump ("Dump Wowlan statuses parsed FW response") and the wake lines:
+       - WakeupReason (0x0 = no wireless wake), PatternNumber (which pattern matched), numOf_GTK_ReKeys, numOfReceivedBeacons.
+       - "Wakeup due to: <REASON>".
+       Example:
+         [UTIL] mhiffDumpWowlanStatusesData: WakeupReason              0x00000000
+         [UTIL] mhiffDumpWowlanStatusesData: PatternNumber             0x0000
+         [D3 MGR] hD3MgrWowNicQueryNotifHandlerApi : Wakeup due to: WAKEUP_BY_NON_WIRELESS
+
+    3. Judge the arming.
+       - WakeupReason 0x0 / NON_WIRELESS on every resume: Wi-Fi did not wake the system; look for the OS or platform cause instead.
+       - A non-zero WakeupReason or PatternNumber: decode the WakeupReason bits (WOWLAN_WAKE_UP_REASON_API_E_VER_2) and check each against what step 1 armed:
+         - WAKEUP_BY_MAGIC_PACKET (0x1): a magic packet arrived; magic packet must be enabled (EnabledWoLPacketPatterns, "SetNetWakeSource - DRV_WOL_PACKET_MAGIC_PACKET").
+         - WAKEUP_BY_PATTERN (0x2): a WoL bitmap pattern matched; name it by PatternNumber and the "bssVifAddWolPatternApi" pattern with that ID. A broad pattern (e.g. any unicast, a short bitmap) explains frequent wakes.
+         - WAKEUP_BY_PATTERN_IPV4_TCP_SYN (0x40000), WAKEUP_BY_PATTERN_IPV4_TCP_SYN_WILDCARD (0x80000), WAKEUP_BY_PATTERN_IPV6_TCP_SYN (0x100000), WAKEUP_BY_PATTERN_IPV6_TCP_SYN_WILDCARD (0x200000): an incoming TCP SYN matched a TCP SYN wake pattern; the wildcard variants match any port, so any connection attempt to the host wakes it.
+         - WAKEUP_BY_RXFRAME_FILTERED_IN (0x8000): a received frame passed the D3 RX filter. WAKEUP_BY_BEACON_FILTERED_IN (0x10000): a beacon passed the beacon filter (its content changed). WAKEUP_BY_ACTION_FRAME (0x400000): an 802.11 action frame woke the host.
+         - WAKEUP_BY_REM_WAKE_WAKEUP_PACKET (0x1000), WAKEUP_BY_REM_WAKE_TCP_EXTERNAL (0x800): the remote-wake (TCP offload) path received a wake packet or an external TCP event. WAKEUP_BY_REM_WAKE_LINK_LOSS (0x200), WAKEUP_BY_REM_WAKE_SIGNATURE_TABLE (0x400): its TCP session was lost or its signature table ended.
+         - WAKEUP_BY_GTK_REKEY_FAILURE (0x10, EAPOL request failure), WAKEUP_BY_EAPOL_REQUEST (0x80), WAKEUP_BY_FOUR_WAY_HANDSHAKE (0x100): the AP started a key exchange the D3 offload could not complete; check numOf_GTK_ReKeys and whether GTK rekey offload was armed.
+         Reasons that are not a packet match belong to other skills: WAKEUP_BY_DISCONNECTION_ON_MISSED_BEACON (0x4), WAKEUP_BY_DISCONNECTION_ON_DEAUTH (0x8), WAKEUP_BY_11W_UNPROTECTED_DEAUTH_OR_DISASSOC (0x20000) (link lost: Standby Scan & Roam), WAKEUP_BY_UCODE_ERROR (0x40) (firmware: D3 Resume & Firmware Health), WAKEUP_BY_RFKILL_DEASSERTED (0x20) (radio switch), WAKEUP_BY_D3_WAKEUP_HOST_TIMER (0x4000) (timer).
+       - ARP / NS offload missing or zero targets while associated: the host must answer ARP/NS itself, which wakes it.
+       - numOf_GTK_ReKeys > 0: GTK rekeys were handled in D3; a rekey wake means rekey offload is not taking effect.
+       - NLO activity while connected ("NLO" lines): periodic offloaded scans; frequent NLO matches can wake the SoC.
+
+    4. Who owns a pattern wake. A pattern wake is the armed configuration working: the OS or an application programmed the pattern and a frame matched it. It is not a driver defect, even when it repeats every few seconds (WIFI-691969, WIFI-457458: 31 of 33 wakes in 12.5 min were WAKEUP_BY_PATTERN, always the same pattern index; WIFI-355296: four pattern wakes in the first 2 min cost a 15-min session its 90%).
+       - Owner: the application or OS service receiving that traffic, or the network sending it. On AC the OS filters less and Wi-Fi shows up as an offender by policy (WIFI-346739: 76% on AC, 96% on DC).
+       - Experiments that settled it in those cases, cheapest first: an AP with no internet uplink (WIFI-691969 passed); "Wake on Magic Packet" and "Wake on Pattern Match" disabled in the adapter's advanced properties (WIFI-457458 passed); a clean OS image; then service elimination and an air sniffer to name the packet.
+       - Handle pattern wakes before non-wireless ones: only if non-wireless wakes remain with WoWLAN off is the WAKE# pin worth measuring.
+
+    5. Verdict: say whether the wake was a wake on packet (and which), whether the armed configuration is appropriate for Modern Standby, and for repeated pattern wakes who owns the traffic and which experiment would confirm it.
+
+d3_resume_firmware_health:
+  name: "D3 Resume & Firmware Health"
+  description: "Used for Modern Standby resumes that are slow or repeated: whether the firmware survived D3 or had to be reloaded, firmware dead / RT full reset during D3, suspend-flow failures, and how long each resume took."
+  keywords:
+    - "RESUME FLOW STARTED"
+    - "RESUME FLOW FINISHED"
+    - "D3 image State"
+    - "D3 image Status"
+    - "nicIsAlive"
+    - "D3 is ALIVE"
+    - "image is intact"
+    - "is not intact"
+    - "No need to reload FW"
+    - "Need to reload FW"
+    - "WITH reloading image"
+    - "WITHOUT reloading image"
+    - "FW was dead"
+    - "RT full reset"
+    - "Error detected during S3"
+    - "bIsSuspendFlowFailure"
+    - "WAKEUP_BY_UCODE_ERROR"
+    - "SUSPEND FLOW STARTED"
+    - "SUSPEND FLOW FINISHED"
+    - "uCode assert was detected"
+    - "FATAL_ERROR"
+    - "FW is dead"
+    - "drvKeyId"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: for each resume in the window, say whether the firmware stayed alive through D3 or had to be reloaded, and how much that cost. A reload on every resume makes each wake longer and keeps the platform out of DRIPS longer. Always cite timestamps and the exact log text.
+
+    1. List every resume: "RESUME FLOW STARTED" -> "RESUME FLOW FINISHED", with start, end and duration.
+
+    2. For each resume, classify the D3 image result:
+       - Healthy: "D3 image State: No error in D3", "D3 is ALIVE", "image is intact", "Consolidated D3 image is intact --> No need to reload FW", "Starting resume flow WITHOUT reloading image".
+       - Firmware lost: "Error detected during S3: Image status RT full reset", "FW was dead during resume", "Consolidated D3 image is not intact --> Need to reload FW", "Starting resume flow WITH reloading image".
+       - Woken by a firmware error: "Wakeup due to: WAKEUP_BY_UCODE_ERROR", or WakeupReason with bit 0x40 set (driver enum WOWLAN_WAKE_UP_REASON_API_E_VER_2). The firmware failed while in D3 and that failure woke the host: count it as firmware lost even if the image is reported intact later, and quote the error lines around it.
+       Example (healthy):
+         [LCM] nicIsAlive: GP2 REG 0x01010100, MAC power gating supported, RT STATUS 0x00000000, D3 image Status No error
+         [LCM] hSysD3ResumeCompleteAPI: [RESUME FLOW] Consolidated D3 image is intact --> No need to reload FW
+       Example (firmware lost):
+         [LCM] prvhD3MgrCheckStatusFwStopCompleteCb: [RESUME FLOW] completed FW stop after FW was dead during resume
+         [LCM] prvhD3MgrErrorOccurredDuringD3: [RESUME FLOW] Error detected during S3: Image status RT full reset
+
+    3. Count how many resumes were healthy and how many reloaded the firmware, and compare their average durations.
+
+    4. Suspend side: for each "SUSPEND FLOW STARTED" -> "SUSPEND FLOW FINISHED" give the duration and any "bIsSuspendFlowFailure set to TRUE".
+
+    5. Asserts in the standby window, and what follows them.
+       - Firmware assert found on resume: "nicStateStdby  uCode assert was detected Going to dump the DBG information", "FATAL_ERROR: uCode ASSERT(<CPU>, rtStatus = 0x........", "[RESUME FLOW] FW is dead, resetting NIC". Quote the CPU (LMAC1, LMAC2, UMAC) and rtStatus of each. The assert is a Wi-Fi firmware defect to report with the driver version from the "Intel WLAN <version> ... drvKeyId" banner (WIFI-390260: rtStatus 0x10028B2; WIFI-415192: 0x20100391).
+         Example:
+           03:54:38:512 [ALONSM] [E] nicStateStdby  uCode assert was detected Going to dump the DBG information
+           03:54:38:577 [NIC_DEBUG] [E] FATAL_ERROR: uCode ASSERT(LMAC1, rtStatus = 0x10028B2, log is  valid. data1:0x97, data2:0x0)
+           04:05:08:365 [LCM] prvhD3MgrHandleRtStatusNotZeroInD3 (2477): [RESUME FLOW] FW is dead, resetting NIC
+       - Compare the resume cadence in equal windows before and after the assert. In WIFI-390260 the device slept about 20 min at a time before it, and after the NIC reset and reconnect it cycled every 5-7 s with "Wakeup due to: WAKEUP_BY_NON_WIRELESS". Report the two parts separately: the assert belongs to Wi-Fi firmware; the wakes after the reconnect are host-initiated and were never proven to be a Wi-Fi fault.
+       - Driver assert repeating: "utilDbgAssert ... FATAL_ERROR: <function> (<line>) - tag: 0x....". Each one dumps and re-initialises the firmware, which keeps the NIC busy. Fix the assert before judging DRIPS. Tag 0x1FD7 in prvUtilCalcCenterFrequency80MHzOnHB on a system with WWAN came from the WWAN driver reporting a wrong Wi-Fi safe range, not from Wi-Fi power logic (WIFI-355296).
+
+    6. Verdict: if most resumes reload the firmware or report RT full reset, say that the firmware is not surviving D3 and that each wake costs a full image load (name the RT STATUS / D3 image status values seen); if an assert occurred, name it, its owner and whether the cadence changed after it; otherwise say the D3 path is healthy and the drain is elsewhere.
+
+standby_os_command_activity:
+  name: "Standby OS Command Activity (NDIS/WiFiCx)"
+  description: "Used for Modern Standby drain where the Wi-Fi device sits in D0: which OS / NDIS / WiFiCx commands (OIDs, tasks, device service commands, statistics queries) arrived while in D0, how often, and which ones failed."
+  keywords:
+    - "Got Command (M1 Message)"
+    - "Completing OID (M3 Message)"
+    - "Completing Task (M4 Message)"
+    - "CCmdPropDeviceServiceCommand"
+    - "device service handler returned"
+    - "WAKEUP_BY_NON_WIRELESS"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "drvKeyId"
+  exclusive:
+    - "WDI_GET_BSS_ENTRY_LIST_UPDATE"
+  expert_rules: |
+    Goal: show which OS requests kept the Wi-Fi driver busy while the platform should have been resting, how often they came, and whether any looped or failed. Always cite timestamps and the exact log text.
+
+    1. Bound the D0 windows with "OS issued D0 Entry" and "OS issued D0 Exit". Count only commands inside a D0 window.
+       Who started each window: a D0 Entry followed by "Wakeup due to: WAKEUP_BY_NON_WIRELESS" (WakeupReason 0x0) was started by the OS or the platform, not by a Wi-Fi frame, so the commands that arrive right after it are why that window exists. A D0 Entry with any other WAKEUP_BY_ reason was started by the device (see Modern Standby Wake); the commands after it are follow-up, not the trigger.
+
+    2. For each command name in "Got Command (M1 Message) <NAME>[<id>]", give: count, first and last time, and the typical interval between two of them. Present a table sorted by count.
+       Example:
+         [OSC] Got Command (M1 Message) PROP_DEVICE_SERVICE_COMMAND[131][0x83] (p-0x0, BSS, TransId-8949)
+         [OSC] Got Command (M1 Message) PROP_GET_STATISTICS[34][0x22] (p-0x0, BSS, TransId-8953)
+         [OSC] Got Command (M1 Message) TASK_SCAN[4][0x4] (p-0x0, BSS, TransId-8956)
+       A command that repeats on a steady interval (for example PROP_DEVICE_SERVICE_COMMAND every 16-20 s) is periodic polling by an OS service or app, not a one-off flow.
+
+    3. Completion status. Match each command with its "Completing OID (M3 Message) ... = <status>" or "Completing Task (M4 Message) ... = <status>". List every non-zero status with its command; quote the value (for example 0xC00000BB, STATUS_NOT_SUPPORTED). A command that keeps failing and is retried keeps the device awake for nothing.
+       Example:
+         [OSC] Completing OID (M3 Message) for Command PROP_SET_CONNECTION_QUALITY[32][0x20] (p-0x3, ...) = 0xC00000BB
+
+    4. Device service commands: for "CCmdPropDeviceServiceCommand" report the parameters and "device service handler returned with status ..., output size ...". Repeated device service commands usually come from an OEM / vendor service polling the driver.
+       Known case of polling from user mode (WIFI-398898): the verbose Sleep Study listed the OS Wi-Fi job WiFiJobQueryStatistics (18 in 20 min) and a WPA trace ("wpr -start power -filemode") named KillerNetworkService.exe calling wlanapi.dll!WlanQueryInterface; fixed in that service. A statistics query on a steady interval points at such a caller: say that a power trace is needed to name the process.
+
+    5. Idle tail: how long the device stays in D0 after the last command. For each D0 window give the time from the last "Got Command (M1 Message)" to "OS issued D0 Exit", then the typical value and how constant it is. With a few hundred wakes a day this tail decides the SW DRIPS number.
+       - About 1 s: the idle timeout of drivers from 23.40 PV onward. Normal. About 3 s was also logged as normal on 24.50-24.70 (WIFI-928108: D0 Exit 3.17-3.25 s after each D0 Entry).
+       - About 5 s, constant, on a NetAdapter driver (obj_rel_winA in the "Intel WLAN <version> ... drvKeyId" banner) before 23.40: the driver reported an IdleTimeout of 5 s (wdfDevicePowerPolicyIdleSettings.IdleTimeout), so every OS wake held the device 5 s. Changed to 1 s in 23.40 PV (WIFI-378380, WIFI-368194, WIFI-405541; 77% SW DRIPS in the failing run). Owner: Wi-Fi driver; recommend the update.
+       - One hold of about 175-183 s from screen-off to D0 Exit in every session, with no command activity to explain it, sometimes as a double exit (exit, D0 again about 70 ms later, exit): the device never idled by itself and the OS forced it to Dx on its directed power-down timeout of about 2 minutes. In the Sleep Study this is the blocker "[WIFICX]OS Wi-Fi Jobs" at about 175 s with DirectedDripsTransitionCount above 0 (WIFI-955384: 3.5 s and 95.4% SW DRIPS healthy, 175.6 s and 68.6% degraded). It starts after a hibernate resume and lasts until reboot; the cause there was an OS (NDIS) power reference leaked across hibernate, with no pending command and no reference held by the driver. Owner: OS. Next: a live kernel dump with WDF power-reference tracking before anyone reboots.
+       - A hold whose length equals an OS timeout points at the OS; a hold whose length follows the commands or the traffic points at activity.
+       - DHCP as the top Sleep Study activator points at the AP's lease time (WIFI-378380: renewals every hour were called abnormal); Wi-Fi does not originate DHCP.
+
+    6. Verdict: name the command that dominated the D0 time, its rate, and whether it is periodic polling, a one-off flow (connect / roam / scan), or a failing retry; say who likely issued it (OS networking stack, an OEM service, an app named in the Sleep Study SRUM / NDIS data). Give the typical idle tail and what set it (driver idle timeout with the driver version, an OS-forced Dx, polling, traffic), and the share of the session the D0 windows account for.
+
+standby_scan_roam:
+  name: "Standby Scan & Roam"
+  description: "Used for Modern Standby drain with scanning or roaming while the screen is off: OS scan requests and their triggers, scan completions, roam decisions and their reasons, missed beacons and NLO."
+  keywords:
+    - "Got Command (M1 Message) TASK_SCAN"
+    - "TASK_SCAN - ScanTrigger"
+    - "SCAN_COMPLETE_RESULTS"
+    - "ROAM_DECISION"
+    - "Roam reason:"
+    - "TASK ROAM"
+    - "Got Command (M1 Message) TASK_CONNECT"
+    - "CONNECTED - to"
+    - "MISSED_BEACON"
+    - "TIME_POINT_MISSED_BEACONS"
+    - "WAKEUP_BY_DISCONNECTION_ON_MISSED_BEACON"
+    - "WAKEUP_BY_DISCONNECTION_ON_DEAUTH"
+    - "WAKEUP_BY_11W_UNPROTECTED_DEAUTH_OR_DISASSOC"
+    - "WAKEUP_BY_BEACON_FILTERED_IN"
+    - "Deactivating NLO"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "drvKeyId"
+  exclusive:
+    - "TASK_SCAN_PARAMS"
+  expert_rules: |
+    Goal: show whether scans and roams ran while the platform was in Modern Standby, who asked for them, and whether they explain the time the device spent in D0. Always cite timestamps and the exact log text.
+
+    1. Bound the D0 windows with "OS issued D0 Entry" / "OS issued D0 Exit"; mark every scan and roam as inside or outside a D0 window.
+
+    2. Scans: count "Got Command (M1 Message) TASK_SCAN" and "SCAN_COMPLETE_RESULTS", with times and the interval between scans. Report the "TASK_SCAN - ScanTrigger <n>" values and their counts (quote the numbers; do not guess what each value means unless the log says).
+       Example:
+         [OSC] Got Command (M1 Message) TASK_SCAN[4][0x4] (p-0x0, BSS, TransId-8028)
+         [OSC] TASK_SCAN - ScanTrigger 1
+         [SCAN] [SCAN_COMPLETE_RESULTS] Status:1 LastChannel:40 ScannedChannel:33 ...
+
+    3. Roams: list each "ROAM_DECISION ... Roam reason: <REASON>", each "TASK ROAM" and the following "CONNECTED - to" with the band / channel moved to, and the time from decision to connected.
+       Example:
+         [ROAMDECISION] ROAM_DECISION for VIF ID 0 - Search For Better AP, Roam reason: ROAM_REASON_BG_SCAN_COMPLETE
+
+    4. Link quality: "MISSED_BEACON" / "TIME_POINT_MISSED_BEACONS" near a roam point to a weak or lost AP as its cause.
+       Link lost while in D3 (driver enum WOWLAN_WAKE_UP_REASON_API_E_VER_2, read from "Wakeup due to:" or the WakeupReason bits):
+       - WAKEUP_BY_DISCONNECTION_ON_MISSED_BEACON (0x4): beacons were missed and the device disconnected.
+       - WAKEUP_BY_DISCONNECTION_ON_DEAUTH (0x8): the AP deauthenticated the device.
+       - WAKEUP_BY_11W_UNPROTECTED_DEAUTH_OR_DISASSOC (0x20000): an unprotected deauth / disassoc arrived on an 802.11w (PMF) link.
+       After any of these, the scans, connect and roam that follow the D0 Entry are the recovery and the drop is the cause: report the drop time, the reason and how long the reconnect took.
+       - WAKEUP_BY_BEACON_FILTERED_IN (0x10000): a changed beacon passed the beacon filter; say whether a roam or reconnect followed.
+
+    5. NLO: "Deactivating NLO" when connected is expected; NLO scans while disconnected are offloaded and should not keep the host in D0.
+       After a link loss in D3 the expected sequence is one wake for the disconnect, a re-suspend with NLO armed, one wake on NLO discovery, then TASK_CONNECT (WIFI-398135, WIFI-390260). That is expected behaviour, not a defect; if it recurs, the AP or the RF environment owns it.
+
+    6. Roam-scan storm. Count "Got Command (M1 Message) TASK_SCAN" per second and read how fast its TransId climbs. A storm is all of:
+       - TASK_SCAN many times per second for minutes (WIFI-339444: TransId 85256 to 94756 in about 8 s, about 7000 requests in a few minutes; in the raw log each one is followed at once by WDI_GET_BSS_ENTRY_LIST_UPDATE);
+       - "TASK_SCAN - ScanTrigger 3" on those requests (the roam trigger, WDI_SCAN_TRIGGER_ROAM);
+       - far fewer "SCAN_COMPLETE_RESULTS" than requests: the driver completes the request at once without scanning because its BSS table is still fresh;
+       - missed beacons or a "ROAM_DECISION" shortly before the first request.
+       In the Sleep Study this is SW DRIPS near 0% with Wi-Fi as top offender. Cause in the confirmed case: in a missed-beacon state the driver asked for a roam without first indicating the degraded link quality, so the OS took the current AP for a good one, asked for a roam scan, got an instant success and asked again until its roam timeout. The Jira was first closed as an OS issue; the trigger was the missing driver indication. Fixed in driver 23.10.
+       Read the version from the "Intel WLAN <version> ... drvKeyId" banner. Before 23.10: known driver defect, recommend the update. On 23.10 or later: report to the Intel Wi-Fi team with the lines around the first request. A few scans per minute with real completions is ordinary background scanning, not a storm.
+
+    7. Verdict: say whether background scans or roams ran during the standby window, how many, why (the roam reasons, missed beacons), and roughly how much D0 time they account for. Background-scan-driven roams in standby with a good link are avoidable activity. If a storm is present, give its rate, total, duration and trigger value, what preceded it, and the driver version.
+
+suspend_resume_ownership_amt:
+  name: "Suspend/Resume NIC Ownership (AMT/ME)"
+  description: "Used when suspend or resume is slow on vPro / AMT platforms: the AMT notification on suspend, whether ME took NIC ownership, and how long the host took to regain ownership on resume."
+  keywords:
+    - "hsysSuspendSmNotifyAmt"
+    - "SUSPEND FLOW AMT returned"
+    - "ME ownership"
+    - "meTookOwnership"
+    - "bMeIsOwner"
+    - "bIsMeOwnerDuringSuspend"
+    - "ownership regain"
+    - "try to take Nic ownership"
+    - "RESUME FLOW AMT returned"
+    - "Host owns NIC"
+    - "amtDoesHostOwnNicApi"
+    - "NIC ownership is at"
+    - "host does not have the NIC ownership semaphore"
+    - "SUSPEND FLOW STARTED"
+    - "RESUME FLOW STARTED"
+    - "RESUME FLOW FINISHED"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: on platforms with Intel AMT / ME, check whether the NIC ownership hand-over on suspend and resume delayed the driver or kept the device awake. Always cite timestamps and the exact log text.
+
+    1. Suspend: from "SUSPEND FLOW STARTED", report the AMT notification ("hsysSuspendSmNotifyAmt: send notification to AMT. bWowlan <x>, bNdo <y>"), the result ("SUSPEND FLOW AMT returned success (WIMA unavailable), ME ownership <n>"), and whether ME took ownership ("meTookOwnership", "bMeIsOwner").
+       Example:
+         [LCM] #### SuspendSM: hsysSuspendSmNotifyAmt: send notification to AMT. bWowlan 1, bNdo 0
+         [LCM]  ### SUSPEND FLOW AMT returned success (WIMA unavailable), ME ownership 0, rc 0x0
+
+    2. Resume: from "RESUME FLOW STARTED", time the ownership regain ("Start running ownership regain flow", "try to take Nic ownership", "RESUME FLOW AMT returned success", "finish ownership regain flow. Host owns NIC"). Report the duration of the regain.
+       Example:
+         [LCM] msysPreResumeOwnershipRegainFlowAPI: [RESUME FLOW] attempt to take ownership
+         [LCM]  ### RESUME FLOW finish ownership regain flow. Host owns NIC
+
+    3. Waits: report any "NIC ownership is at ME - WAIT <n> seconds for ME to release ownership" or "host does not have the NIC ownership semaphore", with how long the host waited.
+
+    4. Verdict: if ME held the NIC or the regain took seconds, say how much it added to each resume and that the delay is in the AMT / ME hand-over; if ME ownership stayed 0 and the regain was immediate, rule AMT out.
+
+standby_device_power_save:
+  name: "Standby Device Power Save"
+  description: "Used for Modern Standby drain while connected: whether the Wi-Fi device ran in power save or in CAM (always awake), the power mode the OS requested, and the LTR configuration."
+  keywords:
+    - "prvMpmSendDevicePowerCommand"
+    - "is PowerSave Enabled"
+    - "CAM mode"
+    - "winPowerMode"
+    - "mpmHandleEvSetupConfigureLTR"
+    - "PSM"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "Soc latency"
+    - "CONNECTED - to"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: check whether the Wi-Fi device used power save during the standby window or stayed fully awake, which would raise its power draw and keep the platform out of deep idle. Always cite timestamps and the exact log text.
+
+    1. For each "prvMpmSendDevicePowerCommand" line, report "is CAM mode", "is D3 flow", "is PowerSave Enabled" and "winPowerMode", with the time, and whether it falls inside a D0 window ("OS issued D0 Entry" / "OS issued D0 Exit").
+       Example:
+         [MMACPOWER] prvMpmSendDevicePowerCommand Check is CAM mode = FALSE, is D3 flow = TRUE, is PowerSave Enabled 0x1, winPowerMode = 16
+
+    2. CAM mode = TRUE, or PowerSave Enabled 0x0, while connected in standby: the device was kept fully awake; say for how long and what requested it (a winPowerMode change, a connection or roam in progress).
+
+    3. LTR: quote "mpmHandleEvSetupConfigureLTR" lines (for example "LTR command not sent" because LtrCfgFlags were not set); report them as configuration facts, without concluding a drain cause unless other evidence links them.
+
+    4. Report winPowerMode values as written; do not translate the number unless the log names it.
+
+    5. AC or DC. If the Sleep Study session was on AC (Charge), say so first. On AC with the Balanced or Maximum Performance power mode the OS keeps Wi-Fi out of power save by policy, the NIC stays in listen state and its LTR, which depends on the channel width, keeps the platform out of S0ix. Three WIFI Jira cases with Wi-Fi blamed were closed as expected behaviour or test setup for this reason (WIFI-346739: 76% on AC, 96% on DC; WIFI-407124; WIFI-795713).
+       - In WIFI-795713 the "=== Device Power Command ===" block logged "Flags = 0x0000" when power save was not configured and "Flags = 0x0081" at D3 entry with power save. Quote the Flags value next to each command.
+       - The check that settled those cases: repeat on DC, or on AC with the power mode set to Best Power Efficiency (Wi-Fi power index 2 instead of 0), and compare.
+       - Quote the "CONNECTED - to" line for the session (channel, band): on AC a narrow or 2.4 GHz channel reached SLP_S0 where a wide 5 GHz one did not.
+
+    6. SoC latency. Quote "mpmSendSocConfigCmdAPI ... Soc latency = <n>" if present. A value of 0 on an integrated (CNVi) platform, with missed beacons only while in D3, means the driver sent the wrong platform latency and the firmware woke about 400 us late for every beacon (WIFI-128855: 82-87 mW in standby instead of 2.7 mW; 12 ms was the expected value on that platform). Owner: Wi-Fi driver.
+
+    7. Verdict: say whether power save was active through the standby window; if not, name when and why it was off, and whether that is OS policy on AC or a fault.
+
+drips_blame_triage:
+  name: "DRIPS Blame Triage (Wi-Fi vs OS / App / Platform)"
+  description: "Used when a Sleep Study names Intel Wi-Fi as top offender or blocker for low SW/HW DRIPS in Modern Standby: decides from the driver log who owns it (Wi-Fi driver, Wi-Fi firmware or hardware, OS, an application or service, the AP or network, BIOS or platform, another Intel component) by matching the signatures of past WIFI Jira cases, and names the next experiment."
+  keywords:
+    - "* SUSPEND *"
+    - "* RESUME "
+    - "SUSPEND FLOW STARTED"
+    - "SUSPEND FLOW FINISHED"
+    - "RESUME FLOW STARTED"
+    - "RESUME FLOW FINISHED"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "Wakeup due to:"
+    - "WakeupReason"
+    - "wake reason is"
+    - "drvKeyId"
+    - "uCode assert was detected"
+    - "FATAL_ERROR"
+    - "FW is dead"
+    - "Connection lost during D3"
+    - "Got Set Power State cmd from OS"
+    - "prvMpmSendDevicePowerCommand"
+    - "CONNECTED - to"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: a Sleep Study that lists Wi-Fi as top offender does not say Wi-Fi is at fault. In the Jira cases this skill is built from, the Wi-Fi driver, firmware or hardware was the confirmed cause in roughly one case out of three; the rest were OS policy, an application or service, the OEM image, BIOS, Bluetooth, CSME or the test setup. Decide the owner from the driver log, quote timestamps and the exact log text, and never assign an owner from the top-offender name or the DRIPS percentage alone.
+
+    1. Fix the window and the setup first.
+       - Work only inside the Sleep Study session. Its clock and the driver-log clock can differ by a fixed offset (WIFI-691969: report 01:53-02:43 was log 16:53-17:43); align them on the first suspend marker.
+       - Driver version and architecture: read the banner "Intel WLAN <version>, obj_rel_winA..., drvKeyId:..., FW SHA1". winA is the NetAdapter / WiFiCx driver, WinT is the WDI driver. Step 5 needs the version.
+       - AC or DC: if the Sleep Study session is on AC (Charge), say so before anything else. On AC with the Balanced or Maximum Performance power mode the OS keeps Wi-Fi less asleep by policy (WIFI-346739: same setup 76% on AC, 96% on DC; WIFI-407124 and WIFI-795713 were closed as test setup); Standby Device Power Save, step 5, has the check. In the log read "prvMpmSendDevicePowerCommand": "is CAM mode", "is PowerSave Enabled", "winPowerMode" and "Flags" (WIFI-795713 logged Flags = 0x0000 when power save was not configured and Flags = 0x0081 at D3 entry with power save). Report the values as written.
+       - Activators: if the Sleep Study activators are Windows Update, WNS, DHCP, TCPIP or NCSI at tens of percent while the Wi-Fi Fx device itself is 1-2% active, Wi-Fi is a victim (WIFI-20370; WIFI-390260: 93% with Windows Update running was judged no bug).
+
+    2. Was D3 ever requested? Look for a suspend marker in the window: "************************ SUSPEND ************************", "# ------- SUSPEND FLOW STARTED ----------", "OS issued D0 Exit ... TargetState=<4>".
+       - None in the whole window: the OS never asked the device to sleep. The driver does not enter D3 without the OS request, so this is not a Wi-Fi power-save failure (WIFI-407124, WIFI-532857, WIFI-181044, WIFI-412648 where the first suspend came 23-50 min into the session). Owner: OS, BIOS or test setup. Next: AC vs DC and "powercfg /q" Wi-Fi power setting; OS trace for "NIC Active state is acquired" with an Interface Ref Count that never reaches 0, or "NDIS_PM_S0_IDLE_SUPPORTED is not enabled".
+       - Present: go on.
+
+    3. Measure the cadence. Pair every suspend marker with the next resume marker ("************************ RESUME  ************************", "# ------- RESUME FLOW STARTED ----------", "OS issued D0 Entry"). Give the number of cycles, the D3 dwell (suspend to resume) and the D0 dwell (resume to next suspend), as min / typical / max.
+       - Healthy connected standby in these cases: a wake every several to tens of minutes (WIFI-390260: about every 20 min), back to D3 within about 1-3 s. Six wakes in an hour including one missed-beacon wake was judged normal.
+       - 80-90% DRIPS usually means many short wakes or a long D0 dwell per wake; 0% means something held the device or the platform for the whole session. Say which shape this session has.
+
+    4. Count the wake reasons, one per resume ("Wakeup due to: <REASON>", "WakeupReason 0x........", "wake reason is '<eWake...>'").
+       - WAKEUP_BY_PATTERN / WakeupReason 0x00000002 / 'eWakeWoWLANBitPatternMatch' (Sleep Study NetWakeReasonTypeBitmapPattern): the NIC did what the OS or an application programmed. Not a driver bug (WIFI-691969, WIFI-457458, WIFI-355296). Owner: application, OS or network traffic.
+       - WAKEUP_BY_NON_WIRELESS / 0x00000000 / 'eWakeReasonUnknown' (Sleep Study NetWakeReasonTypeDevice or Ndis): this is the firmware's default value. It proves only that no wireless frame woke the device; in no thread did it prove a Wi-Fi fault by itself. The dwell shape decides (step 5, and Standby Suspend/Resume Loop Signatures).
+       - WAKEUP_BY_DISCONNECTION_ON_MISSED_BEACON / 0x00000004 / "Connection lost during D3 due to missed beacons": the AP went away. One such wake, then an NLO wake and a reconnect, is expected (WIFI-398135). Owner: AP or RF environment if it repeats.
+       - "uCode assert was detected", "FATAL_ERROR: uCode ASSERT(", "[RESUME FLOW] FW is dead, resetting NIC": the assert is a Wi-Fi firmware defect; quote rtStatus (WIFI-390260: 0x10028B2; WIFI-415192: 0x20100391). Use D3 Resume & Firmware Health, step 5.
+
+    5. Match the session to a known class. Name the class, the owner and the Jira case.
+       - D3 lasts about 100-150 ms and D0 about 1 s, in a loop, non-wireless reason, NetWakeReasonTypeDevice in the hundreds or thousands, BE201 on a driver before 23.150: Wi-Fi hardware PME defect, worked around in firmware 23.150 / 24.0 and in the driver from 24.10 (WIFI-615396, WIFI-583743, WIFI-677488). Owner: Intel Wi-Fi.
+       - D0 dwell of about 5 s after every short wake on a winA driver before 23.40: NetAdapter IdleTimeout was 5 s, changed to 1 s in 23.40 PV (WIFI-378380, WIFI-368194, WIFI-405541). Owner: Wi-Fi driver. Use Standby OS Command Activity, step 5.
+       - TASK_SCAN with ScanTrigger 3 thousands of times in minutes, SW DRIPS 0%, driver before 23.10: roam-scan loop from a missing link-quality indication (WIFI-339444). Owner: Wi-Fi driver. Use Standby Scan & Roam, step 6.
+       - Pattern wakes on every cycle that stop with an AP that has no internet uplink, or with "Wake on Magic Packet" and "Wake on Pattern Match" disabled: application or OS traffic (WIFI-691969, WIFI-457458).
+       - One D0 hold of about 175-183 s in every session, starting after a hibernate resume and lasting until reboot, Sleep Study blocker "[WIFICX]OS Wi-Fi Jobs" with DirectedDripsTransitionCount above 0: OS power reference leak, the OS forces D3 on its DFx timeout (WIFI-955384). Owner: OS. Use Standby OS Command Activity, step 5.
+       - OS set-power D3 followed by D0 about 120 ms later every few seconds on a WDI driver, TCPIP / DHCP / NCSI activators high: stray PnPCapabilities=0x120 in the adapter class key from the OEM image (WIFI-20370). Owner: OEM image.
+       - A strictly periodic non-wireless wake (every 1050 s, about 30 s long) on a corporate / vPro system: CSME WiAMT host sanity monitoring (WIFI-16904). Owner: CSME.
+       - One unbroken D3 for the whole session and DRIPS still low: the host log cannot show the cause. Use Standby NIC In D3 But SoC Blocked.
+
+    6. Verdict. Give, in this order:
+       - Owner: Wi-Fi driver / Wi-Fi firmware or hardware / OS / application or service (name it if the data does) / AP or network / BIOS or platform / other Intel component (Bluetooth, CSME, WWAN) / not determined.
+       - Confidence: "matches confirmed case WIFI-<key>" only when the signature and the version condition both hold; otherwise "suspected", and say what is missing.
+       - Evidence: cycle count, D3 and D0 dwell, wake-reason counts, the lines that settle it.
+       - Dominant wake cause, in the report's own terms: NDIS / OS request, wake on packet, timer, app traffic, or other.
+       - Next experiment, the cheapest one that splits the remaining candidates: DC instead of AC; AP without internet; Windows Update paused; clean OS image; wake keys disabled; newer driver; Bluetooth off; a NIC swap.
+       Escalate to the Intel Wi-Fi team only for the classes owned by the driver, firmware or hardware, or when no class fits.
+
+standby_wake_loop_signatures:
+  name: "Standby Suspend/Resume Loop Signatures"
+  description: "Used when the Wi-Fi device bounces between D3 and D0 many times in a Modern Standby session (Sleep Study shows hundreds of NetWakeReasonTypeDevice wakes, or SW DRIPS near 0): tells apart the hardware PME wake loop, OS-driven bounces from an image registry key, legitimate pattern wakes, the cycling that follows a firmware assert or a reconnect, the 802.1X D3-before-keys thrash and a periodic CSME wake."
+  keywords:
+    - "* SUSPEND *"
+    - "* RESUME "
+    - "SUSPEND FLOW STARTED"
+    - "RESUME FLOW STARTED"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "Wakeup due to:"
+    - "WakeupReason"
+    - "wake reason is"
+    - "WDI_GET_PM_PROTOCOL_OFFLOAD"
+    - "prvOscKmdfEvtDeviceDisarmWakeFromS0"
+    - "Got Set Power State cmd from OS"
+    - "Miniport transition:"
+    - "uCode assert was detected"
+    - "FW is dead"
+    - "Connection lost during D3"
+    - "connection termination (Suspend)"
+    - "Indicating Disassoc Results"
+    - "PROP_SET_ADD_CIPHER_KEYS"
+    - "Got Command (M1 Message) TASK_CONNECT"
+    - "Got Command (M1 Message) TASK_DISCONNECT"
+    - "drvKeyId"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: a suspend/resume loop has at least six different causes with different owners, and they look alike in a Sleep Study. Tell them apart by the D3 dwell, the D0 dwell, the wake reason and what happened just before the loop started. Always cite timestamps and the exact log text.
+
+    1. Build the cycle table. For each cycle: suspend time, resume time, D3 dwell, the wake reason on that resume, D0 dwell until the next suspend. Then give the count, and the typical D3 and D0 dwell.
+       Example (WIFI-457458, mixed reasons):
+         11:44:43:689 [CNCT_FLOW] ************************ SUSPEND ************************
+         11:44:46:063 [D3 MGR] hD3MgrWowNicQueryNotifHandlerApi : Wakeup due to: WAKEUP_BY_NON_WIRELESS
+         11:44:46:075 [CNCT_FLOW] ************************ RESUME  ************************
+         11:44:53:101 [CNCT_FLOW] ************************ SUSPEND ************************
+         11:45:48:274 [D3 MGR] hD3MgrWowNicQueryNotifHandlerApi : Wakeup due to: WAKEUP_BY_PATTERN
+
+    2. Find where the loop starts. Compare the cadence in equal windows before and after that time, and quote the last event before it: a firmware assert, a disconnect, a roam, a connect, a hibernate resume, or nothing.
+
+    3. Classify.
+       a. Spurious device wake (hardware PME status out of sync). D3 lasts about 100-150 ms, D0 about 1 s, repeating every 3-5 s; the reason is WAKEUP_BY_NON_WIRELESS or unknown, never a pattern; the Sleep Study counts NetWakeReasonTypeDevice in the hundreds or thousands; seen with BE201 on LNL and ARL.
+          Side effects that are not separate bugs: a second "WDI_GET_PM_PROTOCOL_OFFLOAD" completing with 0xC000000D about 1 s after the first, a second "prvOscKmdfEvtDeviceDisarmWakeFromS0", an OS "TASK_DISCONNECT" right after a resume followed by a reconnect 3 s to 3 min later, bugcheck 0x19E subcode 0x2F.
+          Fix: firmware from 23.150 / 24.0, residual cases covered by a driver workaround from 24.10 (WIFI-615396, WIFI-583743; WIFI-677488 showed SW DRIPS 0% after moving between rooms with the lid closed). Owner: Wi-Fi hardware and firmware. On an older driver say so and recommend the update; on a driver that has the fix, escalate.
+       b. OS-driven bounce from the OEM image (WDI driver). "Got Set Power State cmd from OS, with power state value = 4" then "... value = 1" about 115-140 ms later, every 3.5 s or so; "Miniport transition: RUNNING --> SUSPEND_NO_PAUSE" and back; reason WAKEUP_BY_NON_WIRELESS; 54 cycles in 16 s were counted in WIFI-20370. The Sleep Study shows TCPIP / DHCP / NCSI activators at tens of percent and Wi-Fi at 1-2%.
+          Cause: "PnPCapabilities"=dword:00000120 in the adapter class key, written by the OEM image tool; the OS log shows D0_AoAcSurpriseWake and D0_Complete without D0_SSComplete. Removing the key passed 3 of 3, adding it back failed 2 of 2. Owner: OEM image. Next: diff the adapter registry key against a clean install.
+       c. Legitimate pattern wakes. "Wakeup due to: WAKEUP_BY_PATTERN" on nearly every cycle (WIFI-457458: 31 of 33 wakes in 12.5 min, always the same pattern index), D3 dwell from under a second to a few minutes, re-suspend about 3 s after each resume. Owner: an application, the OS or the network. Next: an AP without internet uplink (WIFI-691969 passed), then "Wake on Magic Packet" and "Wake on Pattern Match" disabled (WIFI-457458 passed), then service elimination and an air sniffer to name the packet. Use Standby WoWLAN & Offload Arming to name the pattern.
+          Do not merge this class with (a): a real pattern wake is reported correctly to the OS; the hardware loop is reported as unknown.
+       d. Cycling after an assert or a reconnect. Before the event the device sleeps for tens of minutes; after "uCode assert was detected" and "[RESUME FLOW] FW is dead, resetting NIC", or after a missed-beacon disconnect and reconnect, D3 lasts 5-7 s and D0 about 1 s with WAKEUP_BY_NON_WIRELESS (WIFI-390260, WIFI-415192).
+          The assert is a Wi-Fi firmware defect: quote rtStatus and report it. D3 Resume & Firmware Health, step 5, has the lines. The wakes after the reconnection are host-initiated; in the threads they were attributed to the OS and never proven. State both parts separately.
+       e. D3 before the keys are installed (802.1X). "OS issued D0 Exit ... TargetState=<4>" arrives about 3.2 s after each D0 Entry while the EAP exchange is still running: there is a TASK_CONNECT but no "PROP_SET_ADD_CIPHER_KEYS" before the D0 Exit. The driver ends the association on purpose ("bssVifSuspendApi: DISCONNECT REASON- connection termination (Suspend)", "Indicating Disassoc Results with status 0x7"), the OS reconnects within about 50-135 ms, and after 4 to 12 rounds the OS gives up (DOT11_ASSOC_STATUS_INTERNAL_EXCESSIVE_ROAMING_IN_CS) and the platform stays in disconnected standby (WIFI-928108, authenticator taking 5-16 s). Owner not settled: OS policy, driver design and a slow RADIUS server each contribute. Report the authentication time.
+       f. Strictly periodic wake. The same interval every time with a non-wireless reason. WIFI-16904: every 1050 s, awake about 30 s, on a corporate / vPro system: CSME WiAMT host sanity monitoring, fixed in CSME firmware. The Wi-Fi log can prove the wake was not wireless but cannot name the waker; ask for a platform timeline (PHM) showing which IP is active at each wake. A periodic wake on a system without CSME is not this class: report the interval and leave the owner open.
+
+    4. Verdict: the loop class, its owner, the cycle count and dwell times that support it, the event that started it, and the one experiment or version check that would confirm it. If the cycles fit none of the classes, say so and list what was measured; do not force a match.
+
+standby_nic_in_d3_soc_blocked:
+  name: "Standby NIC In D3 But SoC Blocked (LTR / Paging / FW Awake)"
+  description: "Used when the driver log shows the Wi-Fi device asleep in D3 for the whole Modern Standby session, or idle while connected, and HW DRIPS, SLP_S0, S0ix or PC10 residency is still low with Wi-Fi blamed: separates firmware holding a low LTR or staying awake inside D3 from Bluetooth, CSME, PMC or BIOS causes, and says which platform capture is needed."
+  keywords:
+    - "SUSPEND FLOW FINISHED"
+    - "RESUME FLOW STARTED"
+    - "OS issued D0 Entry"
+    - "OS issued D0 Exit"
+    - "LTR_MNG_CLIENT_DSM_PAGING"
+    - "DSM_CLIENT_GMPD_MANAGER"
+    - "dsmClientsBitmap"
+    - "mpmHandleEvSetupConfigureLTR"
+    - "Soc latency"
+    - "socLatency"
+    - "powerSavePreventByTask"
+    - "prvMpmSendDevicePowerCommand"
+    - "utilDbgAssert"
+    - "MISSED_BEACON"
+    - "CONNECTED - to"
+    - "drvKeyId"
+  exclusive:
+    - "mhiffBuildRfiCnfCmd"
+  expert_rules: |
+    Goal: when the host driver log is clean, it cannot show why the SoC did not reach its deepest state. Say that plainly, use the few host-visible hints that exist, and route the case with the platform numbers given in the question. Always cite timestamps and the exact log text.
+
+    1. Confirm the premise. Show one "SUSPEND FLOW FINISHED" to "RESUME FLOW STARTED" gap (or D0 Exit to D0 Entry) covering the session, with no assert and no extra resume. If there are extra resumes, this is not the right skill: use DRIPS Blame Triage.
+
+    2. Read the shape of the platform numbers (Sleep Study or SocWatch, as given).
+       - HW DRIPS equal to SW DRIPS: no hardware is limiting SLP_S0; the cause is software activity. In WIFI-405132 the disk and NVMe D0 time moved with the NIC's, and the system engineers did not suspect Wi-Fi.
+       - HW DRIPS far below SW DRIPS, or PC10 high (about 98%) with SLP_S0 near 0: the CPU side is fine and a PCH resource is held. Candidates, each with its discriminator:
+           Wi-Fi firmware awake inside D3: the WLAN rail draws hundreds of mW while the host log shows one unbroken D3. WIFI-26911: a calibration (mPAPD) kept running in D3, 200-250 mW, HW DRIPS under 50%; proven with an assert-on-prevent firmware whose backtrace showed "powerSavePreventByTask (taskId=PS_PREVENT_SLEEP_TASK_ID_CALIB_MPAPD)".
+           Wi-Fi firmware writing LTR to the host during D3: SLP_S0 near 0 or the platform waking every 10-15 s with a clean driver log (WIFI-35848, WIFI-55334; function ltrDropShortLtrSignalWA, register HPM_LMAC2_LTR; later firmware disables host LTR on D3 entry).
+           Bluetooth, not Wi-Fi: the active resource is CNVi-PLL and airplane mode clears it (WIFI-37010, fixed by Bluetooth driver 21.80); or SLP_S0 is 0 only with Wi-Fi on and Bluetooth disabled, because disabling Bluetooth does not power down its core (WIFI-364941, platform limitation).
+           PMC / SoC bug: PC10 about 98% but SLP_S0 about 0 only while Wi-Fi is unassociated, passing when connected and in airplane mode, hidden by RfimEnabled = 0 (WIFI-326592 family, fixed in IFWI plus a firmware timer workaround).
+           CSME on a corporate system: SocWatch "CSME-LF" active % equal to "CNVI-0" (Wi-Fi Core requesting power) %, consumer SKU passing (WIFI-405132, suspected).
+       - PC10 at 0 with the package parked in PC2 (about 80%) and the Wi-Fi LTR constant near 102.4 us: the firmware is holding its paging LTR. In the firmware trace the healthy pattern is DSM_CLIENT_GMPD_MANAGER registering as a paging client for about 25 ms per calibration (LTR_MNG_CLIENT_DSM_PAGING) and releasing; the stuck pattern is "dsmClientsBitmap 0x800" never clearing. Seen unassociated after a cold boot (WIFI-417459, WIFI-422775, driver 23.65) and after a bandwidth change while connected at 160 MHz (WIFI-968204, fixed in 24.90.0.3). Owner: Wi-Fi firmware.
+       - Residency good, then bad from one timestamp on and never recovering: find the event at that time. An AP channel or width change (a channel switch started and then cancelled, a DFS CAC ending) left "prevent power save" set in firmware in WIFI-972644 (0.6 mW before, about 200 mW after; fix planned for 24.110). Quote the "CONNECTED - to" lines with channel and band around that time.
+
+    3. Host-visible hints worth quoting when present.
+       - "mpmSendSocConfigCmdAPI ... Soc latency = 0" on an integrated platform, with missed beacons only in D3: the driver sent the wrong SoC latency, the firmware woke about 400 us late for every beacon (WIFI-128855: 82-87 mW instead of 2.7 mW; 12 ms was expected). Owner: Wi-Fi driver.
+       - "utilDbgAssert ... FATAL_ERROR ... tag: 0x1FD7" in prvUtilCalcCenterFrequency80MHzOnHB repeating on a system with WWAN: the WWAN driver reported a wrong Wi-Fi safe range (WIFI-355296). Owner: WWAN driver.
+       - "prvMpmSendDevicePowerCommand" with "is CAM mode = TRUE" or Flags = 0x0000 while connected on AC: power save was not configured; on AC in maximum performance the NIC stays in listen state and its LTR blocks S0ix by design (WIFI-795713, WIFI-407124). Not a defect; repeat on DC or with Wi-Fi power index 2.
+       - "mpmHandleEvSetupConfigureLTR" lines: report them as configuration facts.
+
+    4. Cautions from the threads.
+       - A Wi-Fi-clean SocWatch (LTR no requirement about 100%, D3 above 95%, L1.2 about 100%) does not clear the NIC when a NIC swap on the same platform fixes it: those tables are sampled. WIFI-333717 was first judged not Wi-Fi and turned out to be forced PCIe L0 on TX while in D3.
+       - "Disabling Wi-Fi makes it go away" is not proof either: in WIFI-25093 the WLAN was in D3 in both runs and the difference was package C3 with the NVMe link in L0.
+       - Get a no-NIC baseline on a new platform (WIFI-346128: already about 7% without any NIC).
+
+    5. Verdict: state that the host log shows D3 held, which shape the platform numbers have, the candidate classes that remain with their owners, and the capture that would decide: SocWatch with "-f pcie-ltr" and "-f device" (per-device D-state histogram), the Wi-Fi off / Bluetooth off / airplane-mode matrix, associated versus unassociated, a NIC swap, or a firmware trace. Name Wi-Fi firmware as owner only when a firmware-side signature above is actually present.

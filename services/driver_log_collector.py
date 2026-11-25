@@ -124,7 +124,8 @@ def collect_wifi_driver_log(out_dir: str, *, source_dir: Optional[str] = None,
     os.makedirs(capture, exist_ok=True)
     copied = []
     for path in files:
-        suffix = _SESSION_FILE.match(os.path.basename(path)).group(1)
+        # Lower case: the analysis finds the copies by a case-sensitive ".etl".
+        suffix = _SESSION_FILE.match(os.path.basename(path)).group(1).lower()
         dest = os.path.join(capture, COPY_STEM + suffix)
         try:
             shutil.copy2(path, dest)

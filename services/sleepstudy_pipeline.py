@@ -411,6 +411,9 @@ _DECODED_ETL_LOG = re.compile(r"\.etl(?:\.\d+)?\.log$", re.IGNORECASE)
 # Indexed under this key instead of a device: an ETL has no time span until
 # it is decoded, so it is a candidate to decode, not a log to cut.
 RAW_ETL_KEY = "wifi_etl_raw"
+# The ETLs a run could not decode, {path: (segment, why)}: not tried again,
+# and the reason is given to every later point they might have held.
+FAILED_ETL_KEY = "wifi_etl_failed"
 
 
 def _is_wifi_driver_etl(name: str) -> bool:
@@ -2202,6 +2205,10 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
         raw_etls = index.get(RAW_ETL_KEY, []) if p.device == ssa.DEVICE_WIFI else []
         candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, *span)
                       if raw_etls else [])
+        failed = index.get(FAILED_ETL_KEY, {}) if p.device == ssa.DEVICE_WIFI else {}
+        if not reaches(hits) and failed:
+            decode_errors += [failed[s.path][1] for s in etl_candidates(
+                [seg for seg, _ in failed.values()], p.window_start, p.window_end, *span)]
         if not reaches(hits) and candidates:
             for etl in candidates[:MAX_ETL_DECODES]:
                 name = os.path.basename(etl.path)
@@ -2211,11 +2218,14 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                 index[RAW_ETL_KEY] = [s for s in index.get(RAW_ETL_KEY, []) if s.path != etl.path]
                 if not log_path:
                     decode_errors.append(error)
+                    index.setdefault(FAILED_ETL_KEY, {})[etl.path] = (etl, error)
                     yield {"type": "step", "content": f"⚠️ {error}"}
                     continue
                 seg = _decoded_log_segment(log_path, alone=False)
                 if seg is None:
-                    decode_errors.append(f"{name}: the decoded log has no timestamp this tool can read.")
+                    error = f"{name}: the decoded log has no timestamp this tool can read."
+                    decode_errors.append(error)
+                    index.setdefault(FAILED_ETL_KEY, {})[etl.path] = (etl, error)
                     continue
                 index.setdefault(ssa.DEVICE_WIFI, []).append(seg)
                 segments = index[ssa.DEVICE_WIFI]
@@ -2392,9 +2402,10 @@ def apply_override(p: TimePoint, override: dict) -> None:
         the report and every log comparison use). Naive times are refused:
         guessing their zone is how a log lines up with the wrong session.
       only an issue time -- the window is ISSUE_TIME_BEFORE to
-        ISSUE_TIME_AFTER around it, kept inside the report's window
+        ISSUE_TIME_AFTER around it, kept inside the session
       question -- added to the point's question to the agent
-    Raises ValueError for a time without a zone or a window that ends first.
+    Raises ValueError for a time without a zone, a window that ends first or
+    an issue time outside its session.
     """
     def local(value):
         if value is None:
@@ -2410,8 +2421,15 @@ def apply_override(p: TimePoint, override: dict) -> None:
     at = local(override.get("issue_time"))
     if lo is None and hi is None and at is not None:
         lo, hi = at - ISSUE_TIME_BEFORE, at + ISSUE_TIME_AFTER
-        if p.window_start is not None and p.window_end is not None:
-            lo, hi = max(lo, p.window_start), min(hi, p.window_end)
+        # Inside the session itself, not its report window: that one is capped
+        # at WINDOW_CAP, short of a time late in a long standby.
+        if p.start is not None:
+            lo = max(lo, p.start)
+        if p.end is not None:
+            hi = min(hi, p.end)
+        if hi <= lo:
+            raise ValueError(f"session {p.session_id}: the issue time {_fmt(at)} is outside the session "
+                             f"({_fmt(p.start)} → {_fmt(p.end)})")
     if (lo is None) != (hi is None):
         raise ValueError(f"session {p.session_id}: give both window_start and window_end")
     if lo is not None:

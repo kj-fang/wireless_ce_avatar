@@ -46,8 +46,11 @@ DRIVER_FAMILIES = {"wi-fi": "wifi", "wifi": "wifi", "wlan": "wifi", "bluetooth":
 
 def make_job(report: str = "", logs: str = "", sessions: Optional[list] = None, case_id: str = "",
              collect: bool = False, dry_run: bool = False) -> dict:
-    return {"schema_version": "1.1", "case_id": case_id, "report": report,
-            "driver_logs": [logs] if logs else [], "sessions": sessions or [],
+    # Paths are made absolute here, against the caller's folder: from a
+    # checkout the child process runs in the repository folder instead.
+    return {"schema_version": "1.1", "case_id": case_id,
+            "report": os.path.abspath(report) if report else "",
+            "driver_logs": [os.path.abspath(logs)] if logs else [], "sessions": sessions or [],
             "options": {"collect": collect, "dry_run": dry_run}}
 
 
@@ -69,7 +72,7 @@ def run_analysis(job: dict, out_dir: Optional[str] = None,
     """Run the command line on `job` in a child process; its result.json (written
     even when the job fails), plus _exit_code and _out_dir."""
     from services import sleepstudy_cli as cli
-    out_dir = out_dir or cli.default_out_dir()
+    out_dir = os.path.abspath(out_dir or cli.default_out_dir())
     os.makedirs(out_dir, exist_ok=True)
     job_path = os.path.join(out_dir, "job.json")
     with open(job_path, "w", encoding="utf-8") as fh:
@@ -359,8 +362,19 @@ def serve_stdio(stdin=None, stdout=None) -> None:
 
 # ── Command line ──────────────────────────────────────────────────────────────
 
+def _utf8_streams() -> None:
+    """Streams another program reads or writes are in the ANSI code page on
+    Windows unless set: MCP is UTF-8, and progress carries arrows and emoji."""
+    for stream, errors in ((sys.stdin, None), (sys.stdout, "replace"), (sys.stderr, "replace")):
+        try:
+            stream.reconfigure(encoding="utf-8", errors=errors)
+        except (AttributeError, ValueError):
+            pass
+
+
 def main(argv: list) -> int:
     import argparse
+    _utf8_streams()
     ap = argparse.ArgumentParser(prog="sleepstudy-bridge", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)

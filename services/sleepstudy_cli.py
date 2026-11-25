@@ -19,7 +19,7 @@ person. --no-elevate fails with E_NOT_ADMIN instead (unattended runs).
 
 The simplest use, on the machine that slept:
     IntelAvatar.exe sleepstudy-analyze --collect --open
-(--out defaults to %USERPROFILE%\\SleepStudyDriverAnalysis\\<date_time>;
+(--out defaults to %USERPROFILE%\\SleepStudyDriverAnalysis\\<date_time>_<id>;
 --open shows report.html when done.)
 
     (in a checkout: python -m services.sleepstudy_cli <same arguments>)
@@ -533,9 +533,10 @@ def write_outputs(out_dir: str, result: dict, markdown: str) -> None:
 
 
 def default_out_dir() -> str:
-    """Where results go without --out: a new dated folder under the user's profile."""
+    """Where results go without --out: a new dated folder under the user's
+    profile, with a random suffix so runs started in the same second stay apart."""
     return os.path.join(os.path.expanduser("~"), "SleepStudyDriverAnalysis",
-                        datetime.now().strftime("%Y%m%d_%H%M%S"))
+                        f"{datetime.now():%Y%m%d_%H%M%S}_{os.urandom(3).hex()}")
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
@@ -698,7 +699,7 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--report", help="Sleep Study report: .html, or .xml (powercfg /sleepstudy /xml, MCS Analyzer)")
     ap.add_argument("--logs", help="capture folder or driver log (WiFiLog, WifiDriver*.etl, *.hci.txt)")
     ap.add_argument("--out", help="output folder (result.json, report.md/.html, excerpts/); "
-                                  "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>")
+                                  "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>_<id>")
     ap.add_argument("--session-id", action="append", help="session to analyse (repeatable)")
     ap.add_argument("--issue-time", help="ISO 8601 with offset")
     ap.add_argument("--window-start", help="ISO 8601 with offset")
@@ -763,7 +764,7 @@ def _collect_main(argv, out) -> int:
         prog="sleepstudy-collect",
         description="Collect the Intel Wi-Fi driver log from this machine (step 1 of 2; "
                     "analyse it with sleepstudy-analyze --logs).")
-    ap.add_argument("--out", help="output folder; default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>")
+    ap.add_argument("--out", help="output folder; default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>_<id>")
     ap.add_argument("--with-report", action="store_true",
                     help="also make a Sleep Study report here (powercfg /sleepstudy, HTML)")
     ap.add_argument("--no-elevate", action="store_true",

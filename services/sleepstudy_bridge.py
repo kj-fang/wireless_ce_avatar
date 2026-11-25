@@ -367,7 +367,7 @@ def main(argv: list) -> int:
     sub.add_parser("mcp", help="serve the analysis as an MCP tool over stdio")
     m = sub.add_parser("from-mcs", help="analyse the Wi-Fi/BT sessions of MCS Analyzer's etl-trace-request")
     m.add_argument("request", help="MCS Analyzer's <basename>-etl-trace-request-<date>.json")
-    m.add_argument("--report", default="", help="the Sleep Study report MCS Analyzer read")
+    m.add_argument("--report", default="", help="the Sleep Study report MCS Analyzer read (.html or .xml)")
     m.add_argument("--logs", default="", help="driver log capture folder")
     m.add_argument("--collect", action="store_true", help="collect the Intel Wi-Fi driver log from this machine")
     m.add_argument("--question", default="")

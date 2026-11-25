@@ -166,8 +166,12 @@ SLEEPSTUDY_SYSTEM_PROMPT = (
 def load_sleepstudy(html_path: str) -> dict:
     """
     Extract the embedded JSON payload from a Windows Sleep Study HTML report.
-    Returns the parsed LocalSprData dictionary.
+    Returns the parsed LocalSprData dictionary. An XML report
+    (powercfg /sleepstudy /xml) is read into the same shape.
     """
+    from services import sleepstudy_xml
+    if sleepstudy_xml.is_sleepstudy_xml(html_path):
+        return sleepstudy_xml.load_sleepstudy_xml(html_path)
     with open(html_path, "r", encoding="utf-8", errors="replace") as fh:
         raw = fh.read()
 

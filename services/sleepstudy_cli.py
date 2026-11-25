@@ -24,6 +24,9 @@ The simplest use, on the machine that slept:
 
     (in a checkout: python -m services.sleepstudy_cli <same arguments>)
 
+--report takes the HTML report or the XML one (powercfg /sleepstudy /xml, as
+MCS Analyzer generates it); both are read into the same data.
+
 Options for the first form:
     --session-id ID     analyse this session (repeatable); default: the worst
                         bad wireless sessions, as the NW page lists them
@@ -650,7 +653,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sleepstudy-analyze",
         description="Sleep Study -> Wi-Fi / Bluetooth driver log analysis (JSON in, JSON out).")
     ap.add_argument("--input", help="job file (JSON); replaces --report/--logs/--session-id")
-    ap.add_argument("--report", help="Sleep Study HTML report")
+    ap.add_argument("--report", help="Sleep Study report: .html, or .xml (powercfg /sleepstudy /xml, MCS Analyzer)")
     ap.add_argument("--logs", help="capture folder or driver log (WiFiLog, WifiDriver*.etl, *.hci.txt)")
     ap.add_argument("--out", help="output folder (result.json, report.md/.html, excerpts/); "
                                   "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>")

@@ -909,6 +909,82 @@
     }
     .has-sleepstudy .ss-coverage-warning { margin-top: 4px; color: #9a5a2b; font-size: 0.65rem; }
 
+    /* Time zone: every time is on the customer's clock (the report's). A log
+       stamped in another clock shows its converted span prominently and its
+       own times beneath it. */
+    .has-sleepstudy .ss-tz-tag {
+        display: inline-block;
+        margin-left: 4px;
+        padding: 1px 6px;
+        border-radius: 10px;
+        background: #e8f1fb;
+        color: #2f6496;
+        font-size: 0.58rem;
+        font-style: normal;
+        font-weight: 650;
+        vertical-align: 1px;
+        /* One line wherever it fits; never wider than its column, so a very
+           narrow window wraps the tag instead of running out of the box. */
+        max-width: 100%;
+        box-sizing: border-box;
+        white-space: normal;
+        overflow-wrap: anywhere;
+        line-height: 1.3;
+    }
+    .has-sleepstudy .ss-tz-tag.muted { background: #eef2f5; color: #6b7a8c; font-weight: 600; }
+    .has-sleepstudy .ss-tz-tag.customer { background: #0879bd; color: #fff; }
+    .has-sleepstudy .ss-plan-session-meta .ss-tz-tag { margin-left: 0; }
+    .has-sleepstudy .ss-coverage-entry.shifted {
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+        border-left-color: #0879bd;
+        background: #f2f8fd;
+        /* Lets the rows below follow the box's own width, not the window's. */
+        container-type: inline-size;
+    }
+    /* One row per clock, the zone tag first: the tag column takes the width
+       of the longer tag, so the customer's times and the log's own line up
+       under each other without cutting either tag. */
+    .has-sleepstudy .ss-tz-grid {
+        display: grid;
+        grid-template-columns: max-content minmax(0, 1fr);
+        align-items: center;
+        gap: 4px 8px;
+        font-variant-numeric: tabular-nums;
+    }
+    .has-sleepstudy .ss-tz-grid .ss-tz-tag { margin-left: 0; text-align: center; }
+    .has-sleepstudy .ss-tz-time { overflow-wrap: anywhere; }
+    /* Each end of a span stays whole; a narrow box breaks at the arrow. */
+    .has-sleepstudy .ss-tz-span { white-space: nowrap; }
+    /* A narrow box: each zone tag goes above its times instead of beside. */
+    @container (max-width: 330px) {
+        .has-sleepstudy .ss-tz-grid { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
+        .has-sleepstudy .ss-tz-grid .ss-tz-tag { justify-self: start; }
+        .has-sleepstudy .ss-tz-grid .ss-tz-time.now { margin-bottom: 3px; }
+    }
+    .has-sleepstudy .ss-tz-time.now { color: #0b4f80; font-size: 0.74rem; font-weight: 700; }
+    .has-sleepstudy .ss-tz-time.was { color: #7a8899; font-size: 0.66rem; }
+    .has-sleepstudy .ss-tz-time .ss-tz-shift { margin-left: 6px; }
+    .has-sleepstudy .ss-tz-time .ss-tz-shift { display: inline-block; white-space: nowrap; }
+    .has-sleepstudy .ss-tz-tag[title] { cursor: help; }
+    .has-sleepstudy .ss-tz-tag.log {
+        background: transparent;
+        border: 1px solid #c9d6e3;
+        color: #6b7a8c;
+        font-weight: 600;
+    }
+    .has-sleepstudy .ss-tz-shift {
+        padding: 0 5px;
+        border-radius: 8px;
+        background: #fff3d9;
+        color: #97520d;
+        font-size: 0.6rem;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+    .has-sleepstudy .ss-coverage-entry.shifted small { margin-top: 1px; }
+
     .has-sleepstudy .ss-point-card {
         padding: 16px;
         border: 1px solid #dfe8f0;

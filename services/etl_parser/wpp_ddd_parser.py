@@ -18,6 +18,7 @@ import os
 import sys
 import datetime
 import shutil
+import threading
 from pathlib import Path
 import subprocess
 import json
@@ -42,6 +43,15 @@ def emit_and_log(msg):
 
 class WppParserError(Exception):
     """Raised when the WPP/DDD parser cannot continue."""
+
+
+#: Held for the whole of one decode. A parser chdir()s the process into its
+#: workspace and then copies, extracts and runs tracefmt with relative paths,
+#: so two decodes at once (two web requests, a SendTo job, a Sleep Study
+#: point) would read and write each other's workspace. Every entry point
+#: takes this lock: wpp_ddd_parser_run() below, and callers that drive a
+#: parser themselves (services/sleepstudy_pipeline.decode_wifi_etl).
+DECODE_LOCK = threading.RLock()
 
 def emit_error(msg, *, fatal=False):
     # send parser errors to the frontend without killing the worker process
@@ -866,9 +876,19 @@ def wpp_ddd_parser_run(binary_path: str, is_use_custom_filter=False, is_add_trac
                         break
                     if ".log" not in Path(binary_file).suffixes:
                         try:
-                            parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
-                            # handler class is found - run the parser
-                            parse_single_binary(parser)
+                            # The parser works inside its own workspace via the
+                            # process-wide working directory: one at a time.
+                            with DECODE_LOCK:
+                                cwd = os.getcwd()
+                                try:
+                                    parser = handler(binary_file, is_use_custom_filter, is_add_tracefmt_format)
+                                    # handler class is found - run the parser
+                                    parse_single_binary(parser)
+                                finally:
+                                    try:
+                                        os.chdir(cwd)
+                                    except OSError:
+                                        pass
                         except WppParserError as e:
                             #log.exception(f"parser failed for {binary_file}")
                             errors.append(f"{binary_file}: {e}")

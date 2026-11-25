@@ -656,7 +656,8 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
     for event in sp.run_pipeline(job["report"], job["driver_log"], agent_factory=agent_factory,
                                  out_dir=os.path.join(out_dir, "excerpts"),
                                  point_template=point_template,
-                                 session_ids=wanted if job["sessions"] else None,
+                                 session_ids=([(s["session_id"], s["device"]) for s in job["sessions"]
+                                               if s["session_id"]] if job["sessions"] else None),
                                  overrides=overrides, caller_points=caller_points):
         kind = event["type"]
         if kind == "step":

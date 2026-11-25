@@ -2630,7 +2630,9 @@ def run_pipeline(
     `agent_factory=None` is a dry run: every step up to the agent runs.
 
     `session_ids` analyses those sessions only, chosen from every bad
-    wireless session rather than the worst `max_points`. `overrides` maps
+    wireless session rather than the worst `max_points`. An item is a
+    session id, or (session id, device) to take that device's point alone.
+    `overrides` maps
     (session id, device) -- device "" for every device of the session -- to
     what a caller sets for it (apply_override): a window and an issue time
     as timezone-aware datetimes, a question, evidence and a device id. An
@@ -2663,8 +2665,12 @@ def run_pipeline(
                                                       "drip_threshold_pct": drip_threshold}}
             points = []
         if session_ids is not None:
-            wanted = {str(s) for s in session_ids}
-            points = [p for p in points if str(p.session_id) in wanted]
+            wanted: dict = {}                 # session id -> the devices asked for ("": any)
+            for item in session_ids:
+                sid, device = item if isinstance(item, tuple) else (item, "")
+                wanted.setdefault(str(sid), set()).add(device or "")
+            points = [p for p in points if str(p.session_id) in wanted
+                      and wanted[str(p.session_id)] & {"", p.device}]
         # The report's points as selected, for a further window of the same session.
         selected = {(str(p.session_id), p.device): copy.deepcopy(p) for p in points}
         for p in points:

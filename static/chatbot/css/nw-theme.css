@@ -1,0 +1,53 @@
+:root {
+    --nw-theme: #f7d0cb;
+    --nw-theme-hover: #edb9b3;
+    --nw-theme-text: #502e33;
+}
+
+.top-bar,
+.report-header,
+.agent-process-header {
+    background: var(--nw-theme);
+    color: var(--nw-theme-text);
+}
+
+.top-bar .badge-model {
+    background: rgba(80, 46, 51, 0.1);
+}
+
+.top-bar .sidebar-toggle,
+.top-bar form button {
+    color: var(--nw-theme-text) !important;
+}
+
+.top-bar .sidebar-toggle:focus-visible,
+.top-bar form button:focus-visible {
+    outline: 2px solid var(--nw-theme-text);
+    outline-offset: 2px;
+}
+
+.btn-set-log,
+.btn-analyze-all,
+#send-btn:not(.stopping),
+.sb-tab.active,
+.cm-btn-primary,
+.prompt-doc-tab.active,
+.fbd-btn.primary,
+.msg-row.user .avatar-icon,
+.msg-row.user .msg-bubble {
+    background: var(--nw-theme);
+    color: var(--nw-theme-text);
+}
+
+.btn-set-log:hover,
+.btn-analyze-all:hover,
+#send-btn:not(.stopping):hover,
+.cm-btn-primary:hover,
+.fbd-btn.primary:hover {
+    background: var(--nw-theme-hover);
+}
+
+.report-download {
+    color: var(--nw-theme-text);
+    border-color: rgba(80, 46, 51, 0.45);
+}

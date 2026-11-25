@@ -9,8 +9,8 @@
             width: 30px; height: 30px; padding: 0; border: 0; border-radius: 4px;
             background: transparent; color: #64748b; cursor: pointer; flex: 0 0 30px;
         }
-        .key-log-button:hover { background: #eaf4ff; color: #0071c5; }
-        .key-log-button:focus-visible { outline: 2px solid #0071c5; outline-offset: 2px; }
+        .key-log-button:hover { background: var(--accent-hover); color: var(--accent); }
+        .key-log-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         .key-log-button svg { width: 17px; height: 17px; }
         .key-log-button:disabled { opacity: 0.4; cursor: default; }
         .key-log-restore-launcher {
@@ -21,7 +21,7 @@
         }
         .key-log-restore-action {
             width: auto; height: 32px; flex: 0 0 auto; gap: 7px; padding: 0 9px;
-            color: #005a9e; font-size: 0.75rem; font-weight: 600;
+            color: var(--accent-dark); font-size: 0.75rem; font-weight: 600;
         }
         .key-log-restore-action svg { width: 15px; height: 15px; }
         .key-log-modal {
@@ -83,10 +83,10 @@
             min-height: 28px; border-bottom: 1px solid #f0f2f4; line-height: 1.4;
             color: #2c2f33; cursor: grab; user-select: none;
         }
-        .key-log-filter-rule:hover { background: rgba(0, 113, 197, 0.05); }
+        .key-log-filter-rule:hover { background: rgba(var(--accent-rgb), 0.05); }
         .key-log-filter-rule.is-dragging { opacity: 0.45; cursor: grabbing; }
-        .key-log-filter-rule.drop-before { box-shadow: inset 0 2px #0071c5; }
-        .key-log-filter-rule.drop-after { box-shadow: inset 0 -2px #0071c5; }
+        .key-log-filter-rule.drop-before { box-shadow: inset 0 2px var(--accent); }
+        .key-log-filter-rule.drop-after { box-shadow: inset 0 -2px var(--accent); }
         .key-log-filter-mod {
             display: flex; align-items: center; gap: 8px; min-width: 0; padding: 1px 5px;
         }
@@ -132,9 +132,9 @@
             background: #fff; color: #475569; font-size: 0.72rem; font-weight: 600; cursor: pointer;
         }
         .key-log-filter-editor-cancel:hover { background: #f1f5f9; }
-        .key-log-filter-editor-buttons .key-log-filter-editor-submit { border-color: #0071c5; background: #0071c5; color: #fff; }
-        .key-log-filter-editor-buttons .key-log-filter-editor-submit:hover { border-color: #005a9e; background: #005a9e; }
-        .key-log-filter-editor-buttons button:focus-visible { outline: 2px solid #0071c5; outline-offset: 2px; }
+        .key-log-filter-editor-buttons .key-log-filter-editor-submit { border-color: var(--accent); background: var(--accent); color: #fff; }
+        .key-log-filter-editor-buttons .key-log-filter-editor-submit:hover { border-color: var(--accent-dark); background: var(--accent-dark); }
+        .key-log-filter-editor-buttons button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
         .key-log-state { padding: 2px 7px; border-radius: 4px; background: #fff3cd; color: #664d03; font-size: 0.68rem; font-weight: 500; }
         .key-log-state.success { background: #e8f5e9; color: #1b5e20; }
         .key-log-content {
@@ -155,6 +155,6 @@
         }
         .key-log-line-number { display: inline-block; position: sticky; left: 0; width: 64px; padding-right: 10px; text-align: right; color: #7a8088; background: #f4f6f8; font: inherit; user-select: none; }
         .key-log-line-text { font: inherit; }
-        .key-log-virtual-row.is-selected { box-shadow: inset 0 0 0 1px #0071c5; background: #ddecf8 !important; }
-        .key-log-virtual-row.is-active { outline: 1px solid #005a9e; outline-offset: -1px; }
-        .key-log-content:focus-visible { outline: 2px solid #0071c5; outline-offset: -2px; }
+        .key-log-virtual-row.is-selected { box-shadow: inset 0 0 0 1px var(--accent); background: var(--accent-soft) !important; }
+        .key-log-virtual-row.is-active { outline: 1px solid var(--accent-dark); outline-offset: -1px; }
+        .key-log-content:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }

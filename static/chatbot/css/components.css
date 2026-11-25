@@ -67,7 +67,7 @@
         z-index: 1;
         border-bottom: 1px solid #e5e7eb;
     }
-    .evt-inline-body tr:hover { background: #f0f7ff; }
+    .evt-inline-body tr:hover { background: var(--accent-hover); }
     .evt-inline-body tr { cursor: default; }
     .evt-inline-footer {
         font-size: 0.65rem;

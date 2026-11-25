@@ -48,20 +48,23 @@ jobs:
 
           if ($ref -match '^refs/heads/release/(\d+)\.(\d+)$') {
             # Scenarios 3 & 4: RELEASE build on release/X.Y branch
-            # PATCH = commits since the branch point with main (starts at 0 on branch cut,
-            # increments by 1 per hotfix). Avoids absorbing main's full commit history.
+            # A pv-X.Y-base tag marks the release setup commit as PATCH zero.
+            # Subsequent first-parent commits on this branch increment PATCH.
             $major     = $Matches[1]
             $minor     = $Matches[2]
             $gitBranch = "release/$major.$minor"
-            git fetch origin main --no-tags 2>$null
-            $mergeBase = git merge-base HEAD origin/main 2>$null
-            if ($LASTEXITCODE -ne 0 -or -not $mergeBase) {
-              # Fallback: merge-base unavailable (shallow clone)
-              Write-Host "::warning::Could not compute merge-base — falling back to global commit count"
-              $patchCount = git rev-list --count HEAD
-            } else {
-              $patchCount = git rev-list --count "${mergeBase}..HEAD"
+            $releaseBaseTag = "pv-$major.$minor-base"
+            $releaseBase = git rev-parse "${releaseBaseTag}^{commit}" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $releaseBase) {
+              Write-Host "::error::Required release baseline tag $releaseBaseTag is missing"
+              exit 1
             }
+            git merge-base --is-ancestor $releaseBase HEAD 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "::error::Release baseline tag $releaseBaseTag is not an ancestor of HEAD"
+              exit 1
+            }
+            $patchCount = git rev-list --first-parent --count "${releaseBase}..HEAD"
             $version   = "$major.$minor.$patchCount"
             $buildType = "RELEASE"
           } else {
@@ -169,6 +172,7 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           tag_name: v${{ steps.version.outputs.VERSION }}
+          target_commitish: ${{ github.sha }}
           name: IntelAvatar v${{ steps.version.outputs.VERSION }}
           prerelease: false
           body: |

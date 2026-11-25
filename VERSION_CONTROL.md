@@ -67,18 +67,23 @@ The SHA identifies the exact source commit. These builds are posted to the pull 
 To start PV `2.0` and move main forward:
 
 1. Open a PR changing `configs/version_line.json` to `main_major: 102`, `main_minor: 0`, and `next_pv_release: "2.0"`. Merge it to main; that commit builds as `102.0.0`.
-2. Create and push `release/2.0` from that exact main commit:
+2. Create `release/2.0` from the exact squash-merge commit on `main` that established `102.0.0`. Use that commit's SHA, not the original PR commit or a later `main` tip:
 
    ```powershell
    git fetch origin --prune
-   git switch main
-   git pull origin main
+   git switch --detach <102.0.0-main-sha>
    git switch -c release/2.0
+   ```
+3. Commit any release-specific workflow setup on the branch, then mark that commit as the patch-zero baseline and push the tag and branch:
+
+   ```powershell
+   git tag pv-2.0-base
+   git push origin pv-2.0-base
    git push -u origin release/2.0
    ```
-3. The release workflow publishes `v2.0.0`. Creating `release/2.0` also opens a PR advancing main to `102.1` and setting the next PV line to `2.1`.
-4. Review and merge that version-bump PR. Its config-changing commit is the new `.0` baseline and builds as `102.1.0`.
-5. Merge the next PR to main; it builds as `102.1.1`. Use squash merge or a single merge commit so each PR adds one first-parent commit.
+4. The release workflow publishes `v2.0.0` at the release-branch commit. Creating `release/2.0` also opens a PR advancing main to `102.1` and setting the next PV line to `2.1`.
+5. Review and merge that version-bump PR. Its config-changing commit is the new `.0` baseline and builds as `102.1.0`.
+6. Merge the next PR to main; it builds as `102.1.1`. Use squash merge or a single merge commit so each PR adds one first-parent commit.
 
 For the generated version-bump PR to run `build.yml` automatically, configure the repository secret `VERSION_BOT_TOKEN` with a GitHub App or fine-grained token that can write contents and pull requests. Without it, the workflow falls back to `GITHUB_TOKEN`, which may not trigger follow-up workflow runs.
 

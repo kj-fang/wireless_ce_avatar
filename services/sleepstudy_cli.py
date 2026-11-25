@@ -5,7 +5,14 @@ History or Avatar sign-in.
 
     IntelAvatar.exe sleepstudy-analyze --report <sleepstudy.html> --logs <capture folder>
                                        --out <output folder> [options]
+    IntelAvatar.exe sleepstudy-analyze --collect [--report <sleepstudy.html>] --out <dir> [options]
     IntelAvatar.exe sleepstudy-analyze --input <job.json> --out <output folder>
+
+--collect takes the Intel Wi-Fi driver log from this machine instead of
+--logs (services/driver_log_collector.py): it flushes and copies the
+driver's always-on autologger (WiFiDriverIHVSession) into <out>/capture,
+then analyses it. Run it from an administrator prompt soon after the
+standby; without --report it also runs powercfg /sleepstudy.
 
     (in a checkout: python -m services.sleepstudy_cli <same arguments>)
 
@@ -33,8 +40,9 @@ A job file carries the same, for any number of sessions:
          "window_start": "...", "window_end": "...",
          "issue_description": "Why did Wi-Fi stay in D0?"}
       ],
-      "options": {"dry_run": false}
+      "options": {"dry_run": false, "collect": false}
     }
+    ("collect": true replaces "driver_logs" and makes "report" optional.)
 
 Output, in --out:
     result.json   the contract below (SCHEMA_VERSION), for programs
@@ -45,6 +53,8 @@ Exit code says whether the job ran, not what each session found:
     0  ran; each session's outcome is in result.json (status / code)
     1  unexpected failure          2  invalid input (E_INPUT_INVALID)
     3  report unreadable           4  no LLM configured (E_AGENT_CONFIG)
+    5  --collect failed: E_NOT_ADMIN, E_DRIVER_TRACE_NOT_RUNNING,
+       E_DRIVER_LOG_COPY_FAILED, E_SLEEPSTUDY_FAILED
 result.json is written in every case the output folder can be created.
 """
 from __future__ import annotations
@@ -60,7 +70,7 @@ from typing import Optional
 SCHEMA_VERSION = "1.0"
 TOOL_VERSION = "0.1.0"
 
-EXIT_OK, EXIT_ERROR, EXIT_INPUT, EXIT_REPORT, EXIT_AGENT = 0, 1, 2, 3, 4
+EXIT_OK, EXIT_ERROR, EXIT_INPUT, EXIT_REPORT, EXIT_AGENT, EXIT_COLLECT = 0, 1, 2, 3, 4, 5
 
 # Per session: (status, code) for each outcome of the pipeline. A missing
 # log, a log without the window, a failed decode and a finished analysis are
@@ -116,9 +126,12 @@ def job_from_args(args) -> dict:
             raise JobError("E_INPUT_INVALID", "--input: the job file must hold a JSON object", EXIT_INPUT)
         if args.dry_run:
             job.setdefault("options", {})["dry_run"] = True
+        if args.collect:
+            job.setdefault("options", {})["collect"] = True
         return job
-    if not args.report:
-        raise JobError("E_INPUT_INVALID", "give --input <job.json>, or --report and --logs", EXIT_INPUT)
+    if not args.report and not args.collect:
+        raise JobError("E_INPUT_INVALID",
+                       "give --input <job.json>, or --report with --logs, or --collect", EXIT_INPUT)
     timing = any((args.issue_time, args.window_start, args.window_end, args.question))
     if timing and len(args.session_id or []) != 1:
         raise JobError("E_INPUT_INVALID",
@@ -128,9 +141,9 @@ def job_from_args(args) -> dict:
     if timing:
         sessions[0].update({"issue_time": args.issue_time, "window_start": args.window_start,
                             "window_end": args.window_end, "issue_description": args.question})
-    return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report,
+    return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report or "",
             "driver_logs": [args.logs] if args.logs else [], "sessions": sessions,
-            "options": {"dry_run": bool(args.dry_run)}}
+            "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect)}}
 
 
 def validate(job: dict) -> dict:
@@ -140,13 +153,19 @@ def validate(job: dict) -> dict:
         raise JobError("E_INPUT_INVALID",
                        f"schema_version {version} is not supported (this tool reads {SCHEMA_VERSION})",
                        EXIT_INPUT)
+    options = job.get("options") or {}
+    collect = bool(options.get("collect"))
     report = str(job.get("report") or "").strip()
-    if not report or not os.path.isfile(report):
+    # With collect, a missing report is made on the spot (powercfg /sleepstudy).
+    if (report or not collect) and not os.path.isfile(report):
         raise JobError("E_INPUT_INVALID", f"report not found: {report!r}", EXIT_INPUT)
     logs = job.get("driver_logs") or []
     if isinstance(logs, str):
         logs = [logs]
     logs = [str(p).strip() for p in logs if str(p).strip()]
+    if collect and logs:
+        raise JobError("E_INPUT_INVALID",
+                       "collect takes the driver log from this machine; drop driver_logs / --logs", EXIT_INPUT)
     if len(logs) > 1:
         raise JobError("E_INPUT_INVALID",
                        "driver_logs: this version takes one capture folder (or log file) per job",
@@ -165,10 +184,30 @@ def validate(job: dict) -> dict:
             "window_end": parse_time(s.get("window_end"), f"sessions[{i}].window_end"),
             "question": str(s.get("issue_description") or "").strip(),
         })
-    options = job.get("options") or {}
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
-            "dry_run": bool(options.get("dry_run"))}
+            "dry_run": bool(options.get("dry_run")), "collect": collect, "collection": None}
+
+
+def collect(job: dict, out_dir: str, log=print) -> dict:
+    """--collect: the report (made with powercfg when not given) and this
+    machine's Intel Wi-Fi driver log, put into the job. JobError (exit 5)."""
+    from services import driver_log_collector as dlc
+
+    try:
+        if not job["report"]:
+            log("No report given: running powercfg /sleepstudy…")
+            job["report"] = dlc.generate_sleepstudy(out_dir)
+        log(f"Collecting the Wi-Fi driver log ({dlc.DRIVER_SESSION} autologger)…")
+        info = dlc.collect_wifi_driver_log(out_dir)
+    except dlc.CollectError as exc:
+        raise JobError(exc.code, exc.message, EXIT_COLLECT)
+    for warning in info["warnings"]:
+        log(f"⚠ {warning}")
+    log(f"Collected {len(info['files'])} file(s) into {info['capture_dir']}")
+    job["driver_log"] = info["capture_dir"]
+    job["collection"] = info
+    return job
 
 
 # ── Agents ─────────────────────────────────────────────────────────────────────
@@ -346,6 +385,7 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
         "dry_run": job["dry_run"],
         "report": job["report"],
         "driver_log": job["driver_log"],
+        "collection": job.get("collection"),
         "bad_sessions": {"total": system["bad_total"], "wireless": system["wireless"],
                          "system": system["system"],
                          "system_blockers": [{"blocker": g["blocker"], "sessions": g["sessions"],
@@ -381,6 +421,9 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--question", help="the caller's focus for the agent")
     ap.add_argument("--case-id", help="echoed in result.json")
     ap.add_argument("--dry-run", action="store_true", help="stop before the LLM")
+    ap.add_argument("--collect", action="store_true",
+                    help="take the Intel Wi-Fi driver log from this machine (administrator prompt); "
+                         "replaces --logs, and makes --report optional")
     ap.add_argument("--version", action="version",
                     version=f"sleepstudy-analyze {TOOL_VERSION} (schema {SCHEMA_VERSION})")
     return ap
@@ -398,6 +441,9 @@ def main(argv=None) -> int:
     try:
         job = validate(job_from_args(args))
         case_id = job["case_id"]
+        progress = lambda m: print(f"[sleepstudy] {m}", flush=True)
+        if job["collect"]:
+            collect(job, out_dir, log=progress)
         factory = template = None
         if not job["dry_run"]:
             factory, template = load_agents()

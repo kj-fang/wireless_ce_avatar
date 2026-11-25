@@ -6,6 +6,12 @@ import os
 import sys
 import webbrowser
 
+# `IntelAvatar.exe sleepstudy-bridge mcp` serves MCP over stdio, where stdout
+# is the protocol channel: it starts before anything below prints to it.
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "sleepstudy-bridge":
+    from services.sleepstudy_bridge import main as _sleepstudy_bridge
+    sys.exit(_sleepstudy_bridge(sys.argv[2:]))
+
 # Force UTF-8 stdout/stderr so emoji print() calls don't crash on Windows
 # cp1252 consoles (this is undone by cachelib/flask-session locale init).
 if hasattr(sys.stdout, 'reconfigure'):

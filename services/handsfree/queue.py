@@ -653,6 +653,12 @@ class HandsfreeStore:
             "confidence": confidence,
             "draft_plain": draft_plain,
             "draft_html": draft_html,
+            # What Beacon SUGGESTED, kept as it was generated: draft_plain is
+            # rewritten by the reviewer's edits and by what finally posts, and
+            # usage tracking compares the two (gather_service.record_handsfree_post)
+            # to learn which parts reviewers really pass on.
+            "suggested_plain": draft_plain,
+            "suggested_source": "enqueue",
             "post_result": None,
             "shared_log_path": shared_log_path,
             "analysis": analysis,              # full CaseAnalysis dump for the UI
@@ -729,6 +735,12 @@ class HandsfreeStore:
             status = fields.get("status")
             if status is not None and status not in VALID_STATUSES:
                 raise ValueError(f"invalid status: {status}")
+            if "draft_plain" in fields and "suggested_plain" not in rec:
+                # A draft queued before suggestions were kept: the text it
+                # holds right before its first change is the best original
+                # there is (it may already carry edits - hence the source).
+                rec["suggested_plain"] = rec.get("draft_plain") or ""
+                rec["suggested_source"] = "first_edit"
             rec.update(fields)
             rec["updated_at"] = _now_iso()
             p = self.queue_dir / f"{draft_id}.json"

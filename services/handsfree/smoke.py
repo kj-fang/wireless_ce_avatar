@@ -5926,8 +5926,264 @@ def smoke_session_renewal_identity(tmp: Path) -> None:
     store.release_case("01090001")
 
 
+# ---------------------------------------------------------------- S32
+def smoke_post_tracking(tmp: Path) -> None:
+    print("[S32] Usage tracking: every Beacon post is recorded with the page it came from, the text "
+          "Beacon suggested and the text that was posted")
+    import os as _os
+    from services import gather_service as gather
+    from . import orchestrator as orch
+    from . import outlook_source as ol
+    from . import ui_commenter as uic
+    from .composer import AI_MARKER, ECHO_SECTION_END, ECHO_SECTION_START, compose_html
+    from .ips_client import IpsClient, PostResult
+    from .queue import HandsfreeStore
+
+    # A root of this block's own: the blocks before it approved drafts too.
+    _settle_gather_writes()
+    suite_root = gather._root_cache                # pinned to the temp folder by run_smoke
+    root = gather._root_cache = gather._ensure_layout(tmp / "gather_s32")
+    posts_dir = gather._mode_root(root) / "handsfree_posts"
+
+    def _records() -> list:
+        _settle_gather_writes()
+        out = [json.loads(p.read_text(encoding="utf-8")) for p in posts_dir.rglob("*.json")]
+        return sorted(out, key=lambda r: r.get("posted_at", "") + r.get("post_event_id", ""))
+
+    def _of(draft_id: str) -> list:
+        return [r for r in _records() if r["draft_id"] == draft_id]
+
+    # --- a) the edit summary ----------------------------------------------------
+    suggested = ("[AI]\n\nHello,\n\nPlease collect WRT logs.\nPlease share the driver version.\n"
+                 "Internal note: suspect firmware bug HSD-1.\n\nThank you\n")
+    posted = ("[AI]\n\nHello,\n\nPlease collect WRT logs.   \n"
+              "Please also tell us the AP model.\n\nThank you\n")
+    e = gather.summarise_edit(suggested, posted)
+    same = gather.summarise_edit(suggested, suggested.replace("\n", "\r\n") + "\n\n")
+    check("S32.a summarise_edit compares suggestion and post line by line, ignoring blank lines, "
+          "trailing spaces and line endings: which suggested lines were dropped, which were written in, "
+          "how many were kept; an unchanged text is 'not changed' with similarity 1",
+          e["changed"] is True and e["kept_lines"] == 4 and e["suggested_lines"] == 6 and e["posted_lines"] == 5
+          and e["removed_lines"] == ["Please share the driver version.",
+                                     "Internal note: suspect firmware bug HSD-1."]
+          and e["added_lines"] == ["Please also tell us the AP model."]
+          and e["removed_count"] == 2 and e["added_count"] == 1 and 0 < e["similarity"] < 1
+          and same["changed"] is False and same["similarity"] == 1.0 and same["removed_lines"] == []
+          and gather.summarise_edit("", "")["changed"] is False
+          and gather.summarise_edit(None, "new")["added_lines"] == ["new"],
+          f"{e} / {same}")
+
+    # --- b) real approvals leave records -----------------------------------------
+    store = HandsfreeStore(tmp / "handsfree_s32")
+    store.save_config({"dry_run": False, "post_backend": "auto"})
+    ann = {"user_id": "005A000000ABCDEFGH", "name": "Ann Reviewer", "email": "ann@intel.com"}
+    ips_body = AI_MARKER + "\n\nHello,\n\nPlease collect WRT logs.\nPlease share the driver version.\n\nThank you\n"
+
+    def _ips_draft(nbr, body=ips_body, mode="full"):
+        return store.enqueue(case_nbr=nbr, case_id="500" + nbr, subject="s " + nbr, draft_plain=body,
+                             draft_html=compose_html(body), confidence=60, mode=mode,
+                             analysis={"wifi_or_bt": "wifi", "issue_domain": "Connectivity",
+                                       "first_response_done": True})
+
+    class _FakeIps:
+        FIELD_RICH_BODY = IpsClient.FIELD_RICH_BODY
+        fail = False
+        def post_comment(self, case_id, rich_body, **kw):
+            if _FakeIps.fail:
+                return PostResult(ok=False, backend="rest", error="HTTP 500: boom", detail={"status": 500})
+            return PostResult(ok=True, backend="rest", comment_id="a0X" + case_id[-4:], detail={})
+        def get_case_comments(self, case_id): return []
+        def comment_author(self, comment_id): return {"user_id": ann["user_id"], "name": ann["name"]}
+
+    class _FakeUi:
+        def __init__(self, locators=None): pass
+        def post_comment(self, case_id, body_text, expected_user=None):
+            return PostResult(ok=False, backend="ui", error="UI poster: no page")
+
+    class _FakeOutlook:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def save_reply_draft(self, ref, html_fragment, *, reply_all=True, display=False):
+            return {"entry_id": "DRAFT-1", "to": "ann@oem.com", "subject": "RE: x"}
+    orig = (orch._store, orch.IpsClient, orch._signed_in_identity, uic.UiCommenter, ol.Outlook)
+    orch._store = lambda: store
+    orch.IpsClient = _FakeIps
+    orch._signed_in_identity = lambda: dict(ann)
+    uic.UiCommenter = _FakeUi
+    ol.Outlook = _FakeOutlook
+    env_before = _os.environ.get("INTELAVATAR_COLLECT_DEV")
+    real_record_fn = gather.record_handsfree_post
+    try:
+        # 1. posted exactly as suggested, from the Beacon page, internal
+        d1 = _ips_draft("01100001")
+        r1 = orch.approve_and_post(d1["draft_id"], visibility="internal", via="beacon_page")
+        # 2. edited on the home dashboard, posted to the customer
+        d2 = _ips_draft("01100002")
+        edited = (AI_MARKER + "\n\nHello,\n\nPlease collect WRT logs.\nPlease also tell us the AP model."
+                  "\n\nThank you\n")
+        r2 = orch.approve_and_post(d2["draft_id"], edited_plain=edited, visibility="external",
+                                   via="home_dashboard")
+        # 3. saved first ("Save edits"), approved later without a new text
+        d3 = _ips_draft("01100003")
+        store.update(d3["draft_id"], draft_plain=edited, draft_html=compose_html(edited))
+        r3 = orch.approve_and_post(d3["draft_id"], visibility="internal", via="beacon_page")
+        # 4. the post fails on both backends
+        d4 = _ips_draft("01100004")
+        _FakeIps.fail = True
+        r4 = orch.approve_and_post(d4["draft_id"], visibility="internal", via="home_dashboard")
+        _FakeIps.fail = False
+        # 5. the server's automatic first response; and a caller that names no page
+        d5 = _ips_draft("01100005", mode="first_response")
+        r5 = orch.approve_and_post(d5["draft_id"], visibility="external", via="auto_post")
+        d6 = _ips_draft("01100006")
+        r6 = orch.approve_and_post(d6["draft_id"], via="something-else")
+        # 6. an email draft with an INTERNAL Echo section: the reply leaves it out
+        mail_body = (AI_MARKER + "\n\nAnalysis: the AP rejected the association.\n\n"
+                     + ECHO_SECTION_START + "\nINTERNAL: firmware bug HSD-123\n" + ECHO_SECTION_END + "\n")
+        d7 = store.enqueue(case_nbr="01100007", case_id="", subject="IPS 01100007", draft_plain=mail_body,
+                           draft_html=compose_html(mail_body), confidence=70, mode="full",
+                           analysis={"wifi_or_bt": "bt"}, source="email")
+        store.update(d7["draft_id"], email={"entry_id": "E1", "store_id": "S", "subject": "IPS 01100007",
+                                            "sender_name": "Ann", "reply_all": True,
+                                            "mailbox": "me@intel.com"})
+        r7 = orch.approve_and_post(d7["draft_id"], via="home_dashboard")
+        # 7. a draft queued by an older build (no stored suggestion), then edited and posted
+        d8 = _ips_draft("01100008")
+        path8 = store.queue_dir / f"{d8['draft_id']}.json"
+        legacy = json.loads(path8.read_text(encoding="utf-8"))
+        legacy.pop("suggested_plain"); legacy.pop("suggested_source")
+        path8.write_text(json.dumps(legacy), encoding="utf-8")
+        d9 = _ips_draft("01100009")
+        path9 = store.queue_dir / f"{d9['draft_id']}.json"
+        legacy9 = json.loads(path9.read_text(encoding="utf-8"))
+        legacy9.pop("suggested_plain"); legacy9.pop("suggested_source")
+        path9.write_text(json.dumps(legacy9), encoding="utf-8")
+        r8 = orch.approve_and_post(d8["draft_id"], edited_plain=edited, via="beacon_page")
+        r9 = orch.approve_and_post(d9["draft_id"], via="beacon_page")          # never edited
+        # 8. refused before any backend (dry run): not a post
+        store.save_config({"dry_run": True})
+        d10 = _ips_draft("01100010")
+        r10 = orch.approve_and_post(d10["draft_id"], via="beacon_page")
+        store.save_config({"dry_run": False})
+        before_off = len(_records())
+        # 9. collection switched off for this machine: nothing is written, the post still works
+        _os.environ["INTELAVATAR_COLLECT_DEV"] = "0"
+        d11 = _ips_draft("01100011")
+        r11 = orch.approve_and_post(d11["draft_id"], via="beacon_page")
+        _os.environ.pop("INTELAVATAR_COLLECT_DEV", None)
+        # 10. tracking itself blows up: the post must not care
+        real_record = gather.record_handsfree_post
+
+        def _boom(**kw):
+            raise RuntimeError("analytics share on fire")
+        gather.record_handsfree_post = _boom
+        d12 = _ips_draft("01100012")
+        r12 = orch.approve_and_post(d12["draft_id"], via="beacon_page")
+        gather.record_handsfree_post = real_record
+        # The rollup reads the flat root (the packaged build's records); this
+        # source run wrote under developer/, so point it there for the count.
+        _settle_gather_writes()
+        gather._root_cache = gather._mode_root(root)
+        try:
+            stats = gather._handsfree_stats()
+        finally:
+            gather._root_cache = root
+    finally:
+        gather.record_handsfree_post = real_record_fn
+        orch._store, orch.IpsClient, orch._signed_in_identity, uic.UiCommenter, ol.Outlook = orig
+        if env_before is None:
+            _os.environ.pop("INTELAVATAR_COLLECT_DEV", None)
+        else:
+            _os.environ["INTELAVATAR_COLLECT_DEV"] = env_before
+
+    recs = _records()
+    by = {r["case_nbr"]: r for r in recs}
+    p1, p2, p3, p4, p5, p6, p7, p8, p9 = (by.get(f"0110000{i}") for i in range(1, 10))
+    check("S32.b usage: one record per approval that reached a backend, under the Windows user, with "
+          "the page it came from (Beacon page / home dashboard / automatic / other = api), the IPS "
+          "reviewer, role, backend, visibility, outcome and comment id; a failed post is recorded as "
+          "failed with its error; a dry-run refusal is not a post",
+          all(r["ok"] for r in (r1, r2, r3, r5, r6, r7, r8, r9)) and r4["ok"] is False and r10["ok"] is False
+          and all(p is not None for p in (p1, p2, p3, p4, p5, p6, p7, p8, p9)) and "01100010" not in by
+          and p1["record_type"] == "handsfree_post" and p1["handsfree_post_version"] == 1
+          and p1["user_name"] == gather._current_user() and p1["execution_mode"] == "developer"
+          and (p1["via"], p2["via"], p5["via"], p6["via"], p7["via"]) ==
+              ("beacon_page", "home_dashboard", "auto_post", "api", "home_dashboard")
+          and p1["reviewer"] == {"name": "Ann Reviewer", "user_id": ann["user_id"]}
+          and p1["handsfree_role"] == "client" and p1["backend"] == "rest" and p1["ok"] is True
+          and (p1["visibility"], p2["visibility"], p7["visibility"]) == ("internal", "external", "email")
+          and p1["comment_id"] == "a0X0001" and p1["draft_mode"] == "full"
+          and p1["case_domain"] == "wifi" and p1["issue_domain"] == "Connectivity"
+          and p1["draft_id"] == d1["draft_id"] and p7["draft_source"] == "email" and p7["backend"] == "outlook"
+          and p4["ok"] is False and p4["via"] == "home_dashboard" and "UI poster: no page" in p4["error"]
+          and p4["visibility"] == "internal" and p4["reviewer"]["name"] == "Ann Reviewer",
+          f"n={len(recs)} cases={sorted(by)} r4={r4.get('error')!r} r10={r10.get('error')!r} "
+          f"p1={ {k: v for k, v in (p1 or {}).items() if k not in ('suggested', 'posted', 'edit')} } "
+          f"p4={ {k: (p4 or {}).get(k) for k in ('ok', 'via', 'error', 'visibility', 'backend')} }")
+
+    check("S32.c content: the record holds the text Beacon suggested AND the text that went out, with "
+          "the reviewer's edit summarised - unchanged when posted as suggested; edits made at approval "
+          "or saved earlier both count; an Echo section the system dropped is flagged; a draft from an "
+          "older build uses its text before the first change (or says it never changed)",
+          p1["suggested"]["text"] == ips_body and p1["posted"]["text"] == ips_body
+          and p1["edit"]["changed"] is False and p1["edit"]["similarity"] == 1.0
+          and p1["suggested"]["source"] == "enqueue" and p1["suggested"]["truncated"] is False
+          and p2["suggested"]["text"] == ips_body and p2["posted"]["text"] == edited
+          and p2["edit"]["changed"] is True
+          and p2["edit"]["removed_lines"] == ["Please share the driver version."]
+          and p2["edit"]["added_lines"] == ["Please also tell us the AP model."]
+          and p3["suggested"]["text"] == ips_body and p3["posted"]["text"] == edited
+          and p3["edit"]["removed_lines"] == ["Please share the driver version."]
+          and "HSD-123" in p7["suggested"]["text"] and "HSD-123" not in p7["posted"]["text"]
+          and "the AP rejected the association" in p7["posted"]["text"]
+          and p7["edit"]["echo_stripped"] is True and p1["edit"]["echo_stripped"] is False
+          # ...and that system removal is NOT counted as the reviewer's edit
+          and p7["edit"]["baseline"] == "suggested_without_echo" and p7["edit"]["changed"] is False
+          and p7["edit"]["removed_lines"] == [] and p1["edit"]["baseline"] == "suggested"
+          and p8["suggested"]["source"] == "first_edit" and p8["suggested"]["text"] == ips_body
+          and p8["posted"]["text"] == edited
+          and p9["suggested"]["source"] == "unchanged" and p9["edit"]["changed"] is False,
+          f"p2.edit={(p2 or {}).get('edit')} p3.edit={(p3 or {}).get('edit')} "
+          f"p7.edit={(p7 or {}).get('edit')} p8.src={(p8 or {}).get('suggested', {}).get('source')} "
+          f"p9.src={(p9 or {}).get('suggested', {}).get('source')}")
+
+    check("S32.d tracking never gets in the way: with collection switched off for this machine nothing "
+          "is written and the post still succeeds; a tracking failure does not fail the post; the "
+          "rollup counts posts by page, visibility and editing",
+          r11["ok"] is True and r12["ok"] is True and len(recs) == before_off
+          and "01100011" not in by and "01100012" not in by
+          and stats["posts"] == 8 and stats["failed_posts"] == 1 and stats["total_events"] == 9
+          and stats["by_via"] == {"beacon_page": 4, "home_dashboard": 2, "auto_post": 1, "api": 1}
+          and stats["by_visibility"] == {"internal": 5, "external": 2, "email": 1}
+          and stats["edited_posts"] == 3 and stats["posted_as_suggested"] == 5
+          and stats["distinct_users"] == 1 and stats["distinct_cases"] == 8
+          and stats["by_user"][gather._current_user()]["posts"] == 8
+          and stats["by_user"][gather._current_user()]["failed"] == 1
+          and "handsfree_posts" in gather._RECORD_DIRS,
+          f"r11={r11.get('ok')} r12={r12.get('ok')} n={len(recs)}/{before_off} stats={stats}")
+    _settle_gather_writes()
+    gather._root_cache = suite_root
+
+
+def _settle_gather_writes(timeout: float = 10.0) -> None:
+    """Wait for the usage records still being written in the background."""
+    import threading as _threading
+    import time
+    deadline = time.time() + timeout
+    for t in list(_threading.enumerate()):
+        if t.name.startswith("gather-"):
+            t.join(max(0.0, deadline - time.time()))
+
+
 def run_smoke() -> int:
     tmp = Path(tempfile.mkdtemp(prefix="handsfree_smoke_"))
+    # Usage tracking (services.gather_service) writes every Beacon post to a
+    # shared analytics folder, and this suite approves dozens of made-up
+    # drafts. Pin that folder to the temp directory for the whole process -
+    # it is never un-pinned, so a write still in flight at the end cannot
+    # fall through to the real share.
+    from services import gather_service as _gather
+    _gather._root_cache, _gather._outbox_root = _gather._ensure_layout(tmp / "gather"), None
     try:
         smoke_soql()
         smoke_composer()
@@ -5959,7 +6215,9 @@ def run_smoke() -> int:
         smoke_review_fixes_3(tmp)
         smoke_review_fixes_4(tmp)
         smoke_session_renewal_identity(tmp)
+        smoke_post_tracking(tmp)
     finally:
+        _settle_gather_writes()
         shutil.rmtree(tmp, ignore_errors=True)
     print(f"\nsmoke result: {'ALL PASS' if not PASS_FAIL else 'FAILURES: ' + ', '.join(PASS_FAIL)}")
     return 0 if not PASS_FAIL else 1

@@ -103,6 +103,28 @@
         }
     }
 
+    // Usage tracking: tell the server this draft was opened here, and again
+    // with how long it stayed open when it closes. Both reports carry one id
+    // so they land in one record. Never in the way: failures are ignored.
+    let view = null;
+    function reportView(closing) {
+        if (!view) return;
+        const body = {view_id: view.id, via: 'home_dashboard'};
+        if (closing) body.dwell_seconds = Math.round((Date.now() - view.openedAt) / 1000);
+        try {
+            fetch('/handsfree/queue/' + encodeURIComponent(view.draftId) + '/viewed', {
+                method: 'POST', keepalive: true,
+                headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body),
+            }).catch(() => {});
+        } catch (error) { /* tracking only */ }
+        if (closing) view = null;
+    }
+    function startView(draftId) {
+        reportView(true);
+        view = {id: newAttemptId().replace(/^a-/, 'v-'), draftId, openedAt: Date.now()};
+        reportView(false);
+    }
+
     function caseLink(number, caseId) {
         const id = String(caseId || '');
         if (!/^500[A-Za-z0-9]{12}([A-Za-z0-9]{3})?$/.test(id)) return escapeHtml(number);
@@ -460,6 +482,7 @@
             updateVisibility();
             updateButtons();
             modal.modal('show');
+            startView(record.draft_id);
         } catch (error) {
             element('queue-message').textContent = 'Could not open draft: ' + error;
         } finally {
@@ -491,6 +514,7 @@
             try {
                 await request('queue/' + encodeURIComponent(draftId) + '/approve', 'POST', {
                     draft_plain: element('draft-text').value, visibility, attempt: attemptId,
+                    via: 'home_dashboard',          // which page this post came from (usage tracking)
                 }, timing.approveMs);
             } catch (error) {
                 if (error.answered) throw error;       // the server refused: nothing is running
@@ -591,6 +615,8 @@
     });
     modal.on('hide.bs.modal', onModalHide);
     modal.on('hidden.bs.modal', onModalHidden);
+    modal.on('hidden.bs.modal', () => reportView(true));
+    window.addEventListener('pagehide', () => reportView(true));
     element('visibility-internal').addEventListener('change', updateVisibility);
     element('visibility-external').addEventListener('change', updateVisibility);
     element('login').addEventListener('click', () => signIn(true));

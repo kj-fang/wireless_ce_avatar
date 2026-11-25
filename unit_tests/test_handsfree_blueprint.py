@@ -59,7 +59,7 @@ class TestHandsfreeBlueprintStructure(BaseTestCase):
             "/handsfree/queue", "/handsfree/queue/<draft_id>", "/handsfree/queue/<draft_id>/approve",
             "/handsfree/queue/<draft_id>/reject", "/handsfree/config", "/handsfree/discover_fields",
             "/handsfree/auto", "/handsfree/auto/run_now", "/handsfree/list_views",
-            "/handsfree/queue/<draft_id>/open_log_folder",
+            "/handsfree/queue/<draft_id>/open_log_folder", "/handsfree/queue/<draft_id>/viewed",
             # server / client roles, reviewer sign-in, email intake, hand-off
             "/handsfree/login", "/handsfree/requests", "/handsfree/latest_driver/refresh",
             "/handsfree/email/run_case", "/handsfree/email/check_now",
@@ -477,6 +477,33 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         mock_orch.approve_and_post.assert_called_once_with(
             "d-1", edited_plain="edited text", visibility=None, attempt_id="a-12345678")
 
+    def test_approve_says_which_page_it_came_from(self, mock_orch):
+        """approve tells the orchestrator where the approval came from (usage tracking).
+
+        Input: POST /handsfree/queue/d-1/approve with via in the body; with no
+        via but a Referer of the Beacon page / the home page; with a via the
+        route does not know and no Referer.
+        Expected: via="home_dashboard" / "beacon_page" from the body, the
+        same two derived from the Referer, and no via argument at all when
+        nothing tells (the orchestrator then records the post as "api").
+        """
+        # Arrange
+        mock_orch.approve_and_post.return_value = {"ok": True}
+        url = "/handsfree/queue/d-1/approve"
+
+        # Act
+        self.client.post(url, json={"via": "home_dashboard"})
+        self.client.post(url, json={"via": "Beacon_Page"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/handsfree/"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/"})
+        self.client.post(url, json={"via": "somewhere-else"})
+        self.client.post(url, json={}, headers={"Referer": "http://localhost/log_chatbot/"})
+
+        # Assert
+        self.assertEqual([c.kwargs.get("via", "<none>") for c in mock_orch.approve_and_post.call_args_list],
+                         ["home_dashboard", "beacon_page", "beacon_page", "home_dashboard",
+                          "<none>", "<none>"])
+
     def test_approve_without_body_passes_none(self, mock_orch):
         """approve passes edited_plain=None and visibility=None with no body.
 
@@ -520,7 +547,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
 
         # Assert
         self.assertEqual(resp.get_json(), {"ok": True})
-        mock_orch.reject.assert_called_once_with("d-1", reason="wrong case")
+        mock_orch.reject.assert_called_once_with("d-1", reason="wrong case", via="")
 
     def test_reject_without_reason_defaults_to_empty(self, mock_orch):
         """reject defaults the reason to empty.
@@ -535,7 +562,7 @@ class TestHandsfreeRunRoutes(BaseTestCase):
         self.client.post("/handsfree/queue/d-1/reject")
 
         # Assert
-        mock_orch.reject.assert_called_once_with("d-1", reason="")
+        mock_orch.reject.assert_called_once_with("d-1", reason="", via="")
 
     def test_discover_fields_success(self, mock_orch):
         """discover_fields returns the discovered REST fields.

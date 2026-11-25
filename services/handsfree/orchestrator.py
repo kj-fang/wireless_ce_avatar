@@ -112,6 +112,74 @@ def start_check_now(owner_name: Optional[str] = None,
     return {"ok": True, "owner": owner}
 
 
+def _track_event(kind: str, *, draft_id: str = "", case_nbr: str = "", via: str = "",
+                 key: str = "", update_only: bool = False, **details) -> None:
+    """Usage record of one step of a draft's life before the post
+    (gather_service.record_handsfree_event): the server processed a case, a
+    reviewer opened / edited / rejected a draft. `update_only` adds to an
+    event already recorded under `key` and never starts one. Never raises
+    and never delays the caller - the write runs on the Gather service's
+    own thread."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        gather_service.record_handsfree_event(
+            kind, draft_id=draft_id, case_nbr=case_nbr, via=via, key=key,
+            handsfree_role=scheduler.role(), details=details, update_only=update_only)
+    except Exception as e:
+        print(f"[handsfree] {kind} of {draft_id or case_nbr} not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
+def _track_listed(rows: list, *, via: str = "") -> None:
+    """Usage record of the drafts shown in a reviewer's queue
+    (gather_service.record_handsfree_listed). Never raises."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        gather_service.record_handsfree_listed(rows, via=via, handsfree_role=scheduler.role())
+    except Exception as e:
+        print(f"[handsfree] queue listing not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
+def _track_removed(rows: list, *, reason: str) -> None:
+    """Usage record of drafts that left the queue without a reviewer's
+    decision: cleaned up because the case closed ("case_closed") or the
+    draft passed the retention age ("retention"), or archived by a case
+    reset ("case_reset"). Without it such a draft would count as pending -
+    and, never opened, as unseen backlog - for good, though nobody can open
+    it any more. A posted or rejected draft already has its outcome and a
+    "skipped" row was never a draft; those are left out. Never raises."""
+    for row in rows or []:
+        try:
+            draft_id = str(row.get("draft_id") or "")
+            if (not draft_id or draft_id.endswith("__skipped")
+                    or row.get("status") in ("posted", "rejected", "skipped")):
+                continue
+            _track_event("removed", draft_id=draft_id, case_nbr=str(row.get("case_nbr") or ""),
+                         reason=reason, draft_status=str(row.get("status") or ""),
+                         mode=str(row.get("mode") or ""))
+        except Exception as e:
+            print(f"[handsfree] removal not recorded for usage tracking: {type(e).__name__}: {e}")
+
+
+def _track_processed(rec: dict, *, outcome: str, primary: bool, started: float) -> None:
+    """One `processed` event per queue row the server wrote: the denominator
+    of the review funnel. `trigger` is the run that produced it (the run
+    state's mode: "auto-scan (scheduled)", "single-case", ...)."""
+    with _state_lock:
+        trigger = str(_run_state.get("mode") or "check")
+    _track_event(
+        "processed", draft_id=str(rec.get("draft_id") or ""),
+        case_nbr=str(rec.get("case_nbr") or ""),
+        outcome=outcome, primary=primary, trigger=trigger,
+        mode=str(rec.get("mode") or ""), source=str(rec.get("source") or "ips"),
+        trial=bool(rec.get("trial")), owner_name=str(rec.get("owner_name") or ""),
+        confidence=rec.get("confidence"),
+        processing_seconds=round(max(0.0, time.time() - started), 1))
+
+
 def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
                          owner_name: str = "",
@@ -133,6 +201,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                                     "owner_name": owner_name, "finished": False,
                                     "current_stage": "", "draft_id": "",
                                     "fr_draft_id": ""})
+    started = time.time()
     runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
     analysis = runner.analyze_case(case_nbr, case_ctx=case_ctx)
     _update_case_details(case_nbr, {"source": source})
@@ -142,6 +211,15 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         owner_name = _case_owner(case_id or analysis.case_id)
         if owner_name:
             _update_case_details(case_nbr, {"owner_name": owner_name})
+
+    # Trial mode (Settings): tuning on historical / closed cases — every
+    # draft is flagged and can never be posted. Resolved before the first
+    # way out of this function, so a case skipped during a tuning run is
+    # reported as part of that run too.
+    if trial is None:
+        trial = bool(store.load_config().get("trial_mode"))
+    trial = bool(trial)
+
     if analysis.mode == "unsupported":
         store.mark_skipped(case_nbr, analysis.error, owner_name=owner_name)
         store.record_skipped(case_nbr=case_nbr, case_id=case_id or analysis.case_id,
@@ -150,6 +228,15 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                              analysis=analysis.to_dict())
         _log_event(f"[{case_nbr}] skipped: {analysis.error}")
         _update_case_details(case_nbr, {"skipped": analysis.error})
+        # The queue keeps ONE skipped row per case (a re-run overwrites it),
+        # but every run that skipped the case is a run of its own in the
+        # usage numbers: under the row's id a later run - a trial one, say -
+        # would rewrite the record of an earlier one.
+        run_stamp = time.strftime("%Y%m%dT%H%M%S", time.localtime(started))
+        _track_processed({"draft_id": f"{case_nbr}__skipped_{run_stamp}", "case_nbr": case_nbr,
+                          "mode": "unsupported", "source": source, "owner_name": owner_name,
+                          "trial": trial},
+                         outcome="skipped", primary=True, started=started)
         return None
 
     fr_rec = None
@@ -190,12 +277,6 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     # rounds (customer replied, new logs) get targeted asks only.
     analysis.first_response_done = store.first_response_posted(case_nbr)
 
-    # Trial mode (Settings): tuning on historical / closed cases — every
-    # draft is flagged and can never be posted.
-    if trial is None:
-        trial = bool(store.load_config().get("trial_mode"))
-    trial = bool(trial)
-
     shared_log_path = _share_decoded_log(store, case_nbr, analysis.log_path)
 
     draft = compose(analysis)
@@ -213,6 +294,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
         shared_log_path=shared_log_path,
     )
     _update_case_details(case_nbr, {"draft_id": rec["draft_id"]})
+    _track_processed(rec, outcome="error" if analysis.mode == "error" else "queued",
+                     primary=True, started=started)
     _log_event(
         f"[{case_nbr}] queued draft {rec['draft_id']} "
         f"(mode={analysis.mode}, confidence={draft['confidence']}"
@@ -247,6 +330,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
             shared_log_path=shared_log_path,
         )
         _update_case_details(case_nbr, {"fr_draft_id": fr_rec["draft_id"]})
+        _track_processed(fr_rec, outcome="queued", primary=False, started=started)
         _log_event(f"[{case_nbr}] queued first-response checklist draft "
                    f"{fr_rec['draft_id']}")
         _auto_post_first_response(store, fr_rec, fr)
@@ -975,8 +1059,11 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
     from .composer import compose_html, strip_echo_section
     from .ips_client import PostResult
     plain = rec.get("draft_plain") or ""
+    sent_plain = plain                  # the text that goes into the reply
     if ECHO_SECTION_START in plain:
-        body_html = compose_html(strip_echo_section(plain))
+        sent_plain = strip_echo_section(plain)
+        body_html = compose_html(sent_plain)
+        _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section left out of the Outlook reply "
                    f"of {draft_id} (kept in the review record)")
     else:
@@ -997,10 +1084,12 @@ def _save_outlook_reply(store: HandsfreeStore, cfg: dict, draft_id: str,
                                     "subject": saved.get("subject", ""),
                                     "reply_all": reply_all,
                                     "in_reply_to": email.get("subject", "")})
-        store.update(draft_id, status="posted", post_result=result.to_dict())
+        done = store.update(draft_id, status="posted", post_result=result.to_dict())
+        _track_post(store, draft_id, ok=True, posted_plain=sent_plain, rec=done)
         return {"ok": True, "draft": store.get(draft_id), "result": result.to_dict()}
-    store.update(draft_id, status="post_failed",
-                 post_result={"ok": False, "backend": "outlook", "error": err})
+    failed = store.update(draft_id, status="post_failed",
+                          post_result={"ok": False, "backend": "outlook", "error": err})
+    _track_post(store, draft_id, ok=False, posted_plain=sent_plain, rec=failed)
     return {"ok": False, "error": err, "draft": store.get(draft_id)}
 # retention
 # ---------------------------------------------------------------------------
@@ -1036,9 +1125,11 @@ def cleanup_queue(store: HandsfreeStore) -> dict:
     removed, kept_cases = 0, set()
     for d in drafts:
         created = _parse_iso(d.get("created_at", ""))
-        if str(d.get("case_nbr")) in closed or (created and created < cutoff):
+        case_closed = str(d.get("case_nbr")) in closed
+        if case_closed or (created and created < cutoff):
             store.delete_draft(str(d.get("draft_id") or ""))
             removed += 1
+            _track_removed([d], reason="case_closed" if case_closed else "retention")
         else:
             kept_cases.add(str(d.get("case_nbr")))
 
@@ -1111,7 +1202,7 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
         _log_event(f"[{case_nbr}] auto-post skipped: no verified rest_field_map - "
                    f"{draft_id} left for review")
         return
-    res = approve_and_post(draft_id, visibility=VISIBILITY_EXTERNAL)
+    res = approve_and_post(draft_id, visibility=VISIBILITY_EXTERNAL, via="auto_post")
     if res.get("ok"):
         store.update(draft_id, auto_posted=True)
         _log_event(f"[{case_nbr}] auto-posted first response {draft_id} (mode={mode})")
@@ -1120,9 +1211,91 @@ def _auto_post_first_response(store: HandsfreeStore, rec: dict, analysis) -> Non
                    "- left for review")
 
 
+# Per approval, on the thread that runs it: where the approval came from and
+# what the system itself changed in the text. Read by _track_post, which
+# records the post for usage analytics; kept out of every signature in
+# between.
+_approval = threading.local()
+
+# Where an approval can come from (gather_service.HANDSFREE_POST_VIAS).
+POST_VIAS = ("beacon_page", "home_dashboard", "auto_post", "api")
+
+
+def _track_post(store: HandsfreeStore, draft_id: str, *, ok: bool,
+                posted_plain: Optional[str] = None,
+                rec: Optional[dict] = None) -> None:
+    """Usage record of an approval that reached a posting backend: who
+    posted, from which page, with what outcome, and the text that went out
+    next to the text Beacon suggested (gather_service.record_handsfree_post).
+
+    This runs while the approval holds _post_lock, so it does as little as
+    it can here: `rec` is the draft as the posting path just wrote it (what
+    store.update returned), so the shared queue is not read again; only the
+    approval's own fields are picked up on this thread, and working on the
+    texts is left to the Gather service's writer thread. A build with
+    collection switched off does nothing at all. Never raises."""
+    try:
+        from services import gather_service
+        from . import scheduler
+        if not gather_service._collection_enabled():
+            return
+        if rec is None:
+            rec = store.get(draft_id) or {}
+        result = rec.get("post_result") or {}
+        analysis = rec.get("analysis") or {}
+        backend = str(result.get("backend") or "")
+        current = rec.get("draft_plain") or ""
+        sent = current if posted_plain is None else posted_plain
+        suggested = rec["suggested_plain"] if "suggested_plain" in rec else current
+        # The Echo section is dropped by the SYSTEM (public IPS posts, every
+        # Outlook reply), never by the reviewer: the reviewer's edit is
+        # measured against the suggestion without it, or every such post
+        # would read as "the reviewer cut 30 lines". A failed public post
+        # leaves the draft saved without the section, so the retry finds
+        # nothing to strip: the draft itself remembers that the system did
+        # it (echo_stripped_by_system). Text that goes out WITH the section
+        # was not stripped, whatever happened on an earlier attempt.
+        echo_stripped = (bool(getattr(_approval, "echo_stripped", False)
+                              or rec.get("echo_stripped_by_system"))
+                         and ECHO_SECTION_START not in sent)
+        edit_baseline = None
+        if echo_stripped:
+            from .composer import strip_echo_section
+            edit_baseline = strip_echo_section       # applied by the writer thread
+        who = result.get("posted_by") if isinstance(result.get("posted_by"), dict) else None
+        gather_service.record_handsfree_post(
+            draft_id=draft_id,
+            case_nbr=str(rec.get("case_nbr") or ""),
+            via=getattr(_approval, "via", "") or "api",
+            ok=bool(ok),
+            backend=backend,
+            visibility=("email" if backend == "outlook"
+                        else str(result.get("visibility") or getattr(_approval, "visibility", "") or "")),
+            error="" if ok else str(result.get("error") or ""),
+            comment_id=str(result.get("comment_id") or ""),
+            draft_mode=str(rec.get("mode") or ""),
+            draft_source=str(rec.get("source") or ""),
+            case_domain=str(analysis.get("wifi_or_bt") or ""),
+            issue_domain=str(analysis.get("issue_domain") or ""),
+            reviewer=who or getattr(_approval, "reviewer", None),
+            handsfree_role=scheduler.role(),
+            # A draft whose text never changed since it was queued carries no
+            # separate copy: what it holds IS the suggestion.
+            suggested_plain=suggested,
+            suggested_source=str(rec.get("suggested_source") or "unchanged"),
+            posted_plain=sent,
+            echo_stripped=echo_stripped,
+            edit_baseline_plain=edit_baseline,
+        )
+    except Exception as e:
+        print(f"[handsfree] post of {draft_id} not recorded for usage tracking: "
+              f"{type(e).__name__}: {e}")
+
+
 def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
                      visibility: Optional[str] = None,
-                     attempt_id: Optional[str] = None) -> dict:
+                     attempt_id: Optional[str] = None,
+                     via: Optional[str] = None) -> dict:
     """Human clicked Approve. Post the (possibly edited) draft to IPS.
     Returns the updated draft record + result.
 
@@ -1145,9 +1318,18 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
     draft's status and post_result may still describe an EARLIER attempt
     (a post_failed draft keeps them until its retry finishes), and taking
     that stale failure for this attempt's would unlock editing and Reject
-    while the retry is still posting."""
+    while the retry is still posting.
+
+    via says where the approval came from, for usage tracking only (one of
+    POST_VIAS: the Beacon page, the Avatar home dashboard, the server's
+    automatic first response; anything else counts as "api")."""
     attempt = _clean_attempt_id(attempt_id)
     with _post_lock:
+        via_clean = str(via or "").strip().lower()
+        _approval.via = via_clean if via_clean in POST_VIAS else "api"
+        _approval.echo_stripped = False
+        _approval.visibility = ""
+        _approval.reviewer = None
         if attempt:
             _mark_attempt(draft_id, attempt, "running")
         result: Optional[dict] = None
@@ -1157,6 +1339,10 @@ def approve_and_post(draft_id: str, edited_plain: Optional[str] = None,
         finally:
             if attempt:
                 _mark_attempt(draft_id, attempt, "done", result)
+            _approval.via = ""
+            _approval.echo_stripped = False
+            _approval.visibility = ""
+            _approval.reviewer = None
 
 
 def _clean_attempt_id(attempt_id) -> str:
@@ -1245,6 +1431,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                              reviewer: Optional[dict] = None,
                              visibility: str = DEFAULT_VISIBILITY) -> dict:
     store = _store()
+    _approval.visibility = visibility       # for the usage record of a failed post
+    _approval.reviewer = reviewer           # a failed post has no posted_by to read it from
     cfg = store.load_config()
     rec = store.get(draft_id)
     if rec is None:
@@ -1279,8 +1467,13 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
     if is_public_reply and ECHO_SECTION_START in (rec.get("draft_plain") or ""):
         from .composer import compose_html, strip_echo_section
         plain = strip_echo_section(rec.get("draft_plain") or "")
+        # echo_stripped_by_system: should this post fail, the retry finds a
+        # draft that no longer has the section, and usage tracking must not
+        # take the system's removal for the reviewer's edit (_track_post).
         rec = store.update(draft_id, draft_plain=plain,
-                           draft_html=compose_html(plain))
+                           draft_html=compose_html(plain),
+                           echo_stripped_by_system=True)
+        _approval.echo_stripped = True
         _log_event(f"[{rec.get('case_nbr')}] Echo section stripped from the public "
                    f"post of {draft_id}")
 
@@ -1323,6 +1516,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             store.update(draft_id, status="posted",
                          post_result={"ok": False, "backend": "none",
                                       "error": "first response already sent on this case"})
+            # Nothing was posted, and no reviewer rejected it: for the usage
+            # numbers the draft left the queue (not a post, not pending).
+            _track_event("removed", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                         via=getattr(_approval, "via", ""), reason="first_response_already_sent",
+                         draft_status="posted", mode=str(rec.get("mode") or ""))
             return {"ok": False,
                     "error": "the first-response overview was already sent on this "
                              "case (it goes out once); marked as posted",
@@ -1336,6 +1534,11 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                    "re-run the case for a targeted request")
             store.update(draft_id, status="rejected",
                          post_result={"ok": False, "backend": "none", "error": err})
+            # Refused by the system, not rejected by the reviewer (who
+            # approved it): it left the queue, like the case above.
+            _track_event("removed", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                         via=getattr(_approval, "via", ""), reason="overview_already_sent",
+                         draft_status="rejected", mode=str(rec.get("mode") or ""))
             return {"ok": False, "error": err, "draft": store.get(draft_id)}
 
     backend = (cfg.get("post_backend") or "auto").lower()
@@ -1356,15 +1559,26 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         except PostUnsupported as e:
             print(f"[handsfree] REST posting unsupported: {e}")
             if backend == "rest" or is_public_reply:
-                store.update(draft_id, status="post_failed",
-                             post_result={"ok": False, "backend": "rest", "error": str(e)})
+                failed = store.update(draft_id, status="post_failed",
+                                      post_result={"ok": False, "backend": "rest", "error": str(e)})
+                _track_post(store, draft_id, ok=False, rec=failed)
                 return {"ok": False, "error": str(e), "draft": store.get(draft_id)}
             result = None   # fall through to UI
+        except Exception as e:
+            # A connection failure or a timeout. The insert may or may not
+            # have gone through, so nothing is retried and the error is
+            # raised as before; the attempt is only put on record first
+            # (the draft itself is left as it was).
+            _track_post(store, draft_id, ok=False,
+                        rec={**rec, "post_result": {"ok": False, "backend": "rest",
+                                                    "error": f"{type(e).__name__}: {e}"}})
+            raise
         if result is not None and not result.ok and (result.detail or {}).get("identity_mismatch"):
             # The session is no longer the reviewer's. That is not a REST
             # problem the UI poster could work around: stop, the reviewer
             # signs in again and approves again.
-            store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
+            _track_post(store, draft_id, ok=False, rec=failed)
             return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
     if result is None or (not result.ok and backend == "auto"):
@@ -1373,8 +1587,9 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
             # cannot post a public reply. REST-only for customer-facing posts.
             err = (result.error if result else
                    "REST backend unavailable — public replies post via REST only")
-            store.update(draft_id, status="post_failed",
-                         post_result={"ok": False, "backend": "rest", "error": err})
+            failed = store.update(draft_id, status="post_failed",
+                                  post_result={"ok": False, "backend": "rest", "error": err})
+            _track_post(store, draft_id, ok=False, rec=failed)
             return {"ok": False, "error": err, "draft": store.get(draft_id)}
         from .ui_commenter import UiCommenter
         ui = UiCommenter(locators=cfg.get("ui_locators"))
@@ -1403,8 +1618,8 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
                     and author["name"].casefold() != reviewer_name.casefold():
                 print(f"[handsfree] WARNING: comment {result.comment_id} was created by "
                       f"{author['name']!r}, not the signed-in reviewer {reviewer_name!r}")
-        store.update(draft_id, status="posted", post_result=posted,
-                     posted_by=reviewer_name)
+        done = store.update(draft_id, status="posted", post_result=posted,
+                            posted_by=reviewer_name)
         # A request reply carries the overview checklist only on the first
         # round, so it counts as the first response exactly when no first
         # response was recorded before (mark_posted keeps the first record)
@@ -1412,19 +1627,23 @@ def _approve_and_post_locked(draft_id: str, edited_plain: Optional[str],
         store.mark_posted(rec["case_nbr"], comment_id=result.comment_id,
                           first_response=draft_is_checklist and is_public_reply,
                           posted_by=reviewer_name)
+        _track_post(store, draft_id, ok=True, rec=done)
         return {"ok": True, "draft": store.get(draft_id), "result": posted}
 
-    store.update(draft_id, status="post_failed", post_result=result.to_dict())
+    failed = store.update(draft_id, status="post_failed", post_result=result.to_dict())
+    _track_post(store, draft_id, ok=False, rec=failed)
     return {"ok": False, "error": result.error, "draft": store.get(draft_id)}
 
 
-def reject(draft_id: str, reason: str = "") -> dict:
+def reject(draft_id: str, reason: str = "", via: str = "") -> dict:
     store = _store()
     rec = store.update(draft_id, status="rejected",
                        post_result={"ok": False, "backend": "none",
                                     "error": f"rejected by reviewer: {reason}"})
     if rec is None:
         return {"ok": False, "error": f"draft not found: {draft_id}"}
+    _track_event("rejected", draft_id=draft_id, case_nbr=str(rec.get("case_nbr") or ""),
+                 via=via or "api", mode=str(rec.get("mode") or ""), reason=reason)
     return {"ok": True, "draft": rec}
 
 

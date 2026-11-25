@@ -320,6 +320,8 @@ def list_queue():
             return jsonify({"items": [], "signed_out": True})
     out = {"items": _store().list_drafts(
         include_closed=include_closed, owner_name=owner_name, mailbox=mailbox)}
+    if not everyone:
+        _track_listed(out["items"])
     if signed_out:
         out["signed_out"] = True
     return jsonify(out)
@@ -346,7 +348,71 @@ def save_draft(draft_id: str):
                           draft_html=compose_html(plain))
     if rec is None:
         return jsonify({"ok": False, "error": "not found"}), 404
+    orchestrator._track_event("edit_saved", draft_id=draft_id,
+                              case_nbr=str(rec.get("case_nbr") or ""),
+                              via=_approval_via(body) or "api", chars=len(plain))
     return jsonify({"ok": True, "draft": rec})
+
+
+def _track_listed(items: list) -> None:
+    """Usage tracking: the reviewer's own open drafts were shown in a queue
+    (the "impression" before a view). Rows that cannot be reviewed - skipped
+    cases, trial drafts, already closed ones - are not impressions."""
+    rows = [it for it in items
+            if it.get("status") in ("pending_review", "post_failed") and not it.get("trial")]
+    if rows:
+        orchestrator._track_listed(rows, via=_approval_via({}) or "api")
+
+
+@handsfree_bp.route("/queue/<draft_id>/viewed", methods=["POST"])
+def draft_viewed(draft_id: str):
+    """Usage tracking: a reviewer opened this draft. The page reports it
+    twice under one `view_id` of its own - when the draft opens, and when it
+    closes with `dwell_seconds` - and both land in one record. Reading a
+    draft (GET) is deliberately NOT the signal: the pages also poll it to
+    learn the outcome of an approval. Body: view_id, via, dwell_seconds.
+
+    A draft can leave the queue while it is open (a case reset archives it):
+    the closing report then finds no draft. It still completes the view it
+    belongs to - and only that: nothing is recorded unless that view's
+    opening report was."""
+    body = request.get_json(silent=True) or {}
+    rec = _store().get(draft_id)
+    if rec is None:
+        view_id = str(body.get("view_id") or "")
+        if view_id and body.get("dwell_seconds") is not None:
+            orchestrator._track_event("viewed", draft_id=draft_id, key=view_id, update_only=True,
+                                      dwell_seconds=body.get("dwell_seconds"))
+            return jsonify({"ok": True})
+        return jsonify({"ok": False, "error": "not found"}), 404
+    details = {"draft_status": str(rec.get("status") or ""), "mode": str(rec.get("mode") or ""),
+               "reviewer_name": _signed_in_name()}
+    if body.get("dwell_seconds") is not None:
+        details["dwell_seconds"] = body.get("dwell_seconds")
+    orchestrator._track_event("viewed", draft_id=draft_id,
+                              case_nbr=str(rec.get("case_nbr") or ""),
+                              via=_approval_via(body) or "api",
+                              key=str(body.get("view_id") or ""), **details)
+    return jsonify({"ok": True})
+
+
+def _approval_via(body: dict) -> str:
+    """Which page an approval came from, for usage tracking: what the page
+    says in the body ("beacon_page", "home_dashboard"), else what the
+    Referer shows (the Beacon page lives under /handsfree/, the dashboard on
+    the home page). "" when neither tells - the orchestrator then files the
+    post as "api" (a script, an older page)."""
+    said = str(body.get("via") or "").strip().lower()
+    if said in ("beacon_page", "home_dashboard"):
+        return said
+    from urllib.parse import urlsplit
+    referer = request.headers.get("Referer") or ""
+    if not referer:
+        return ""
+    path = urlsplit(referer).path or "/"
+    if path.startswith("/handsfree"):
+        return "beacon_page"
+    return "home_dashboard" if path in ("/", "/index", "/index.html") else ""
 
 
 @handsfree_bp.route("/queue/<draft_id>/approve", methods=["POST"])
@@ -361,6 +427,9 @@ def approve(draft_id: str):
         # The page's own id for this approval: it reads the outcome back by
         # it when the answer to this request never arrives.
         extra["attempt_id"] = str(body.get("attempt"))
+    via = _approval_via(body)
+    if via:
+        extra["via"] = via
     return jsonify(orchestrator.approve_and_post(
         draft_id, edited_plain=body.get("draft_plain"),
         visibility=body.get("visibility"), **extra))
@@ -369,7 +438,8 @@ def approve(draft_id: str):
 @handsfree_bp.route("/queue/<draft_id>/reject", methods=["POST"])
 def reject(draft_id: str):
     body = request.get_json(silent=True) or {}
-    return jsonify(orchestrator.reject(draft_id, reason=body.get("reason", "")))
+    return jsonify(orchestrator.reject(draft_id, reason=body.get("reason", ""),
+                                       via=_approval_via(body)))
 
 
 @handsfree_bp.route("/queue/<draft_id>/open_log_folder", methods=["POST"])
@@ -395,6 +465,9 @@ def open_log_folder(draft_id: str):
         subprocess.Popen(["explorer", "/select,", log_path])
     else:
         subprocess.Popen(["explorer", folder])
+    orchestrator._track_event("log_folder", draft_id=draft_id,
+                              case_nbr=str(rec.get("case_nbr") or ""),
+                              via=_approval_via({}) or "api")
     return jsonify({"ok": True, "folder": folder})
 
 
@@ -439,6 +512,11 @@ def reset_case(case_nbr: str):
         pass
     res = _store().reset_case(canonical, purge_downloads=bool(body.get("purge_downloads")),
                               case_dir=case_dir)
+    # The archived drafts are gone from every reviewer's queue: usage
+    # tracking must stop counting them as waiting for review.
+    orchestrator._track_removed(
+        [{"draft_id": draft_id, "case_nbr": canonical} for draft_id in res.get("archived") or []],
+        reason="case_reset")
     res["bsod_forgotten"] = bsod.forget_case(canonical)
     res["ok"] = True
     return jsonify(res)
@@ -550,6 +628,9 @@ def chatbot_handoff():
         res = _handoff_to_log_chatbot(case_nbr, src, log_path)
     except Exception as e:
         return jsonify({"ok": False, "error": f"{type(e).__name__}: {e}"}), 500
+    if res.get("ok"):
+        orchestrator._track_event("handoff", draft_id=str(body.get("draft_id") or ""),
+                                  case_nbr=case_nbr, via=_approval_via(body) or "api")
     return jsonify(res), (200 if res.get("ok") else 502)
 
 

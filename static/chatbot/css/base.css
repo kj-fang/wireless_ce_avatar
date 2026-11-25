@@ -197,7 +197,7 @@
     /* Analyze All button */
     .btn-analyze-all {
         width: 100%;
-        background: linear-gradient(135deg, #0a7a3e, #1db869);
+        background: var(--accent);
         color: white;
         border: none;
         border-radius: 8px;
@@ -1223,7 +1223,7 @@
         display: inline-block;
         height: 8px;
         border-radius: 4px;
-        background: linear-gradient(90deg, var(--accent), #1db869);
+        background: var(--accent);
         margin-left: 6px;
         vertical-align: middle;
     }

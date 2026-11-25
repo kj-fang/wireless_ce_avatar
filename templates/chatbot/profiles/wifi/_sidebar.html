@@ -16,8 +16,8 @@
                     {# Says where the pre-filled time came from, so a user can tell
                        an attachment timestamp from one parsed out of the case text. #}
                     <span id="it-time-source-tag"
-                          style="display:none;font-size:0.6rem;font-weight:600;color:#0071c5;
-                                 background:#eaf3ff;border:1px solid #cfe0fa;border-radius:9px;
+                             style="display:none;font-size:0.6rem;font-weight:600;color:var(--accent-dark);
+                                 background:var(--accent-soft);border:1px solid var(--accent-border);border-radius:9px;
                                  padding:1px 6px;white-space:nowrap;"></span>
                 </span>
                 <button type="button" class="it-clear-top" onclick="clearAllIssueTimes()"
@@ -35,8 +35,8 @@
                  populateCustomerAnnotation(); hidden until a tz is detected. -->
             <div id="issue-time-customer-annotation"
                  style="display:none;margin-bottom:12px;padding:9px 11px;
-                        background:linear-gradient(135deg,#eaf3ff 0%,#f4f9ff 100%);
-                        border:1px solid #cfe0fa;border-left:3px solid var(--accent);
+                        background:var(--accent-soft);
+                        border:1px solid var(--accent-border);border-left:3px solid var(--accent);
                         border-radius:10px;box-shadow:0 1px 2px rgba(var(--accent-rgb),0.06);">
                 <div style="display:flex;align-items:center;gap:5px;margin-bottom:3px;">
                     <span style="font-size:0.9rem;line-height:1;">👤</span>

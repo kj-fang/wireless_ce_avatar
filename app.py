@@ -263,6 +263,13 @@ def create_app():
 
 
 if __name__ == "__main__":
+    # Command-line tools run before any of the web app's start-up (single
+    # instance, tray, port, browser): `IntelAvatar.exe sleepstudy-analyze ...`
+    # is a batch job for other teams' tools, not a second Avatar window.
+    if len(sys.argv) > 1 and sys.argv[1] == "sleepstudy-analyze":
+        from services.sleepstudy_cli import main as sleepstudy_cli
+        sys.exit(sleepstudy_cli(sys.argv[2:]))
+
     # Parse command-line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', type=int, default=None, help='Override the port for this run only (not persisted). Defaults to the machine-local persisted port (initially 48596).')

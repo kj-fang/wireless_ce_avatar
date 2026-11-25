@@ -37,7 +37,7 @@ import shutil
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
@@ -1012,6 +1012,12 @@ class TimePoint:
     # window are on this clock, and a log on another is shifted onto it.
     utc_offset_minutes: Optional[int] = None
     log_clock_note: str = ""
+    # Set by a caller of run_pipeline() (the command line): the window it
+    # asked for instead of the report's, and its own question to the agent.
+    window_source: str = "report"
+    caller_question: str = ""
+    # Why each Wi-Fi driver ETL tried for this point could not be decoded.
+    etl_decode_errors: list = field(default_factory=list)
     status: str = ""
     coverage: str = ""
     message: str = ""
@@ -1702,7 +1708,15 @@ def _issue_description(point: TimePoint, threshold: float,
         **_rule_values(),
     }
     text = template or default_speclet("nw", "sleepstudy_point")
-    return _fill(text, values) + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
+    asked = ""
+    if point.caller_question:
+        # A caller's own focus (the command line's issue_description). It
+        # steers the analysis; the evidence above and the contract still hold.
+        asked = f"\n\nThe caller also asks about this session: {point.caller_question.strip()}"
+    if point.window_source == "caller":
+        asked += (f"\nThe driver log was cut to the window the caller chose: "
+                  f"{_fmt(point.window_start)} -> {_fmt(point.window_end)}.")
+    return _fill(text, values) + asked + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
 
 
 def render_point_finding(p: dict) -> str:
@@ -2153,14 +2167,18 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
         segments = index.get(p.device, [])
         p.coverage, hits, p.log_clock_note = _align(
             segments, p.window_start, p.window_end, p.utc_offset_minutes, log_clock)
-        s_lo, s_hi = session_span(p.window_start, p.window_end, p.start, p.end)
+        # What a log has to reach: the session itself, or all of a window a
+        # caller chose (it has no padding to discount).
+        span = ((p.window_start, p.window_end) if p.window_source == "caller"
+                else (p.start, p.end))
+        s_lo, s_hi = session_span(p.window_start, p.window_end, *span)
         reaches = lambda hs: covers_session(hs, s_lo, s_hi)
         # No decoded log reaches the session (none at all, or one covering
         # only the margin around it): decode the Wi-Fi driver ETLs that may,
         # likeliest first, until one does.
         decode_errors = []
         raw_etls = index.get(RAW_ETL_KEY, []) if p.device == ssa.DEVICE_WIFI else []
-        candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, p.start, p.end)
+        candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, *span)
                       if raw_etls else [])
         if not reaches(hits) and candidates:
             for etl in candidates[:MAX_ETL_DECODES]:
@@ -2187,6 +2205,7 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                     + ("; it holds this session." if reaches(hits) else "; not this session."))}
                 if reaches(hits):
                     break
+        p.etl_decode_errors = list(decode_errors)
         if p.coverage != "none" and not reaches(hits):
             # Cutting the margin alone would hand the agent the minutes before
             # (or after) standby as if they were the session.
@@ -2325,6 +2344,51 @@ def run_point(
         yield {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
 
 
+# A caller that gives only an issue time gets this much driver log around it.
+ISSUE_TIME_BEFORE = timedelta(minutes=5)
+ISSUE_TIME_AFTER = timedelta(minutes=10)
+
+
+def apply_override(p: TimePoint, override: dict) -> None:
+    """
+    Set on a time point what a caller (the command line) asked for:
+      window_start / window_end / issue_time -- timezone-aware datetimes,
+        converted to the session's own clock (the customer machine's, which
+        the report and every log comparison use). Naive times are refused:
+        guessing their zone is how a log lines up with the wrong session.
+      only an issue time -- the window is ISSUE_TIME_BEFORE to
+        ISSUE_TIME_AFTER around it, kept inside the report's window
+      question -- added to the point's question to the agent
+    Raises ValueError for a time without a zone or a window that ends first.
+    """
+    def local(value):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("times must carry a time zone (an ISO 8601 offset such as +08:00 or Z)")
+        if p.utc_offset_minutes is None:
+            raise ValueError(f"session {p.session_id}: the report gives no UTC offset to convert to")
+        clock = timezone(timedelta(minutes=p.utc_offset_minutes))
+        return value.astimezone(clock).replace(tzinfo=None)
+
+    lo, hi = local(override.get("window_start")), local(override.get("window_end"))
+    at = local(override.get("issue_time"))
+    if lo is None and hi is None and at is not None:
+        lo, hi = at - ISSUE_TIME_BEFORE, at + ISSUE_TIME_AFTER
+        if p.window_start is not None and p.window_end is not None:
+            lo, hi = max(lo, p.window_start), min(hi, p.window_end)
+    if (lo is None) != (hi is None):
+        raise ValueError(f"session {p.session_id}: give both window_start and window_end")
+    if lo is not None:
+        if hi <= lo:
+            raise ValueError(f"session {p.session_id}: the window ends before it starts")
+        p.window_start, p.window_end = lo, hi
+        p.window_truncated = False
+        p.window_source = "caller"
+    if override.get("question"):
+        p.caller_question = str(override["question"])
+
+
 def run_pipeline(
     html_path: str,
     driver_logs,
@@ -2336,6 +2400,8 @@ def run_pipeline(
     per_device: int = PER_DEVICE_LIMIT,
     max_steps: int = 6,
     point_template: Optional[str] = None,
+    session_ids=None,
+    overrides: Optional[dict] = None,
 ) -> Iterator[dict]:
     """
     Analyse every time point and yield events: "step" and "agent_step" as in
@@ -2346,10 +2412,26 @@ def run_pipeline(
     `driver_logs` is one path used for every point, or {point index: path}.
     A point with no path is reported as such and never reaches the LLM.
     `agent_factory=None` is a dry run: every step up to the agent runs.
+
+    `session_ids` analyses those sessions only, chosen from every bad
+    wireless session rather than the worst `max_points`. `overrides` maps a
+    session id (str) to what a caller sets for it (apply_override): a window
+    and an issue time as timezone-aware datetimes, and a question.
     """
     try:
         yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
+        if session_ids:
+            # Asked for by id: any bad wireless session qualifies, not only
+            # the worst few the page lists.
+            max_points = per_device = 100000
         collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
+        if session_ids:
+            wanted = {str(s) for s in session_ids}
+            points = [p for p in points if str(p.session_id) in wanted]
+        for p in points:
+            override = (overrides or {}).get(str(p.session_id))
+            if override:
+                apply_override(p, override)
         yield {"type": "step", "content": (
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "

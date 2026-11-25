@@ -1645,8 +1645,28 @@
     const el = document.getElementById('draft-chips');
     const chips = [];
     const cr = analysis.case_reader || {};
-    if (['request_logs', 'request_info', 'first_response'].includes(analysis.mode)) {
-      chips.push({label: 'written for', text: 'the customer (reply asking for items)', cls: 'warn',
+    const requestType = analysis.request_type || cr.request_type;
+    if (requestType) {
+      chips.push({label: 'request type', text: requestType,
+                  cls: requestType === 'question' ? 'good' : 'warn',
+                  title: requestType === 'mixed'
+                    ? 'Mixed request: displayed explicitly, handled through the debug flow'
+                    : 'Classified from the latest customer request'});
+    }
+    const requestSource = analysis.request_source || cr.request_source || {};
+    if (requestSource.text) {
+      const sourceMeta = [requestSource.author || requestSource.kind || 'description',
+                          requestSource.timestamp || ''].filter(Boolean).join(' · ');
+      const shown = String(requestSource.text);
+      chips.push({label: 'latest comment',
+                  text: shown.length > 600 ? shown.slice(0, 600) + '…' : shown,
+                  cls: 'next-action',
+                  title: sourceMeta + '\n\n' + shown});
+    }
+    if (['request_logs', 'request_info', 'first_response', 'question'].includes(analysis.mode)) {
+      const question = analysis.mode === 'question';
+      chips.push({label: 'written for',
+                  text: question ? 'the customer (answer draft)' : 'the customer (reply asking for items)', cls: 'warn',
                   title: 'A request / first-response draft. It is still posted Private to Intel unless '
                        + 'you pick "External to customer" under the text before approving.'});
     }
@@ -1906,9 +1926,11 @@
 
   const LIVE_COMMON = [
     ['fetch_case', 'Fetch the IPS case'],
+    ['request_classification', 'Read the latest customer update'],
     ['triage', 'Triage the description'],
     ['read_images', 'Read comment screenshots'],
-    ['read_case_history', 'Read the IPS comment thread'],
+    ['read_case_history', 'Read and classify the IPS comment thread'],
+    ['answer_question', 'Ask Echo and prepare the customer answer'],
     ['check_case_info', 'Check the case information'],
     ['category', 'Identify the issue category & required logs'],
     ['driver_check', 'Check the driver version vs the latest release'],
@@ -1936,6 +1958,7 @@
     triage_only: ['Triage only — no usable log', 'warn'],
     request_logs: ['Reply asks the customer for logs', 'warn'],
     request_info: ['Reply asks the customer for information', 'warn'],
+    question: ['Question routed to Echo — draft created for review', 'good'],
     waiting_customer: ['Waiting on the customer', ''],
     bsod_submitted: ['BSOD dump sent to PotatoFarm', 'good'],
     bsod_pending: ['BSOD — already submitted to PotatoFarm', ''],

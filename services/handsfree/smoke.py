@@ -127,10 +127,34 @@ def smoke_soql() -> None:
     except PostUnsupported as e:
         check("S1.j public refused when no public comment type is configured at all",
               "public_extra_fields" in str(e), str(e))
-    check("S1.k customer-updates SOQL has no LIMIT unless asked (caller pages)",
-          "LIMIT" not in build_customer_updates_soql(["500A"], "2026-10-05T00:00:00Z")
+    update_query = build_customer_updates_soql(["500A"], "2026-10-05T00:00:00Z")
+    check("S1.k customer-updates SOQL has no LIMIT unless asked (caller pages); Agent/FAE included",
+          "LIMIT" not in update_query
           and build_customer_updates_soql(["500A"], "2026-10-05T00:00:00Z", limit=7)
-          .endswith("LIMIT 7"))
+          .endswith("LIMIT 7")
+          and "'Agent'" in update_query and "'FAE'" in update_query
+          and "Core_IPS_Rich_Comment__c" in update_query,
+          update_query)
+
+    class _UpdateResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {"done": True, "records": [
+                {"Core_IPS_Case__c": "500A", "CreatedDate": "2026-11-25T10:00:00Z",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "Human test update"},
+                {"Core_IPS_Case__c": "500A", "CreatedDate": "2026-11-25T11:00:00Z",
+                 "Core_IPS_Comment_Author_Type__c": "Agent",
+                 "Core_IPS_Rich_Comment__c": "[AI-Avatar preliminary analysis] generated"},
+            ]}
+
+    update_ips = IpsClient.__new__(IpsClient)
+    update_ips._request = lambda *args, **kwargs: _UpdateResp()
+    updates = update_ips.find_customer_updates(["500A"], "2026-11-25T00:00:00Z")
+    check("S1.l Agent/FAE updates qualify, but Beacon AI comments do not retrigger auto-scan",
+          updates == {"500A": "2026-11-25T10:00:00Z"}, str(updates))
 
 
 def smoke_request_classifier() -> None:
@@ -149,26 +173,29 @@ def smoke_request_classifier() -> None:
     }
 
     def classify(request_type, question="", *, description="x", comments=None,
-                 include_intel_comments=False):
+                 trigger_update="", attachment_list=None):
         captured = []
-        payload = {**base, "request_type": request_type,
-                   "customer_question": question}
+        replies = iter([
+            json.dumps({"request_type": request_type, "customer_question": question}),
+            json.dumps(base),
+        ])
         fake = types.SimpleNamespace(chat=lambda messages, system_content=None:
                                      (captured.append(messages[0]["content"])
-                                      or json.dumps(payload)))
+                                      or next(replies)))
         result = read_case_history(
             fake, subject="classification POC", description=description,
-            comments=comments or [], attachment_list=[],
-            include_intel_comments=include_intel_comments)
-        return result, captured[0]
+            comments=comments or [], attachment_list=attachment_list or [],
+            trigger_update=trigger_update)
+        return result, captured
 
-    result, prompt = classify("question", "Does this module support MLO?",
+    result, prompts = classify("question", "Does this module support MLO?",
                               description="old description",
                               comments=[["1", "Partner", "Does this module support MLO?"]])
-    check("S2P.a question type and verbatim question",
+    check("S2P.a question type and verbatim question from isolated latest update",
           result["request_type"] == "question"
           and result["customer_question"] == "Does this module support MLO?"
-          and "REQUEST CLASSIFICATION SOURCE" in prompt
+          and "CUSTOMER UPDATE" in prompts[0]
+          and "old description" not in prompts[0]
           and result["request_source"]["text"] == "Does this module support MLO?",
           str(result))
 
@@ -193,21 +220,33 @@ def smoke_request_classifier() -> None:
           fallback["request_source"]["kind"] == "description"
           and fallback["request_source"]["text"] == "Description-only request",
           str(fallback.get("request_source")))
-    check("S2P.f prompt documents all three request types",
-          all(value in READER_PROMPT for value in ("question", "debug", "mixed")))
+    exact, exact_prompts = classify(
+        "question", "Latest exact question?", trigger_update="2026-11-25T11:00:00Z",
+        comments=[["2026-11-25 10:00:00", "Partner", "Earlier debug log"],
+                  ["2026-11-25 11:00:00", "Customer", "Latest exact question?"]],
+        attachment_list=[["old_debug.zip", "url", ["11/25/2026 10:30", "old"]]])
+    check("S2P.f auto update timestamp selects the exact comment; old context stays out of classifier",
+          exact["request_source"]["matched_trigger"] is True
+          and exact["request_source"]["text"] == "Latest exact question?"
+          and "old_debug.zip" not in exact_prompts[0]
+          and "Earlier debug log" not in exact_prompts[0]
+          and "old_debug.zip" in exact_prompts[1],
+          str(exact.get("request_source")))
+    lagged, _ = classify(
+        "question", "Synced latest question?", trigger_update="2026-11-25T12:00:00Z",
+        comments=[["2026-11-25 11:00:00", "Customer", "Synced latest question?"]])
+    check("S2P.f2 unsynced trigger falls back to latest customer comment",
+          lagged["request_source"]["matched_trigger"] is False
+          and lagged["request_source"]["text"] == "Synced latest question?",
+          str(lagged.get("request_source")))
 
     test_comments = [["1", "Customer", "Original customer question"],
                      ["2", "Agent", "Intel test comment"]]
     customer_source, _ = classify("question", comments=test_comments)
-    intel_source, _ = classify("question", comments=test_comments,
-                               include_intel_comments=True)
-    check("S2P.g Intel comments require explicit POC opt-in",
-          customer_source["request_source"]["author"] == "Customer"
-          and customer_source["request_source"]["text"] == "Original customer question"
-          and intel_source["request_source"]["author"] == "Agent"
-          and intel_source["request_source"]["text"] == "Intel test comment",
-          f"customer={customer_source.get('request_source')} "
-          f"intel={intel_source.get('request_source')}")
+    check("S2P.g latest Agent/FAE comment is a valid classification source",
+          customer_source["request_source"]["author"] == "Agent"
+          and customer_source["request_source"]["text"] == "Intel test comment",
+          str(customer_source.get("request_source")))
 
 
 # ---------------------------------------------------------------- S2
@@ -572,6 +611,40 @@ def smoke_runner(tmp: Path) -> None:
 
         r = runner_mod.HandsfreeRunner(
             progress_cb=lambda s, d: print(f"    · {s}: {d}"))
+
+        from . import echo_client as echo_mod
+        saved_chat = fake_llm.chat_text
+        saved_question_answer = echo_mod.answer_customer_question
+        try:
+            question_reader = json.dumps({
+                "clean_description": "Customer asks about MLO support.",
+                "issue_times": [], "missing_info": [], "action_owner": "Intel",
+                "next_action": "Intel to answer the support question",
+                "request_type": "question",
+                "customer_question": "Is MLO supported on this module?",
+            })
+            fake_llm.chat_text = lambda messages, system_content=None: (
+                "MLO is supported on the applicable configuration."
+                if "Rewrite the raw Echo" in messages[0]["content"] else question_reader)
+            echo_mod.answer_customer_question = lambda **kwargs: {
+                "status": "answered", "answer": "Internal source document: MLO guide",
+                "error": ""}
+            question_analysis = r.analyze_case("01234567")
+            question_stages = [stage.name for stage in question_analysis.stages]
+            check("S4.q classified question stops before driver/log analysis and keeps a safe draft answer",
+                  question_analysis.mode == "question"
+                  and question_analysis.request_type == "question"
+                  and question_analysis.question_answer.startswith("MLO is supported")
+                  and question_analysis.question_echo_answer.startswith("Internal source")
+                  and "answer_question" in question_stages
+                  and "download" not in question_stages
+                  and "decode_etl" not in question_stages
+                  and "agent_analysis" not in question_stages,
+                  f"mode={question_analysis.mode} stages={question_stages} "
+                  f"answer={question_analysis.question_answer!r}")
+        finally:
+            fake_llm.chat_text = saved_chat
+            echo_mod.answer_customer_question = saved_question_answer
 
         # BT cases must inspect extracted contents before triage-only exit.
         # This matches Avatar's local-upload rule: ibtpci-/ibtusb- ETLs are
@@ -1579,6 +1652,40 @@ def smoke_orchestrator(tmp: Path) -> None:
         check("S5.0b claim holder names the signed-in reviewer",
               orch._reviewer_id({"name": "Smoke Reviewer"}).startswith("Smoke Reviewer ("))
 
+        from .runner import CaseAnalysis
+        orig_runner = orch.HandsfreeRunner
+        question_trigger_updates = []
+
+        class _QuestionRunner:
+            def __init__(self, **kwargs):
+                pass
+
+            def analyze_case(self, case_nbr, case_ctx=None, trigger_update=""):
+                question_trigger_updates.append(trigger_update)
+                return CaseAnalysis(
+                    case_nbr=case_nbr, case_id="500QUESTION", mode="question", ok=True,
+                    subject="MLO support", request_type="question",
+                    customer_question="Is MLO supported?",
+                    question_answer="MLO is supported on the applicable configuration.",
+                    question_echo_answer="Internal source: MLO guide, case 123",
+                    question_rewrite_status="answered")
+
+        try:
+            orch.HandsfreeRunner = _QuestionRunner
+            question_rec = orch._analyze_and_enqueue(
+                store, "09888800", case_id="500QUESTION", owner_name="Smoke Reviewer",
+                trial=True, trigger_update="2026-11-25T11:00:00Z")
+            question_drafts = [d for d in store.list_drafts(include_closed=True)
+                               if d.get("case_nbr") == "09888800"]
+            check("S5.q question creates one review draft, no first response, and receives the exact trigger update",
+                  question_rec["mode"] == "question" and len(question_drafts) == 1
+                  and question_trigger_updates == ["2026-11-25T11:00:00Z"]
+                  and "MLO is supported" in question_rec["draft_plain"]
+                  and "Internal source" in question_rec["draft_plain"],
+                  f"count={len(question_drafts)} draft={question_rec['draft_plain'][:300]!r}")
+        finally:
+            orch.HandsfreeRunner = orig_runner
+
         # An existing AI analysis comment no longer blocks another analysis
         # (one per round), and a scan failure never aborts a post.
         _Ips.comments = [{"Id": "C1", "Core_IPS_Rich_Comment__c": AI_MARKER + " earlier"}]
@@ -1719,6 +1826,9 @@ def smoke_orchestrator(tmp: Path) -> None:
                                             checklist_fills=fills or missing))
             return store.get(rec["draft_id"]), len(_Ips.posted) - before
 
+        rec, n = auto("09999991", "question")
+        check("S5.h0 question drafts never enter first-response auto-post",
+              n == 0 and rec["status"] == "pending_review", rec["status"])
         rec, n = auto("09999990", "request_logs")
         check("S5.h auto-post off by default: first-round request left for review",
               n == 0 and rec["status"] == "pending_review", rec["status"])
@@ -1810,9 +1920,9 @@ def smoke_auto_scan(tmp: Path) -> None:
           "Owner.Name = 'O\\'Neil'" in q and "IsClosed = false" in q
           and "ORDER BY LastModifiedDate DESC" in q, q)
     q2 = build_customer_updates_soql(["500A", "500B"], "2026-10-05T00:00:00Z")
-    check("S16.b customer-updates SOQL: bounded by case ids, time and customer authors",
+    check("S16.b customer-updates SOQL: bounded by case ids, time and request authors",
           "IN ('500A', '500B')" in q2 and "CreatedDate > 2026-10-05T00:00:00Z" in q2
-          and "'Partner'" in q2 and "'Agent'" not in q2, q2)
+          and "'Partner'" in q2 and "'Agent'" in q2 and "'FAE'" in q2, q2)
     try:
         build_customer_updates_soql(["500A"], "yesterday")
         check("S16.c bad since rejected", False)
@@ -2023,7 +2133,8 @@ def smoke_echo_kb() -> None:
     customer_echo = answer_customer_question(
         request_type="question", question="Which DSM value enables UHB?",
         subject="BIOS DSM question", radio="bt",
-        ask=lambda prompt: (customer_queries.append(prompt) or "Use Function 3."))
+        ask=lambda prompt: (customer_queries.append(prompt) or
+                            "Use Function 3. Sources: doc 123, Table 4."))
     skipped_echo = answer_customer_question(
         request_type="mixed", question="Logs attached; which value?",
         ask=lambda prompt: (_ for _ in ()).throw(AssertionError("Echo must be skipped")))
@@ -2032,11 +2143,13 @@ def smoke_echo_kb() -> None:
         ask=lambda prompt: (_ for _ in ()).throw(EchoUnavailable("backend down")))
     check("S7.p1 classified question includes original text, subject and Bluetooth",
           customer_echo["status"] == "answered"
-          and customer_echo["answer"] == "Use Function 3."
+          and "doc 123, Table 4" in customer_echo["answer"]
           and len(customer_queries) == 1
           and "Which DSM value enables UHB?" in customer_queries[0]
           and "BIOS DSM question" in customer_queries[0]
-          and "Intel Bluetooth" in customer_queries[0], str(customer_echo))
+          and "Intel Bluetooth" in customer_queries[0]
+          and "document number" in customer_queries[0]
+          and "section, table, figure, or page" in customer_queries[0], str(customer_echo))
     check("S7.p2 mixed skips Echo and an outage preserves a non-fatal status",
           skipped_echo["status"] == "skipped"
           and down_echo["status"] == "unavailable"
@@ -3234,7 +3347,7 @@ def smoke_email_intake(tmp: Path) -> None:
         ctxs: list = []
 
         def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
-                          case_ctx=None, source="ips"):
+                          case_ctx=None, source="ips", trigger_update=""):
             ran.append(case_nbr)
             ctxs.append((case_nbr, source, case_ctx))
             rec = store_.enqueue(case_nbr=case_nbr, case_id="", subject=subject or "IPS subject " + case_nbr,
@@ -3579,7 +3692,7 @@ def smoke_server_role(tmp: Path) -> None:
         analyzed: list = []
 
         def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
-                          case_ctx=None, source="ips"):
+                          case_ctx=None, source="ips", trigger_update=""):
             analyzed.append((case_nbr, owner_name))
             return store_.enqueue(case_nbr=case_nbr, case_id=case_id, subject=subject,
                                   draft_plain="x", draft_html="<p>x</p>", confidence=50,
@@ -4634,6 +4747,25 @@ def smoke_echo_isolation(tmp: Path) -> None:
     check("S25.a3 nothing from Echo -> no section at all, the footer closes the draft",
           ECHO_SECTION_START not in p_quiet and "Echo" not in p_quiet
           and p_quiet.rstrip().endswith(_FOOTER), p_quiet[-160:])
+    question = CaseAnalysis(mode="question", case_nbr="2", ok=True,
+                            request_type="question", customer_question="Does this support MLO?",
+                            question_answer="MLO is supported on the applicable configuration.",
+                            question_echo_answer="Internal source: doc 123, case 456")
+    question_plain = compose(question)["plain"]
+    question_public = strip_echo_section(question_plain)
+    failed_question = CaseAnalysis(
+        mode="question", case_nbr="3", request_type="question",
+        customer_question="How is Function 3 set?",
+        question_rewrite_status="rewrite_failed", question_error="Echo backend timeout")
+    failed_plain = compose(failed_question)["plain"]
+    check("S25.a4 question draft keeps safe answer public and raw Echo/private errors internal",
+          "MLO is supported" in question_public
+          and "Internal source" not in question_public
+          and "Does this support MLO?" not in question_public
+          and "Manual review is required" in strip_echo_section(failed_plain)
+          and "Echo backend timeout" in failed_plain
+          and "Echo backend timeout" not in strip_echo_section(failed_plain),
+          f"question={question_plain!r} failed={failed_plain!r}")
 
     # --- b) customer-facing drafts never carry it ----------------------------
     leaks = {}
@@ -5109,7 +5241,7 @@ def smoke_review_fixes(tmp: Path) -> None:
     fail_once = {"01040002"}
 
     def _fake_analyze(store_, case_nbr, case_id="", subject="", owner_name="", trial=None,
-                      case_ctx=None, source="ips"):
+                      case_ctx=None, source="ips", trigger_update=""):
         ran.append(case_nbr)
         if case_nbr in fail_once:
             fail_once.discard(case_nbr)

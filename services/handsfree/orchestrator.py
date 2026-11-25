@@ -184,7 +184,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                          case_id: str = "", subject: str = "",
                          owner_name: str = "",
                          trial: Optional[bool] = None,
-                         case_ctx=None, source: str = "ips") -> Optional[dict]:
+                         case_ctx=None, source: str = "ips",
+                         trigger_update: str = "") -> Optional[dict]:
     """Shared per-case body for check runs and manual single-case runs.
 
     trial: the run's captured trial-mode flag (run_auto_scan fixes it once
@@ -203,7 +204,8 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
                                     "fr_draft_id": ""})
     started = time.time()
     runner = HandsfreeRunner(progress_cb=_progress, snapshot_cb=_snapshot)
-    analysis = runner.analyze_case(case_nbr, case_ctx=case_ctx)
+    analysis = runner.analyze_case(
+        case_nbr, case_ctx=case_ctx, trigger_update=trigger_update)
     _update_case_details(case_nbr, {"source": source})
     if not owner_name and source == "ips":
         # A single-case run knows no owner from a scan: ask IPS, so the draft
@@ -244,8 +246,9 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     # LLM pass over the rest. Failure never blocks the drafts. A case that
     # could not even be fetched (mode "error") has nothing to fill from and
     # gets no customer reply, so the LLM pass is skipped there.
-    if analysis.mode == "error":
-        _log_event(f"[{case_nbr}] first response: skipped ({analysis.error})")
+    if analysis.mode in ("error", "question"):
+        reason = analysis.error or "question route has its own draft"
+        _log_event(f"[{case_nbr}] first response: skipped ({reason})")
     else:
         try:
             from .checklist import build_fills
@@ -309,7 +312,7 @@ def _analyze_and_enqueue(store: HandsfreeStore, case_nbr: str,
     # waiting on the customer (nothing to ask), or the overview was already
     # sent in an earlier round.
     if (analysis.mode not in ("request_logs", "request_info", "error",
-                              "waiting_customer")
+                              "waiting_customer", "question")
             and not analysis.first_response_done):
         from dataclasses import replace
         fr = replace(analysis, mode="first_response")
@@ -636,7 +639,8 @@ def run_auto_scan(store: HandsfreeStore, owner: str = "", max_cases: int = 10,
                                            case_id=ref.case_id, subject=ref.subject,
                                            owner_name=(case_owner.get(ref.case_nbr) if not list_view else "")
                                                       or owner or getattr(ref, "owner_name", ""),
-                                           trial=trial)
+                                           trial=trial,
+                                           trigger_update=(upd if reason.startswith("customer update") else ""))
                 if rec is not None and rec.get("mode") == "error":
                     # The runner could not even fetch the case (IPS/Snowflake
                     # hiccup): the draft only tells the reviewer. The update

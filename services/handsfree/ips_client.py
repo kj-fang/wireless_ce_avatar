@@ -156,9 +156,11 @@ def parse_identity(data: dict) -> dict:
     }
 
 
-# Comment author types written by the customer side (Snowflake / REST share
-# the picklist): an "update from the customer" is a comment by one of these.
-CUSTOMER_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE")
+# Author types that may drive request classification. Customer-visible
+# history still has its own narrower allowlist in case_reader.py.
+REQUEST_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE",
+                        "Agent", "FAE")
+_AI_COMMENT_MARKER = "[AI-Avatar"
 
 
 def build_open_cases_soql(owner_name: str, limit: int = 200) -> str:
@@ -183,9 +185,10 @@ def build_customer_updates_soql(case_ids: list[str], since_iso: str,
                     since_iso or ""):
         raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
     ids = ", ".join(f"'{_soql_quote(i)}'" for i in case_ids)
-    authors = ", ".join(f"'{_soql_quote(a)}'" for a in CUSTOMER_AUTHOR_TYPES)
+    authors = ", ".join(f"'{_soql_quote(a)}'" for a in REQUEST_AUTHOR_TYPES)
     return (
-        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c "
+        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c, "
+        "Core_IPS_Rich_Comment__c "
         "FROM Core_IPS_Case_Comments__c "
         f"WHERE Core_IPS_Case__c IN ({ids}) AND CreatedDate > {since_iso} "
         f"AND Core_IPS_Comment_Author_Type__c IN ({authors}) "
@@ -407,12 +410,7 @@ class IpsClient:
     def find_open_cases(self, owner_name: str, limit: int = 200) -> list[CaseRef]:
         """All open cases assigned to `owner_name` (auto-scan candidates)."""
         return self._query_cases(build_open_cases_soql(owner_name, limit))
-    def case_by_number(self, case_nbr: str) -> Optional[CaseRef]:
-        """Resolve one case number directly from Salesforce REST."""
-        refs = self._query_cases(
-            "SELECT Id, CaseNumber, Subject, Status, CreatedDate, Owner.Name "
-            f"FROM Case WHERE CaseNumber = '{_soql_quote(case_nbr)}' LIMIT 1")
-        return refs[0] if refs else None
+
     def case_owner_name(self, case_id: str) -> str:
         """Owner.Name of one case, "" when unknown. A single-case run (the
         page's "Analyze this case", a client's request, the CLI's
@@ -443,6 +441,9 @@ class IpsClient:
                 resp.raise_for_status()
                 d = resp.json()
                 for rec in d.get("records", []):
+                    body = str(rec.get("Core_IPS_Rich_Comment__c") or "")
+                    if _AI_COMMENT_MARKER in body:
+                        continue
                     cid = rec.get("Core_IPS_Case__c") or ""
                     ts = rec.get("CreatedDate") or ""
                     if cid and ts > latest.get(cid, ""):

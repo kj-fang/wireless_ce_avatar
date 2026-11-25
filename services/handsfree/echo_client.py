@@ -336,10 +336,23 @@ def build_customer_question(*, question: str, subject: str = "",
     parts = [f"An Intel {product} support customer asked the following question."]
     if subject.strip():
         parts += ["", f"IPS case subject: {subject.strip()[:200]}"]
-    parts += ["", "Question:", question.strip()[:2000], "",
-              "Answer from the Intel wireless knowledge base. Be concise and factual. ",
-              "Do not infer a fix unless the documentation supports it. Cite the "
-              "documents or cases you rely on where possible."]
+    parts += [
+        "", "Question:", question.strip()[:2000], "",
+        "Answer from the Intel wireless knowledge base with enough detail for an "
+        "engineer to understand and verify the response.",
+        "Structure the answer as follows:",
+        "1. Direct answer.",
+        "2. Explanation of the relevant mechanism, configuration, or behavior.",
+        "3. Supported conditions, limitations, versions, or required prerequisites, "
+        "when applicable.",
+        "4. Practical next steps or validation checks supported by the documentation.",
+        "5. Sources: list every supporting source with document number, document title, "
+        "and the exact section, table, figure, or page when available.",
+        "Keep the response factual and do not infer a fix, guarantee, or unsupported "
+        "configuration. Distinguish clearly between confirmed facts and unknowns. "
+        "If a document number or location is not returned by the knowledge base, say "
+        "that it is not available; do not invent one.",
+    ]
     return "\n".join(parts)
 
 

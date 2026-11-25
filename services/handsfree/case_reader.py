@@ -102,24 +102,8 @@ Your tasks:
     given). "Worked before" WITHOUT a version is not a version — return "".
     The version the failure was observed on (task 7) is never the
     last-known-good one. Never invent one.
- 9. Classify the latest request as exactly ONE type. Judge the text in the
-    AUTHORITATIVE REQUEST CLASSIFICATION SOURCE block below. In the normal
-    production path that block is the latest "Partner"/"Customer" comment,
-    or the ISSUE DESCRIPTION when none exists. A classification-only POC may
-    explicitly select an Agent/FAE test comment instead.
-    - "question": asks for an explanation, status, support statement, or
-      how-to, with no new failure, reproduction time, or log evidence.
-    - "debug": reports a failure, provides debugging evidence, uploads logs,
-      or answers a request from Intel.
-    - "mixed": contains both question and debug information; mixed is kept
-      explicit so the caller can conservatively treat it as debug.
-    Copy the customer's question VERBATIM as "customer_question" for a
-    question or mixed request. Return an empty string for debug.
-
 Output ONLY a valid JSON object (no markdown, no code fences):
 {{
-  "request_type": "<'question' | 'debug' | 'mixed'>",
-  "customer_question": "<verbatim question, or '' for debug>",
   "clean_description": "<one-paragraph current issue statement>",
   "issue_times": ["<time exactly as written>", "..."],
   "issue_time_source": "<'description' or 'comment #N' that stated the time>",
@@ -147,9 +131,6 @@ Output ONLY a valid JSON object (no markdown, no code fences):
 
 === COMMENTS (chronological; #1 is oldest) ===
 {comments_block}
-
-=== REQUEST CLASSIFICATION SOURCE (authoritative input for task 9) ===
-{classification_source}
 
 === ATTACHMENTS (candidate log uploads) ===
 {attachments_block}
@@ -268,22 +249,40 @@ def _format_comments(rows: list[dict]) -> str:
 
 
 _CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
-_INTEL_TEST_AUTHOR_PREFIXES = ("agent", "fae")
+_REQUEST_AUTHOR_PREFIXES = _CUSTOMER_AUTHOR_PREFIXES + ("agent", "fae")
 
 
-def request_classification_source(description: str, comments: Any, *,
-                                  include_intel_comments: bool = False) -> dict:
-    """Select the latest allowed comment, or the description."""
-    allowed = _CUSTOMER_AUTHOR_PREFIXES
-    if include_intel_comments:
-        allowed += _INTEL_TEST_AUTHOR_PREFIXES
+def _timestamp_key(raw: Any) -> str:
+    """Comparable ISO timestamp prefix across Salesforce/Snowflake formats."""
+    from datetime import datetime
+    value = str(raw or "").strip().replace("Z", "+00:00")
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+        return parsed.replace(tzinfo=None).isoformat(timespec="seconds")
+    except ValueError:
+        return value[:19].replace(" ", "T")
+
+
+def request_classification_source(description: str, comments: Any,
+                                  trigger_update: str = "") -> dict:
+    """Exact auto-scan comment when synced; otherwise latest customer update."""
     rows = _normalize_comments(comments)
-    for row in reversed(rows):
-        if row["author"].strip().lower().startswith(allowed):
-            return {"kind": "comment", "timestamp": row["ts"],
-                    "author": row["author"], "text": row["text"]}
+    customer_rows = [row for row in rows
+                     if row["author"].strip().lower().startswith(_REQUEST_AUTHOR_PREFIXES)]
+    trigger_key = _timestamp_key(trigger_update)
+    matched = next((row for row in reversed(customer_rows)
+                    if trigger_key and _timestamp_key(row["ts"]) == trigger_key), None)
+    row = matched or (customer_rows[-1] if customer_rows else None)
+    if row:
+        return {"kind": "comment", "timestamp": row["ts"],
+                "author": row["author"], "text": row["text"],
+                "trigger_update": str(trigger_update or ""),
+                "matched_trigger": bool(matched)}
     return {"kind": "description", "timestamp": "", "author": "",
-            "text": str(description or "").strip()}
+            "text": str(description or "").strip(),
+            "trigger_update": str(trigger_update or ""), "matched_trigger": False}
 
 
 # Comment author types (CORE_IPS_COMMENT_AUTHOR_TYPE_TXT) written by the
@@ -349,10 +348,45 @@ def _format_attachments(attachment_list: Any) -> str:
     return "\n".join(out) or "(no attachments)"
 
 
+def classify_customer_request(llm, source: dict) -> dict:
+    """Classify only the selected customer update; no old case/log context."""
+    from services.ace.roles import _extract_json
+
+    prompt = """Classify this one customer update as exactly one type.
+
+- question: explanation, status, support statement, or how-to, with no new
+  failure, reproduction time, or log evidence in this update.
+- debug: reports a failure, provides debug evidence, uploads logs, or answers
+  an Intel debug request.
+- mixed: contains both a question and debug information.
+
+Use ONLY the update below. Unknown or ambiguous means debug.
+Return strict JSON only:
+{"request_type":"question | debug | mixed","customer_question":"verbatim question or empty"}
+
+CUSTOMER UPDATE:
+""" + str((source or {}).get("text") or "").strip()[:_MAX_COMMENT_CHARS]
+    try:
+        result = _extract_json(llm.chat(
+            messages=[{"role": "user", "content": prompt}],
+            system_content="Classify only the supplied customer update. Output strict JSON only.",
+        ))
+    except Exception as exc:
+        print(f"[handsfree.case_reader] request classifier failed: {exc}")
+        result = {}
+    request_type = normalize_request_type(result.get("request_type"))
+    return {
+        "request_type": request_type,
+        "customer_question": (str(result.get("customer_question") or "").strip()
+                              if request_type in {"question", "mixed"} else ""),
+    }
+
+
 def read_case_history(llm, *, subject: str, description: str,
                       comments: Any, attachment_list: Any,
                       env_detail: Any = None,
-                      include_intel_comments: bool = False) -> Optional[dict]:
+                      trigger_update: str = "",
+                      request_classification: Optional[dict] = None) -> Optional[dict]:
     """One LLM call. Returns the parsed reader dict, or None on any failure
     (callers fall back to description-only organize_issue_context)."""
     from services.ace.roles import _extract_json
@@ -371,16 +405,15 @@ def read_case_history(llm, *, subject: str, description: str,
         if d.get("subcategories")) or "      (none)"
     normalized_description = (description or "").strip()[:_MAX_DESC_CHARS] or "(empty)"
     classification_source = request_classification_source(
-        description, comments, include_intel_comments=include_intel_comments)
-    source_label = classification_source["kind"]
-    if source_label == "comment":
-        source_label += f" ({classification_source['author']}, {classification_source['timestamp']})"
+        description, comments, trigger_update=trigger_update)
+    classification = (dict(request_classification)
+                      if request_classification is not None
+                      else classify_customer_request(llm, classification_source))
     prompt = READER_PROMPT.format(
         subject=(subject or "").strip()[:500],
         env_block=_format_env_detail(env_detail),
         description=normalized_description,
         comments_block=_format_comments(_normalize_comments(comments)),
-        classification_source=(f"{source_label}:\n{classification_source['text'][:_MAX_COMMENT_CHARS]}"),
         attachments_block=_format_attachments(attachment_list),
         domains_block=domains_block,
         subcats_block=subcats_block,
@@ -419,7 +452,7 @@ def read_case_history(llm, *, subject: str, description: str,
         missing.append({"item": item,
                         "reason": str(entry.get("reason") or "").strip()[:200]})
 
-    request_type = normalize_request_type(res.get("request_type"))
+    request_type = classification["request_type"]
     classification_text = "\n".join(
         str(value or "") for value in (subject, description, comments))
     if re.search(r"(?i)\b(?:bsod|blue[ -]?screen|bugcheck|bug check)\b",
@@ -429,7 +462,7 @@ def read_case_history(llm, *, subject: str, description: str,
     return {
         "vague_times": vague,
         "request_type": request_type,
-        "customer_question": (str(res.get("customer_question") or "").strip()
+        "customer_question": (classification.get("customer_question", "")
                               if request_type in {"question", "mixed"} else ""),
         "request_source": classification_source,
         "action_owner": normalize_action_owner(res.get("action_owner")),

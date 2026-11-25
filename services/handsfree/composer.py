@@ -13,6 +13,7 @@ our own posts and never double-comment a case.
 from __future__ import annotations
 
 import html as _html
+import re
 from typing import Optional
 
 from .runner import CaseAnalysis, IncidentReport
@@ -453,9 +454,59 @@ def _request_logs_lines(analysis: CaseAnalysis) -> list[str]:
     return parts
 
 
+def _ips_question_text(value: str) -> str:
+    """Convert LLM output to readable plain text that IPS can render safely."""
+    lines: list[str] = []
+    bullet_number = 0
+    for raw in str(value or "").replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = raw.strip()
+        if not line:
+            lines.append("")
+            bullet_number = 0
+            continue
+        line = re.sub(r"^#{1,6}\s+", "", line)
+        bullet = re.match(r"^[-*+]\s+(.*)$", line)
+        if bullet:
+            bullet_number += 1
+            line = f"{bullet_number}. {bullet.group(1).strip()}"
+        elif re.match(r"^\d+\.\s+", line):
+            bullet_number = 0
+        line = re.sub(r"\*\*(.*?)\*\*", r"\1", line)
+        line = re.sub(r"__(.*?)__", r"\1", line)
+        line = re.sub(r"(?<!\w)[*_`](.*?)[*_`](?!\w)", r"\1", line)
+        line = re.sub(r"\[([^]]+)\]\(([^)]+)\)", r"\1 (\2)", line)
+        lines.append(line)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
 def compose_plain(analysis: CaseAnalysis) -> str:
     """Plain-text draft (editable in the review UI)."""
     parts: list[str] = [AI_MARKER, ""]
+
+    if analysis.mode == "question":
+        parts += [
+            "Hello,",
+            "",
+            _ips_question_text(analysis.question_answer) if analysis.question_answer.strip()
+            else ("Beacon could not prepare a customer-facing answer to this question. "
+                  "Manual review is required."),
+            "",
+            "Thank you!",
+            "",
+            ECHO_SECTION_START,
+            "Question classification and raw Echo response. For the reviewer only — "
+            "do NOT copy this section into a reply the customer can see.",
+            "",
+            "Original customer question:",
+            analysis.customer_question.strip() or "(missing)",
+            "",
+            "Raw Echo answer:",
+            analysis.question_echo_answer.strip() or "(no answer returned)",
+        ]
+        if analysis.question_error:
+            parts += ["", "Question-answering error:", analysis.question_error]
+        parts.append(ECHO_SECTION_END)
+        return "\n".join(parts).strip() + "\n"
 
     if analysis.mode in ("request_logs", "request_info", "first_response"):
         # Customer-facing first-response family: tagged so the approve-time

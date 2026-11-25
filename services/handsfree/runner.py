@@ -50,6 +50,55 @@ _MAX_STEPS_KEPT = 60
 _ARCHIVE_EXTS = (".zip", ".rar", ".7z")
 
 
+def _parse_attachment_timestamp(raw):
+    """Best-effort archive timestamp parser shared by upload safety checks."""
+    from datetime import datetime
+    value = str(raw or "").strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
+    except ValueError:
+        pass
+    for fmt in ("%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%m/%d/%Y",
+                "%Y-%m-%d %H:%M", "%d-%m-%Y %H:%M"):
+        try:
+            return datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _has_new_archive_since_last_analysis(case_nbr: str, attachment_list,
+                                          reader: dict) -> bool:
+    """Question is debug when an archive arrived after the prior run/request."""
+    threshold = None
+    try:
+        from .queue import open_store
+        last = (open_store().ledger_entry(str(case_nbr)) or {}).get("analyzed_at")
+        threshold = _parse_attachment_timestamp(last)
+    except Exception:
+        pass
+    source = (reader or {}).get("request_source") or {}
+    if threshold is None and source.get("kind") == "comment":
+        threshold = _parse_attachment_timestamp(source.get("timestamp"))
+    if threshold is None:
+        return False
+    for item in attachment_list or []:
+        try:
+            name = str(item[0])
+            if not name.lower().endswith(_ARCHIVE_EXTS):
+                continue
+            meta = item[2] if len(item) > 2 else None
+            uploaded = _parse_attachment_timestamp(meta[0] if meta else "")
+            if uploaded is not None and uploaded > threshold:
+                return True
+        except (IndexError, TypeError):
+            continue
+    return False
+
+
 def _pick_latest_archive(attachment_list):
     """Newest log archive by upload-timestamp metadata (generalizes
     etl_utils.pick_latest_zip_attachment, which is .zip-only, to every
@@ -405,12 +454,18 @@ class CaseAnalysis:
     ok: bool = False
     mode: str = ""                   # full | triage_only | unsupported | error |
                                      # request_logs | request_info | first_response |
-                                     # waiting_customer
+                                     # waiting_customer | question
     subject: str = ""
     description: str = ""
     clean_description: str = ""
     issue_type: str = ""
     wifi_or_bt: str = ""
+    request_type: str = "debug"     # question | debug | mixed
+    customer_question: str = ""
+    question_answer: str = ""       # customer-facing rewrite of the Echo answer
+    question_rewrite_status: str = ""  # answered | rewrite_failed | echo_unavailable
+    question_error: str = ""
+    question_echo_answer: str = ""  # raw Echo response, reviewer/internal only
     bt_case_valid: Optional[bool] = None  # True when archive contains BT ETLs
     triage: dict = field(default_factory=dict)       # analyze_desc output
     classification: dict = field(default_factory=dict)
@@ -662,6 +717,8 @@ def live_fields(a: "CaseAnalysis") -> dict:
         "issue_times": list(a.issue_times or []),
         "vague_times": list(reader.get("vague_times") or []),
         "issue_time_source": str(reader.get("issue_time_source") or ""),
+        "request_type": a.request_type or str(reader.get("request_type") or ""),
+        "request_source": dict(reader.get("request_source") or {}),
         "reader_attachment": str(reader.get("attachment_name") or ""),
         "reader_attachment_reason": str(reader.get("attachment_reason") or ""),
         "action_owner": a.action_owner,
@@ -843,7 +900,8 @@ class HandsfreeRunner:
 
     # ------------------------------------------------------------------
     def analyze_case(self, case_nbr: str, *, max_steps: int = MAX_AGENT_STEPS,
-                     max_incidents: int = MAX_INCIDENTS, case_ctx=None) -> CaseAnalysis:
+                     max_incidents: int = MAX_INCIDENTS, case_ctx=None,
+                     trigger_update: str = "") -> CaseAnalysis:
         """Run the pipeline for one case. Whatever path the run takes, a
         background archive prefetch it started is waited for before this
         returns: the caller releases the run lock right after, and an orphan
@@ -853,7 +911,8 @@ class HandsfreeRunner:
         self._echo_thread = None
         try:
             analysis = self._analyze_case(case_nbr, max_steps=max_steps,
-                                          max_incidents=max_incidents, case_ctx=case_ctx)
+                                          max_incidents=max_incidents, case_ctx=case_ctx,
+                                          trigger_update=trigger_update)
             self._join_echo_advice(analysis)
             best = analysis.best_incident
             self._snap_analysis(analysis, current_stage="", finished=True,
@@ -871,7 +930,8 @@ class HandsfreeRunner:
                           "running after the join timeout — left to finish on its own")
 
     def _analyze_case(self, case_nbr: str, *, max_steps: int,
-                      max_incidents: int, case_ctx=None) -> CaseAnalysis:
+                      max_incidents: int, case_ctx=None,
+                      trigger_update: str = "") -> CaseAnalysis:
         from configs.global_configs import app_config
 
         analysis = CaseAnalysis(case_nbr=str(case_nbr))
@@ -921,27 +981,44 @@ class HandsfreeRunner:
             self.progress("fetch_case", analysis.error)
             return analysis
 
-        # Start fetching the newest log archive now: triage + reader take
-        # ~40 s of LLM time during which the download would otherwise wait.
-        # The reader usually nominates the newest upload; when it picks
-        # another file the normal download runs and this one is discarded.
-        prefetch = None
-        if bsod_hint:
-            # A BSOD case's newest archive is a memory dump (GBs), not a WRT
-            # capture — the BSOD branch downloads it to the BSOD share instead.
-            self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
-        elif analysis.wifi_or_bt == "wifi" and not getattr(case_ctx, "local_paths", None):
-            try:
-                newest = _pick_latest_archive(case_ctx.attachment_list)
-                if newest is not None:
-                    prefetch = _Prefetch(newest, case_ctx.case_download_dir)
-                    prefetch.start()
-                    self._prefetch = prefetch     # joined by analyze_case on every exit
-                    self.progress("fetch_case",
-                                  f"prefetching {prefetch.attachment_name} in the background")
-            except Exception as e:
-                print(f"[handsfree.runner] prefetch not started: {e}")
-                prefetch = None
+        # Latest-customer-update gate. This isolated call happens before any
+        # original Beacon triage/log work. Debug/mixed continue below unchanged.
+        from .case_reader import (classify_customer_request,
+                                  request_classification_source)
+        with self._stage(analysis, "request_classification"):
+            request_source = request_classification_source(
+                analysis.description, case_ctx.comments,
+                trigger_update=trigger_update)
+            classification = classify_customer_request(app_config.llm_helper,
+                                                        request_source)
+            analysis.case_reader = {
+                **classification,
+                "request_source": request_source,
+            }
+            analysis.request_type = classification["request_type"]
+            analysis.customer_question = classification.get("customer_question", "")
+            self.progress(
+                "request_classification",
+                f"type={analysis.request_type} source="
+                f"{request_source.get('author') or request_source.get('kind')} "
+                f"timestamp={request_source.get('timestamp') or '(none)'} "
+                f"comment={request_source.get('text') or ''}")
+
+        if (analysis.request_type == "question"
+                and _has_new_archive_since_last_analysis(
+                    analysis.case_nbr, case_ctx.attachment_list, analysis.case_reader)):
+            analysis.request_type = "debug"
+            analysis.customer_question = ""
+            analysis.case_reader["request_type"] = "debug"
+            analysis.case_reader["request_override"] = "new archive after last analysis"
+            self.progress("request_classification",
+                          "classification overridden to debug — new log archive uploaded")
+        if analysis.request_type == "question":
+            with self._stage(analysis, "answer_question"):
+                self._answer_customer_question(analysis)
+            analysis.mode = "question"
+            analysis.ok = bool(analysis.question_answer)
+            return analysis
 
         # -- 2. description triage (always runs; also the no-log fallback) ----
         with self._stage(analysis, "triage"):
@@ -1016,6 +1093,8 @@ class HandsfreeRunner:
                 comments=case_ctx.comments,
                 attachment_list=case_ctx.attachment_list,
                 env_detail=case_ctx.env_detail,
+                trigger_update=trigger_update,
+                request_classification=analysis.case_reader,
             )
             if reader:
                 analysis.case_reader = reader
@@ -1026,6 +1105,8 @@ class HandsfreeRunner:
                 analysis.action_owner = reader.get("action_owner") or ""
                 analysis.next_action = reader.get("next_action") or ""
                 analysis.last_good_version = str(reader.get("last_good_version") or "")
+                analysis.request_type = str(reader.get("request_type") or "debug")
+                analysis.customer_question = str(reader.get("customer_question") or "")
                 src = str(reader.get("issue_time_source") or "")
                 analysis.time_decision = {
                     "found": [{"time": str(t), "source": src, "used": i < max_incidents}
@@ -1074,6 +1155,23 @@ class HandsfreeRunner:
                       f"(from the {analysis.domain_decision['winner_label']})"
                       + (f", sub-category {analysis.issue_subcategory}"
                          if analysis.issue_subcategory else ""))
+        # Debug/mixed path only: prefetch the newest archive after classification.
+        # A question therefore never downloads a log merely for the debug pipeline.
+        prefetch = None
+        if bsod_hint:
+            self.progress("fetch_case", "BSOD wording in the case — WRT prefetch skipped")
+        elif analysis.wifi_or_bt == "wifi" and not getattr(case_ctx, "local_paths", None):
+            try:
+                newest = _pick_latest_archive(case_ctx.attachment_list)
+                if newest is not None:
+                    prefetch = _Prefetch(newest, case_ctx.case_download_dir)
+                    prefetch.start()
+                    self._prefetch = prefetch
+                    self.progress("fetch_case",
+                                  f"prefetching {prefetch.attachment_name} in the background")
+            except Exception as e:
+                print(f"[handsfree.runner] prefetch not started: {e}")
+
         # Charles (2026-11-09): the driver the failure was seen on vs the
         # latest released driver - before every early exit, so each request
         # draft can ask an outdated customer to validate on the latest release.
@@ -2144,6 +2242,73 @@ class HandsfreeRunner:
             self.progress("bsod_result",
                           "no PotatoFarm result in the folder yet — the next round "
                           "picks it up (the parser also e-mails it)")
+
+    def _answer_customer_question(self, analysis: CaseAnalysis) -> None:
+        from configs.global_configs import app_config
+        from .echo_client import EchoUnavailable, answer_customer_question
+
+        try:
+            result = answer_customer_question(
+                request_type="question",
+                question=analysis.customer_question,
+                subject=analysis.subject,
+                radio=analysis.wifi_or_bt,
+            )
+        except Exception as exc:
+            result = {"status": "unavailable", "answer": "",
+                      "error": f"{type(exc).__name__}: {exc}"}
+        analysis.question_rewrite_status = "echo_unavailable"
+        analysis.question_error = str(result.get("error") or "")
+        analysis.question_echo_answer = str(result.get("answer") or "")
+        if result.get("status") != "answered" or not analysis.question_echo_answer.strip():
+            self.progress("answer_question",
+                          f"Echo unavailable: {analysis.question_error or 'empty answer'}")
+            return
+
+        prompt = (
+            "Rewrite the raw Echo knowledge-base answer into a concise reply to the "
+            "customer's IPS question.\n"
+            "Rules:\n"
+            "- Keep only facts supported by the raw answer.\n"
+            "- Preserve supported source details from the raw answer: document number, "
+            "document title, and exact section/table/figure/page when available. If the "
+            "raw answer says a location is unavailable, keep that limitation explicit.\n"
+            "- Remove internal case numbers, references to other customers, private "
+            "investigation notes, and reviewer-only wording.\n"
+            "- Do not add steps, guarantees, document details, or conclusions not present "
+            "in the answer; never invent a document number or location.\n"
+            "- IPS does not support Markdown. Return plain text only: no Markdown bold, "
+            "headings, bullets, code fences, links, or tables.\n"
+            "- Format for readability with short paragraphs and explicit plain-text labels: "
+            "Answer, Details, Conditions, Next steps, Sources.\n"
+            "- Put related items on separate numbered lines such as '1. ...', '2. ...'. "
+            "Keep each paragraph compact and do not return one continuous block.\n"
+            "- End with 'Sources:' followed by one source per line, preserving each supported "
+            "document number/title/location.\n\n"
+            f"Customer question:\n{analysis.customer_question}\n\n"
+            f"Raw Echo answer:\n{analysis.question_echo_answer}"
+        )
+        try:
+            rewritten = app_config.llm_helper.chat(
+                messages=[{"role": "user", "content": prompt}],
+                system_content=("You are an Intel Wireless support engineer. "
+                                "Produce a factual, customer-safe reply."),
+            )
+            answer = str(rewritten or "").replace("\r\n", "\n").replace("\r", "\n")
+            answer = re.sub(r"\n[ \t]+", "\n", answer)
+            answer = re.sub(r"\n{3,}", "\n\n", answer).strip()
+            analysis.question_answer = answer
+            if analysis.question_answer:
+                analysis.question_rewrite_status = "answered"
+                analysis.question_error = ""
+                self.progress("answer_question", "Echo answer rewritten for the customer")
+            else:
+                raise ValueError("rewrite returned an empty answer")
+        except Exception as exc:
+            analysis.question_rewrite_status = "rewrite_failed"
+            analysis.question_error = f"{type(exc).__name__}: {exc}"[:300]
+            self.progress("answer_question",
+                          f"customer-safe rewrite failed: {analysis.question_error}")
 
     def _start_echo_advice(self, analysis: CaseAnalysis, case_ctx) -> None:
         if not self.ECHO_ADVICE_ENABLED:

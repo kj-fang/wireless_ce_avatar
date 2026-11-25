@@ -31,7 +31,10 @@ Options for the first form:
     --session-id ID     analyse this session (repeatable); default: the worst
                         bad wireless sessions, as the NW page lists them
     --issue-time T      ISO 8601 with an offset; the driver log is cut from
-                        5 min before to 10 min after it, inside the session
+                        5 min before to 10 min after it, inside the session.
+                        Repeatable: times whose cuts overlap or lie under
+                        5 min apart are analysed as one window (60 min at
+                        most; the next window starts where it ended)
     --window-start T / --window-end T
                         the exact window to cut instead (ISO 8601, offset)
     --question TEXT     the caller's focus, added to the agent's question
@@ -182,11 +185,16 @@ def job_from_args(args) -> dict:
         raise JobError("E_INPUT_INVALID",
                        "give --input <job.json>, or --report and/or --logs, or --collect", EXIT_INPUT)
     evidence = list(args.evidence or []) + (read_evidence_file(args.evidence_file) if args.evidence_file else [])
-    timing = any((args.issue_time, args.window_start, args.window_end, args.question,
+    issue_times = list(args.issue_time or [])
+    timing = any((issue_times, args.window_start, args.window_end, args.question,
                   args.device, args.device_id, evidence, args.force))
     ids = args.session_id or []
+    if len(issue_times) > 1 and (len(ids) > 1 or args.window_start or args.window_end):
+        raise JobError("E_INPUT_INVALID",
+                       "several --issue-time take at most one --session-id, and no "
+                       "--window-start/--window-end (use a job file for other combinations)", EXIT_INPUT)
     # Without --session-id, a window (or an issue time) is analysed on its own.
-    window_only = not ids and bool(args.issue_time or (args.window_start and args.window_end))
+    window_only = not ids and bool(issue_times or (args.window_start and args.window_end))
     if timing and len(ids) != 1 and not window_only:
         raise JobError("E_INPUT_INVALID",
                        "--issue-time, --window-start/--window-end, --question, --device, --device-id, "
@@ -194,10 +202,12 @@ def job_from_args(args) -> dict:
                        "(use a job file for several)", EXIT_INPUT)
     sessions = [{"session_id": sid} for sid in ids] or ([{}] if window_only else [])
     if timing:
-        sessions[0].update({"issue_time": args.issue_time, "window_start": args.window_start,
-                            "window_end": args.window_end, "issue_description": args.question,
-                            "device": args.device, "device_id": args.device_id,
-                            "evidence": evidence, "force": args.force})
+        # One request per issue time, each with what the other options say.
+        sessions = [{**sessions[0], "issue_time": at, "window_start": args.window_start,
+                     "window_end": args.window_end, "issue_description": args.question,
+                     "device": args.device, "device_id": args.device_id,
+                     "evidence": evidence, "force": args.force}
+                    for at in issue_times or [None]]
     return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report or "",
             "driver_logs": [args.logs] if args.logs else [], "sessions": sessions,
             "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect),
@@ -223,6 +233,7 @@ def _session_request(s, i: int, warnings: list) -> dict:
         raise JobError("E_INPUT_INVALID", f"{field}: give both window_start and window_end", EXIT_INPUT)
     if lo is not None and hi <= lo:
         raise JobError("E_INPUT_INVALID", f"{field}: window_end is not after window_start", EXIT_INPUT)
+    issue_only = issue is not None and lo is None      # its window comes from the issue time
     if not sid:
         if lo is None and issue is None:
             raise JobError("E_INPUT_INVALID",
@@ -252,7 +263,58 @@ def _session_request(s, i: int, warnings: list) -> dict:
     return {"session_id": sid, "issue_time": issue, "window_start": lo, "window_end": hi,
             "question": str(s.get("issue_description") or "").strip(),
             "device": DEVICE_NAMES.get(device, ""), "device_id": str(s.get("device_id") or "").strip(),
-            "evidence": evidence, "force": bool(s.get("force"))}
+            "evidence": evidence, "force": bool(s.get("force")),
+            "issue_times": [], "issue_only": issue_only}
+
+
+def merge_issue_times(sessions: list, warnings: list) -> list:
+    """
+    The checked requests, with those that give only an issue time merged per
+    session and device: issue times whose cuts (ISSUE_TIME_BEFORE / AFTER)
+    overlap, or lie under ISSUE_TIME_MERGE_GAP apart, become one window, so
+    a burst of events is not analysed once per event. A window stops growing
+    at WINDOW_CAP and the next one starts where it ended. A merged request
+    keeps every time ("issue_times"), question and evidence line.
+    """
+    from services.sleepstudy_pipeline import (ISSUE_TIME_AFTER, ISSUE_TIME_BEFORE,
+                                              ISSUE_TIME_MERGE_GAP, WINDOW_CAP)
+
+    kept, groups = [], {}
+    for i, s in enumerate(sessions):
+        if s.pop("issue_only"):
+            # No device named: Wi-Fi for a window, the session's own for a report session.
+            device = s["device"] or ("" if s["session_id"] else "wifi")
+            groups.setdefault((s["session_id"], device), []).append((i, s))
+        else:
+            kept.append((i, s))
+    for members in groups.values():
+        segments = []
+        for i, s in sorted(members, key=lambda m: m[1]["issue_time"]):
+            at = s["issue_time"]
+            lo, hi = at - ISSUE_TIME_BEFORE, at + ISSUE_TIME_AFTER
+            seg = segments[-1] if segments else None
+            # At the cap, a time already inside the window still belongs to it.
+            if seg and lo - seg["hi"] < ISSUE_TIME_MERGE_GAP and (hi - seg["lo"] <= WINDOW_CAP or at <= seg["hi"]):
+                seg["hi"] = min(max(seg["hi"], hi), seg["lo"] + WINDOW_CAP)
+                seg["members"].append((i, s))
+            else:
+                segments.append({"lo": max(lo, seg["hi"]) if seg else lo, "hi": hi, "members": [(i, s)]})
+        for seg in segments:
+            parts = [s for _, s in seg["members"]]
+            evidence = list(dict.fromkeys(e for s in parts for e in s["evidence"]))
+            if len(evidence) > MAX_EVIDENCE_LINES:
+                warnings.append(f"issue times {parts[0]['issue_time'].isoformat()} to "
+                                f"{parts[-1]['issue_time'].isoformat()}, analysed as one window: "
+                                f"{len(evidence)} evidence lines, only the first {MAX_EVIDENCE_LINES} are used")
+                evidence = evidence[:MAX_EVIDENCE_LINES]
+            kept.append((min(i for i, _ in seg["members"]), {
+                **parts[0], "issue_time": None, "issue_times": [s["issue_time"] for s in parts],
+                "window_start": seg["lo"], "window_end": seg["hi"],
+                "question": " / ".join(dict.fromkeys(s["question"] for s in parts if s["question"])),
+                "evidence": evidence,
+                "device_id": next((s["device_id"] for s in parts if s["device_id"]), ""),
+                "force": any(s["force"] for s in parts)}))
+    return [s for _, s in sorted(kept, key=lambda item: item[0])]
 
 
 def validate(job: dict) -> dict:
@@ -266,7 +328,8 @@ def validate(job: dict) -> dict:
     collect = bool(options.get("collect"))
     report = str(job.get("report") or "").strip()
     warnings: list = []
-    sessions = [_session_request(s, i, warnings) for i, s in enumerate(job.get("sessions") or [])]
+    sessions = merge_issue_times(
+        [_session_request(s, i, warnings) for i, s in enumerate(job.get("sessions") or [])], warnings)
     # A report is needed to find sessions; times alone (an issue time or a
     # window per request) are cut on their own clock. With collect, a missing
     # report is made on the spot (powercfg /sleepstudy).
@@ -479,6 +542,7 @@ def session_entry(p: dict) -> dict:
         "window": {"start": _iso(p.get("window_start"), offset), "end": _iso(p.get("window_end"), offset),
                    "source": p.get("window_source") or "report",
                    "capped": bool(p.get("window_truncated"))},
+        "issue_times": [_iso(t, offset) for t in p.get("issue_times") or []],
         "sleep_study": {
             "sw_drips_pct": p.get("sw_drip_pct"), "hw_drips_pct": p.get("hw_drip_pct"),
             "verdict": p.get("html_verdict") or "",
@@ -571,15 +635,23 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
     # Report sessions by id; with `force` (or a device named) one that is not a
     # bad wireless session is analysed anyway. Windows without an id are
     # always analysed, attached to the report session they fall in if any.
-    keys = ("issue_time", "window_start", "window_end", "question", "evidence", "device_id")
+    keys = ("issue_time", "issue_times", "window_start", "window_end", "question", "evidence", "device_id")
     wanted = [s["session_id"] for s in job["sessions"] if s["session_id"]]
     # By session and device ("": every device of the session), so a request
-    # for a session's Wi-Fi does not reach its Bluetooth point.
-    overrides = {(s["session_id"], s["device"]): {k: s[k] for k in keys}
-                 for s in job["sessions"] if s["session_id"] and any(s[k] for k in keys)}
-    caller_points = [{**{k: s[k] for k in keys}, "session_id": s["session_id"], "device": s["device"]}
-                     for s in job["sessions"]
-                     if not s["session_id"] or s["force"] or s["device"]]
+    # for a session's Wi-Fi does not reach its Bluetooth point. A further
+    # request for a target already asked for is a point of its own ("another").
+    overrides, caller_points = {}, []
+    for s in job["sessions"]:
+        request = {**{k: s[k] for k in keys}, "session_id": s["session_id"], "device": s["device"],
+                   "force": s["force"]}
+        target = (s["session_id"], s["device"])
+        if s["session_id"] and any(s[k] for k in keys):
+            if target in overrides:
+                request["another"] = True
+            else:
+                overrides[target] = {k: s[k] for k in keys}
+        if not s["session_id"] or s["force"] or s["device"] or request.get("another"):
+            caller_points.append(request)
     points, final, failure = [], None, None
     for event in sp.run_pipeline(job["report"], job["driver_log"], agent_factory=agent_factory,
                                  out_dir=os.path.join(out_dir, "excerpts"),
@@ -602,7 +674,7 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
 
     sessions = [session_entry(p) for p in points]
     found = {str(p.get("session_id")) for p in points}
-    for sid in wanted:
+    for sid in dict.fromkeys(wanted):
         if sid not in found:
             code, reason = ineligible_reason(raw_by_id.get(sid), sp.DRIP_THRESHOLD)
             sessions.append({"session_id": sid, "status": "not_eligible" if code != "E_SESSION_NOT_FOUND"
@@ -746,7 +818,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", help="output folder (result.json, report.md/.html, excerpts/); "
                                   "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>_<id>")
     ap.add_argument("--session-id", action="append", help="session to analyse (repeatable)")
-    ap.add_argument("--issue-time", help="ISO 8601 with offset")
+    ap.add_argument("--issue-time", action="append",
+                    help="ISO 8601 with offset (repeatable; times close together are analysed as one window)")
     ap.add_argument("--window-start", help="ISO 8601 with offset")
     ap.add_argument("--window-end", help="ISO 8601 with offset")
     ap.add_argument("--question", help="the caller's focus for the agent")

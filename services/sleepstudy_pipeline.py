@@ -1027,6 +1027,8 @@ class TimePoint:
     # analysis) and its name for the device (an ACPI path), for the agent.
     caller_evidence: list = field(default_factory=list)
     device_id: str = ""
+    # The issue times the caller reported inside this point's window.
+    issue_times: list = field(default_factory=list)
     # Why each Wi-Fi driver ETL tried for this point could not be decoded.
     etl_decode_errors: list = field(default_factory=list)
     status: str = ""
@@ -1065,6 +1067,7 @@ class TimePoint:
         for key in ("start", "end", "window_start", "window_end"):
             d[key] = _fmt(d[key])
         d["issue_time"] = _fmt(self.issue_time)
+        d["issue_times"] = [_fmt(t) for t in self.issue_times]
         # The clock every time of this point is shown in: the customer
         # machine's, as the report records it.
         d["utc_offset_label"] = (_fmt_offset(self.utc_offset_minutes)
@@ -1727,6 +1730,9 @@ def _issue_description(point: TimePoint, threshold: float,
     if point.window_source == "caller":
         asked += (f"\nThe driver log was cut to the window the caller chose: "
                   f"{_fmt(point.window_start)} -> {_fmt(point.window_end)}.")
+    if point.issue_times:
+        asked += ("\nThe caller reported the issue at: "
+                  + ", ".join(_fmt(t) for t in point.issue_times) + ".")
     if point.selection == "forced":
         asked += ("\nThe caller asked for this session although it does not meet the bad-session "
                   "criteria above; judge from the driver log whether the device behaved normally.")
@@ -1907,7 +1913,8 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[dict]
     message = (
         f"{point.issue_description}\n\nSleep Study evidence:\n```\n"
         f"{point.sleep_summary[:4000]}\n```\n"
-        f"Issue time: around {_fmt(point.issue_time)}"
+        "Issue time: " + (", ".join(_fmt(t) for t in point.issue_times) + " (reported by the caller)"
+                          if point.issue_times else f"around {_fmt(point.issue_time)}")
     )
     result = agent.chat(message, max_steps=max_steps, step_callback=_step)
     point.agent_result_type, point.agent_report = _report_text(result)
@@ -2405,6 +2412,8 @@ def run_point(
 # A caller that gives only an issue time gets this much driver log around it.
 ISSUE_TIME_BEFORE = timedelta(minutes=5)
 ISSUE_TIME_AFTER = timedelta(minutes=10)
+# Issue times whose cuts are closer than this are analysed as one window.
+ISSUE_TIME_MERGE_GAP = timedelta(minutes=5)
 
 
 def apply_override(p: TimePoint, override: dict) -> None:
@@ -2416,6 +2425,8 @@ def apply_override(p: TimePoint, override: dict) -> None:
         guessing their zone is how a log lines up with the wrong session.
       only an issue time -- the window is ISSUE_TIME_BEFORE to
         ISSUE_TIME_AFTER around it, kept inside the session
+      issue_times -- several issue times the caller merged into the window
+        it gives; the window is kept inside the session the same way
       question -- added to the point's question to the agent
     Raises ValueError for a time without a zone, a window that ends first or
     an issue time outside its session.
@@ -2432,25 +2443,36 @@ def apply_override(p: TimePoint, override: dict) -> None:
 
     lo, hi = local(override.get("window_start")), local(override.get("window_end"))
     at = local(override.get("issue_time"))
-    if lo is None and hi is None and at is not None:
-        if (p.start is not None and at < p.start) or (p.end is not None and at > p.end):
-            raise ValueError(f"session {p.session_id}: the issue time {_fmt(at)} is outside the session "
-                             f"({_fmt(p.start)} → {_fmt(p.end)})")
-        lo, hi = at - ISSUE_TIME_BEFORE, at + ISSUE_TIME_AFTER
+    times = sorted(local(t) for t in override.get("issue_times") or [])
+    if (lo is None) != (hi is None):
+        raise ValueError(f"session {p.session_id}: give both window_start and window_end")
+    # A window that comes from issue times (one, or several merged) belongs
+    # to the session asked for. A window without a session id is the
+    # caller's own, taken as given.
+    from_times = bool(times) or (at is not None and lo is None)
+    if not times and at is not None:
+        times = [at]
+    if from_times and p.selection != "window":
+        for t in times:
+            if (p.start is not None and t < p.start) or (p.end is not None and t > p.end):
+                raise ValueError(f"session {p.session_id}: the issue time {_fmt(t)} is outside the session "
+                                 f"({_fmt(p.start)} → {_fmt(p.end)})")
+        if lo is None:
+            lo, hi = times[0] - ISSUE_TIME_BEFORE, times[-1] + ISSUE_TIME_AFTER
         # Inside the session itself, not its report window: that one is capped
         # at WINDOW_CAP, short of a time late in a long standby.
         if p.start is not None:
             lo = max(lo, p.start)
         if p.end is not None:
             hi = min(hi, p.end)
-    if (lo is None) != (hi is None):
-        raise ValueError(f"session {p.session_id}: give both window_start and window_end")
     if lo is not None:
         if hi <= lo:
             raise ValueError(f"session {p.session_id}: the window ends before it starts")
         p.window_start, p.window_end = lo, hi
         p.window_truncated = False
         p.window_source = "caller"
+    if times:
+        p.issue_times = times
     if override.get("question"):
         p.caller_question = str(override["question"])
     if override.get("evidence"):
@@ -2621,7 +2643,8 @@ def run_pipeline(
     with what apply_override() takes. A session asked for by id whose point
     for that device is already among the bad ones gets the request's
     override instead; a window is always a point of its own; a session the
-    report lacks is skipped.
+    report lacks is skipped. A request marked "another" is a further window
+    of a session already asked for: that session again, as a point of its own.
     """
     try:
         if session_ids is not None:
@@ -2642,6 +2665,8 @@ def run_pipeline(
         if session_ids is not None:
             wanted = {str(s) for s in session_ids}
             points = [p for p in points if str(p.session_id) in wanted]
+        # The report's points as selected, for a further window of the same session.
+        selected = {(str(p.session_id), p.device): copy.deepcopy(p) for p in points}
         for p in points:
             override = ((overrides or {}).get((str(p.session_id), p.device))
                         or (overrides or {}).get((str(p.session_id), "")))
@@ -2652,12 +2677,25 @@ def run_pipeline(
             targets = {(str(p.session_id), p.device): p for p in points}
             next_index = max([p.index for p in points] + [len(collected["sessions"])]) + 1
             for request in caller_points:
+                sid = str(request.get("session_id") or "")
+                if request.get("another"):
+                    again = [copy.deepcopy(q) for (s, d), q in selected.items()
+                             if s == sid and request.get("device") in (None, "", d)]
+                    for p in again:
+                        p.index = next_index
+                        apply_override(p, request)
+                        points.append(p)
+                        next_index += 1
+                    # Not among the report's points: only a forced session is built anew.
+                    if again or not (request.get("device") or request.get("force")):
+                        continue
                 try:
                     p = caller_point(payload, request, next_index)
                 except ValueError as exc:
                     yield {"type": "step", "content": f"⚠️ {exc}"}
                     continue
-                same = targets.get((str(p.session_id), p.device)) if request.get("session_id") else None
+                same = (targets.get((str(p.session_id), p.device))
+                        if sid and not request.get("another") else None)
                 if same is not None:
                     apply_override(same, request)
                     continue
@@ -2709,7 +2747,8 @@ def run_pipeline(
 def render_point_markdown(p: dict) -> str:
     """One time point: its window, outcome, Sleep Study evidence and analysis."""
     out = [f"## #{p['index']} Session {p['session_id']} — {p['device_label']}",
-           f"_Issue time {p['issue_time']} · window {p['window_start']} → {p['window_end']}"
+           f"_Issue time {', '.join(p.get('issue_times') or []) or p['issue_time']} · "
+           f"window {p['window_start']} → {p['window_end']}"
            + (" (capped)" if p["window_truncated"] else "") + f" · **{p['status']}**_"]
     if p["driver_log_files"]:
         out.append("")

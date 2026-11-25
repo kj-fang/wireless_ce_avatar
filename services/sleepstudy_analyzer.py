@@ -560,7 +560,7 @@ def build_session_summary(session: dict, wifi_content: dict) -> str:
     drained_mwh = (entry_cap - exit_cap) if (entry_cap and exit_cap) else "?"
 
     top_blockers_info = []
-    for tb in session.get("TopBlockers", []):
+    for tb in session.get("TopBlockers") or []:     # None in a session read from XML
         level = tb.get("ActivityLevel", 0)
         label = activity_label(level)
         pct   = tb.get("ActiveTimePercent", 0)

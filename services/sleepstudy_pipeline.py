@@ -2287,6 +2287,15 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                 # device asleep in D3) from "the log ended": say how far it runs.
                 span_lo = min((h.start for h in hits if h.start is not None), default=None)
                 span_hi = max((h.end for h in hits if h.end is not None), default=None)
+                # Over a minute between two files, inside the window: the
+                # capture may be missing there, which silence cannot tell.
+                gaps, reached = [], None
+                for h in sorted((h for h in hits if h.start is not None and h.end is not None),
+                                key=lambda h: h.start):
+                    if (reached is not None and h.start - reached > timedelta(minutes=1)
+                            and reached < p.window_end and h.start > p.window_start):
+                        gaps.append((reached, h.start))
+                    reached = h.end if reached is None else max(reached, h.end)
                 if span_lo is not None and span_hi is not None:
                     p.issue_description += (
                         f"\n\nDriver log coverage: the log runs from {_fmt(span_lo)} to {_fmt(span_hi)} on the "
@@ -2295,7 +2304,11 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                             "The log continues past the window, so a stretch of the window without lines "
                             "means the driver logged nothing then (for example while the device was in D3), "
                             "not that the log ended." if span_hi >= p.window_end else
-                            "The log ends inside the window; nothing after its end is known."))
+                            "The log ends inside the window; nothing after its end is known.")
+                        + (" Exception: between its files the log has nothing from "
+                           + "; ".join(f"{_fmt(a)} to {_fmt(b)}" for a, b in gaps)
+                           + ". Whether the driver was quiet or the capture is missing there is not known: "
+                             "do not read that stretch as the device being asleep." if gaps else ""))
                 yield {"type": "step", "content": (
                     f"{head}: {ex['lines']} lines → {DEVICE_LABELS[p.device]} agent…")}
                 yield from _agent_steps(p, agent_factory, max_steps, on_agent)
@@ -2420,6 +2433,9 @@ def apply_override(p: TimePoint, override: dict) -> None:
     lo, hi = local(override.get("window_start")), local(override.get("window_end"))
     at = local(override.get("issue_time"))
     if lo is None and hi is None and at is not None:
+        if (p.start is not None and at < p.start) or (p.end is not None and at > p.end):
+            raise ValueError(f"session {p.session_id}: the issue time {_fmt(at)} is outside the session "
+                             f"({_fmt(p.start)} → {_fmt(p.end)})")
         lo, hi = at - ISSUE_TIME_BEFORE, at + ISSUE_TIME_AFTER
         # Inside the session itself, not its report window: that one is capped
         # at WINDOW_CAP, short of a time late in a long standby.
@@ -2427,9 +2443,6 @@ def apply_override(p: TimePoint, override: dict) -> None:
             lo = max(lo, p.start)
         if p.end is not None:
             hi = min(hi, p.end)
-        if hi <= lo:
-            raise ValueError(f"session {p.session_id}: the issue time {_fmt(at)} is outside the session "
-                             f"({_fmt(p.start)} → {_fmt(p.end)})")
     if (lo is None) != (hi is None):
         raise ValueError(f"session {p.session_id}: give both window_start and window_end")
     if lo is not None:
@@ -2595,17 +2608,20 @@ def run_pipeline(
     `agent_factory=None` is a dry run: every step up to the agent runs.
 
     `session_ids` analyses those sessions only, chosen from every bad
-    wireless session rather than the worst `max_points`. `overrides` maps a
-    session id (str) to what a caller sets for it (apply_override): a window
-    and an issue time as timezone-aware datetimes, a question, evidence and a
-    device id. An empty `session_ids` (not None) takes none of the report's
-    own picks: only `caller_points`.
+    wireless session rather than the worst `max_points`. `overrides` maps
+    (session id, device) -- device "" for every device of the session -- to
+    what a caller sets for it (apply_override): a window and an issue time
+    as timezone-aware datetimes, a question, evidence and a device id. An
+    empty `session_ids` (not None) takes none of the report's own picks:
+    only `caller_points`.
 
     `caller_points` are requests the bad-session selection does not give
     (caller_point()): a report session to analyse anyway ({"session_id",
     "device"}), or a window ({"window_start", "window_end", "device"}), each
-    with what apply_override() takes. A session already among the bad ones
-    gets the request's override instead; one the report lacks is skipped.
+    with what apply_override() takes. A session asked for by id whose point
+    for that device is already among the bad ones gets the request's
+    override instead; a window is always a point of its own; a session the
+    report lacks is skipped.
     """
     try:
         if session_ids is not None:
@@ -2627,12 +2643,13 @@ def run_pipeline(
             wanted = {str(s) for s in session_ids}
             points = [p for p in points if str(p.session_id) in wanted]
         for p in points:
-            override = (overrides or {}).get(str(p.session_id))
+            override = ((overrides or {}).get((str(p.session_id), p.device))
+                        or (overrides or {}).get((str(p.session_id), "")))
             if override:
                 apply_override(p, override)
         if caller_points:
             payload = ssa.load_sleepstudy(html_path) if html_path else {}
-            by_id = {str(p.session_id): p for p in points}
+            targets = {(str(p.session_id), p.device): p for p in points}
             next_index = max([p.index for p in points] + [len(collected["sessions"])]) + 1
             for request in caller_points:
                 try:
@@ -2640,12 +2657,13 @@ def run_pipeline(
                 except ValueError as exc:
                     yield {"type": "step", "content": f"⚠️ {exc}"}
                     continue
-                if str(p.session_id) in by_id:
-                    apply_override(by_id[str(p.session_id)], request)
+                same = targets.get((str(p.session_id), p.device)) if request.get("session_id") else None
+                if same is not None:
+                    apply_override(same, request)
                     continue
                 apply_override(p, request)
                 points.append(p)
-                by_id[str(p.session_id)] = p
+                targets.setdefault((str(p.session_id), p.device), p)
                 next_index += 1
         yield {"type": "step", "content": (
             f"Analysing **{len(points)}** window(s) the caller gave." if not html_path else

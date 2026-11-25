@@ -60,12 +60,13 @@ def make_job(report: str = "", logs: str = "", sessions: Optional[list] = None, 
 def session_request(session_id="", issue_time="", question="", *, window_start="", window_end="",
                     device="", device_id="", evidence=None, force=False) -> list:
     """The job's sessions list for one optional session or window ([] when
-    neither is given: the report's own bad sessions are analysed)."""
+    neither is given: the report's own bad sessions are analysed). A window
+    with one end missing is passed on, for the command line to refuse."""
     s = {"session_id": str(session_id or "").strip(), "issue_time": issue_time,
          "window_start": window_start, "window_end": window_end, "issue_description": question,
          "device": device, "device_id": device_id, "evidence": list(evidence or []), "force": force}
     s = {k: v for k, v in s.items() if v}
-    if not (s.get("session_id") or s.get("issue_time") or (window_start and window_end)):
+    if not (s.get("session_id") or s.get("issue_time") or window_start or window_end):
         return []
     return [s]
 
@@ -108,7 +109,9 @@ def summary_text(result: dict) -> str:
     for device, r in (result.get("driver_log_reach") or {}).items():
         lines.append(f"{'Wi-Fi' if device == 'wifi' else 'Bluetooth'} driver log reaches back to "
                      f"{'' if r.get('exact') else 'at least '}{r.get('from')}; bad sessions older than it: "
-                     f"{', '.join(r.get('bad_sessions_older') or []) or 'none'}")
+                     f"{', '.join(r.get('bad_sessions_older') or []) or 'none'}"
+                     + (f"; before it, not known until the ETL is decoded: {', '.join(r['bad_sessions_unknown'])}"
+                        if r.get("bad_sessions_unknown") else ""))
     for s in result.get("sessions") or []:
         finding = s.get("finding") or {}
         lines.append(f"- Session {s.get('session_id')} [{s.get('device')}] {s.get('status')}/{s.get('code')}: "
@@ -347,7 +350,12 @@ def serve_stdio(stdin=None, stdout=None) -> None:
         except ValueError:
             send({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "parse error"}})
             continue
-        mid, method, params = message.get("id"), message.get("method"), message.get("params") or {}
+        if not isinstance(message, dict):    # null, a list (batches are not served), a bare value
+            send({"jsonrpc": "2.0", "id": None, "error": {"code": -32600, "message": "invalid request"}})
+            continue
+        mid, method, params = message.get("id"), message.get("method"), message.get("params")
+        if not isinstance(params, dict):
+            params = {}
         if mid is None:                      # notifications: initialized, cancelled...
             continue
         if method == "initialize":

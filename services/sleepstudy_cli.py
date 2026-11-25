@@ -142,6 +142,25 @@ def parse_time(value, field: str) -> Optional[datetime]:
     return dt
 
 
+def read_evidence_file(path: str) -> list[str]:
+    """--evidence-file: a JSON list of strings, or plain text with one finding
+    per line (e.g. the event-log suspects another tool already filtered)."""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as fh:
+            text = fh.read()
+    except OSError as exc:
+        raise JobError("E_INPUT_INVALID", f"--evidence-file: {exc}", EXIT_INPUT)
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = None
+    if isinstance(data, list):
+        return [str(x).strip() for x in data if str(x).strip()]
+    if isinstance(data, dict) and isinstance(data.get("evidence"), list):
+        return [str(x).strip() for x in data["evidence"] if str(x).strip()]
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
 def job_from_args(args) -> dict:
     """The job a command line describes, in the job-file shape."""
     if args.input:
@@ -159,11 +178,12 @@ def job_from_args(args) -> dict:
         if args.no_elevate:
             job.setdefault("options", {})["no_elevate"] = True
         return job
-    if not args.report and not args.collect:
+    if not (args.report or args.collect or args.logs):
         raise JobError("E_INPUT_INVALID",
-                       "give --input <job.json>, or --report with --logs, or --collect", EXIT_INPUT)
+                       "give --input <job.json>, or --report and/or --logs, or --collect", EXIT_INPUT)
+    evidence = list(args.evidence or []) + (read_evidence_file(args.evidence_file) if args.evidence_file else [])
     timing = any((args.issue_time, args.window_start, args.window_end, args.question,
-                  args.device, args.device_id, args.evidence, args.force))
+                  args.device, args.device_id, evidence, args.force))
     ids = args.session_id or []
     # Without --session-id, a window (or an issue time) is analysed on its own.
     window_only = not ids and bool(args.issue_time or (args.window_start and args.window_end))
@@ -177,7 +197,7 @@ def job_from_args(args) -> dict:
         sessions[0].update({"issue_time": args.issue_time, "window_start": args.window_start,
                             "window_end": args.window_end, "issue_description": args.question,
                             "device": args.device, "device_id": args.device_id,
-                            "evidence": args.evidence or [], "force": args.force})
+                            "evidence": evidence, "force": args.force})
     return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report or "",
             "driver_logs": [args.logs] if args.logs else [], "sessions": sessions,
             "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect),
@@ -235,9 +255,18 @@ def validate(job: dict) -> dict:
     options = job.get("options") or {}
     collect = bool(options.get("collect"))
     report = str(job.get("report") or "").strip()
-    # With collect, a missing report is made on the spot (powercfg /sleepstudy).
-    if (report or not collect) and not os.path.isfile(report):
+    sessions = [_session_request(s, i) for i, s in enumerate(job.get("sessions") or [])]
+    # A report is needed to find sessions; times alone (an issue time or a
+    # window per request) are cut on their own clock. With collect, a missing
+    # report is made on the spot (powercfg /sleepstudy).
+    times_only = bool(sessions) and not any(s["session_id"] for s in sessions)
+    if report and not os.path.isfile(report):
         raise JobError("E_INPUT_INVALID", f"report not found: {report!r}", EXIT_INPUT)
+    if not report and not collect and not times_only:
+        raise JobError("E_INPUT_INVALID",
+                       "give a Sleep Study report (--report, .html or .xml) to pick or name sessions; "
+                       "without one, give the issue time or window (--issue-time / --window-start "
+                       "--window-end)", EXIT_INPUT)
     logs = job.get("driver_logs") or []
     if isinstance(logs, str):
         logs = [logs]
@@ -252,7 +281,6 @@ def validate(job: dict) -> dict:
     for path in logs:
         if not os.path.exists(path):
             raise JobError("E_INPUT_INVALID", f"driver log path not found: {path!r}", EXIT_INPUT)
-    sessions = [_session_request(s, i) for i, s in enumerate(job.get("sessions") or [])]
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
             "dry_run": bool(options.get("dry_run")), "collect": collect,
@@ -328,14 +356,16 @@ def collect_only(out_dir: str, make_report: bool) -> int:
     return code
 
 
-def collect(job: dict, out_dir: str, log=print, run_elevated=None) -> dict:
-    """--collect: the report (made with powercfg when not given) and this
-    machine's Intel Wi-Fi driver log, put into the job. From a prompt that is
-    not an administrator's, only that part runs elevated, after Windows asks
-    (UAC); --no-elevate refuses instead. JobError (exit 5)."""
+def collect(job: dict, out_dir: str, log=print, run_elevated=None,
+            make_report: Optional[bool] = None) -> dict:
+    """--collect: the report (made with powercfg when not given, unless
+    `make_report` says otherwise) and this machine's Intel Wi-Fi driver log,
+    put into the job. From a prompt that is not an administrator's, only that
+    part runs elevated, after Windows asks (UAC); --no-elevate refuses
+    instead. JobError (exit 5)."""
     from services import driver_log_collector as dlc
 
-    make_report = not job["report"]
+    make_report = (not job["report"]) if make_report is None else make_report
     try:
         if dlc.is_admin():
             if make_report:
@@ -515,10 +545,12 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
     from services import sleepstudy_analyzer as ssa
     from services import sleepstudy_pipeline as sp
 
-    try:
-        payload = ssa.load_sleepstudy(job["report"])
-    except Exception as exc:          # noqa: BLE001 -- reported to the caller
-        raise JobError("E_REPORT_UNREADABLE", f"{type(exc).__name__}: {exc}", EXIT_REPORT)
+    payload = {}
+    if job["report"]:
+        try:
+            payload = ssa.load_sleepstudy(job["report"])
+        except Exception as exc:          # noqa: BLE001 -- reported to the caller
+            raise JobError("E_REPORT_UNREADABLE", f"{type(exc).__name__}: {exc}", EXIT_REPORT)
     raw_by_id = {str(s.get("SessionId")): s for s in payload.get("ScenarioInstances") or []}
 
     # Report sessions by id; with `force` (or a device named) one that is not a
@@ -558,7 +590,8 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
             code, reason = ineligible_reason(raw_by_id.get(sid), sp.DRIP_THRESHOLD)
             sessions.append({"session_id": sid, "status": "not_eligible" if code != "E_SESSION_NOT_FOUND"
                              else "not_found", "code": code, "message": reason, "finding": None})
-    system = sp.system_sessions(job["report"])
+    system = (sp.system_sessions(job["report"]) if job["report"] else
+              {"bad_total": 0, "wireless": 0, "system": 0, "groups": []})
     reach, reach_md = log_reach(job, payload)
     for line in reach_md.splitlines():
         if line.startswith("- "):
@@ -601,9 +634,15 @@ def log_reach(job: dict, payload: dict) -> tuple[dict, str]:
 
     if not job["driver_log"]:
         return {}, ""
-    offset = sp.session_utc_offset(None, (payload.get("ReportInformation") or {}).get("UtcOffset"))
+    if job["report"]:
+        offset = sp.session_utc_offset(None, (payload.get("ReportInformation") or {}).get("UtcOffset"))
+        bad = sp.time_points(job["report"], max_points=100000, per_device=100000)
+    else:
+        # No report: the clock of the caller's own times.
+        first = next((s["window_start"] for s in job["sessions"] if s["window_start"] is not None), None)
+        offset = int(first.utcoffset().total_seconds() // 60) if first is not None else None
+        bad = []
     found = sp.driver_log_reach(job["driver_log"], offset)
-    bad = sp.time_points(job["report"], max_points=100000, per_device=100000)
     reach, rows = {}, []
     for device, r in found.items():
         older, held, newer = [], [], []
@@ -622,10 +661,13 @@ def log_reach(job: dict, payload: dict) -> tuple[dict, str]:
                          "bad_sessions_newer": newer}
         label = sp.DEVICE_LABELS.get(device, device)
         since = sp._fmt(r["from"]) if r["exact"] else f"at least {sp._fmt(r['from'])}"
-        rows.append(f"- {label} driver log reaches back to {since} (until {sp._fmt(r['to'])}, "
-                    f"{r['files']} file(s)). Bad {label} sessions within its span: {', '.join(held) or 'none'}; "
+        row = (f"- {label} driver log reaches back to {since} (until {sp._fmt(r['to'])}, "
+               f"{r['files']} file(s)).")
+        if job["report"]:
+            row += (f" Bad {label} sessions within its span: {', '.join(held) or 'none'}; "
                     f"older than the log: {', '.join(older) or 'none'}"
                     + (f"; after it ended: {', '.join(newer)}" if newer else ""))
+        rows.append(row)
     zone = f" ({sp._fmt_offset(offset)})" if offset is not None else ""
     if not rows:
         md = (f"## Driver log coverage\n\nNo Wi-Fi or Bluetooth driver log was found under "
@@ -666,6 +708,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--device-id", help="the caller's name for the device, e.g. its ACPI path")
     ap.add_argument("--evidence", action="append",
                     help="a finding of the caller's own analysis for the agent to explain (repeatable)")
+    ap.add_argument("--evidence-file",
+                    help="findings in a file: one per line, or a JSON list (e.g. filtered event-log suspects)")
     ap.add_argument("--force", action="store_true",
                     help="analyse the session even if it is not a bad wireless session")
     ap.add_argument("--case-id", help="echoed in result.json")
@@ -685,12 +729,102 @@ def build_parser() -> argparse.ArgumentParser:
     return ap
 
 
-def main(argv=None) -> int:
+def _utf8_streams() -> None:
     for stream in (sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except (AttributeError, ValueError):
             pass
+
+
+def _progress(message: str) -> None:
+    """Progress goes to stderr: stdout carries only the final JSON line."""
+    print(f"[sleepstudy] {message}", file=sys.stderr, flush=True)
+
+
+def collect_main(argv=None) -> int:
+    """
+    IntelAvatar.exe sleepstudy-collect [--out DIR] [--with-report] [--no-elevate] [--open]
+
+    The first step alone: flush and copy this machine's Intel Wi-Fi driver
+    autologger into <out>/capture/<host>_<time>_collected (and, with
+    --with-report, run powercfg /sleepstudy), for sleepstudy-analyze --logs
+    later or elsewhere. Writes <out>/collection.json; stdout's last line is
+    JSON: status, capture_dir, files, report, driver_log_reach. Exit 0, or 5
+    (E_NOT_ADMIN, E_DRIVER_TRACE_NOT_RUNNING, ...), or 2 for bad arguments.
+    """
+    return _result_stdout(lambda out: _collect_main(argv, out))
+
+
+def _collect_main(argv, out) -> int:
+    from services import sleepstudy_pipeline as sp
+
+    ap = argparse.ArgumentParser(
+        prog="sleepstudy-collect",
+        description="Collect the Intel Wi-Fi driver log from this machine (step 1 of 2; "
+                    "analyse it with sleepstudy-analyze --logs).")
+    ap.add_argument("--out", help="output folder; default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>")
+    ap.add_argument("--with-report", action="store_true",
+                    help="also make a Sleep Study report here (powercfg /sleepstudy, HTML)")
+    ap.add_argument("--no-elevate", action="store_true",
+                    help="fail with E_NOT_ADMIN instead of showing the Windows (UAC) prompt")
+    ap.add_argument("--open", action="store_true", help="open the output folder when done")
+    args = ap.parse_args(argv)
+    out_dir = os.path.abspath(args.out or default_out_dir())
+    job = {"report": "", "no_elevate": args.no_elevate, "driver_log": "", "collection": None}
+    try:
+        collect(job, out_dir, log=_progress, make_report=args.with_report)
+    except JobError as exc:
+        os.makedirs(out_dir, exist_ok=True)
+        with open(os.path.join(out_dir, COLLECTION_FILE), "w", encoding="utf-8") as fh:
+            json.dump({"error": {"code": exc.code, "message": exc.message}}, fh, ensure_ascii=False, indent=2)
+        print(json.dumps({"status": "error", "code": exc.code, "message": exc.message},
+                         ensure_ascii=False), file=out, flush=True)
+        return exc.exit_code
+    info = job["collection"]
+    offset = sp.local_utc_offset()
+    reach = {d: {"from": _iso(sp._fmt(r["from"]), offset), "to": _iso(sp._fmt(r["to"]), offset),
+                 "exact": r["exact"]}
+             for d, r in sp.driver_log_reach(info["capture_dir"], offset).items()}
+    info = {**info, "report": job["report"] or "", "driver_log_reach": reach}
+    with open(os.path.join(out_dir, COLLECTION_FILE), "w", encoding="utf-8") as fh:
+        json.dump(info, fh, ensure_ascii=False, indent=2)
+    for device, r in reach.items():
+        _progress(f"{'Wi-Fi' if device == 'wifi' else 'Bluetooth'} driver log reaches back to "
+                  f"{'' if r['exact'] else 'at least '}{r['from']}")
+    _progress("Next: IntelAvatar.exe sleepstudy-analyze --logs \"" + info["capture_dir"] + "\""
+              + (f" --report \"{job['report']}\"" if job["report"] else " [--report <sleepstudy.html|.xml>]")
+              + " --issue-time <ISO 8601 with offset> --question \"...\"")
+    print(json.dumps({"status": "ok", "capture_dir": info["capture_dir"],
+                      "files": [f["file"] for f in info["files"]], "report": info["report"],
+                      "collection": os.path.join(out_dir, COLLECTION_FILE),
+                      "driver_log_reach": reach, "warnings": info.get("warnings") or []},
+                     ensure_ascii=False), file=out, flush=True)
+    if args.open:
+        try:
+            os.startfile(out_dir)
+        except (AttributeError, OSError):
+            pass
+    return EXIT_OK
+
+
+def _result_stdout(work):
+    """Run `work(out)` with everything printed going to stderr (progress, and
+    whatever the modules it loads print), so stdout carries only the JSON
+    line `work` writes to `out`: a caller can read stdout as the result."""
+    _utf8_streams()
+    out, sys.stdout = sys.stdout, sys.stderr
+    try:
+        return work(out)
+    finally:
+        sys.stdout = out
+
+
+def main(argv=None) -> int:
+    return _result_stdout(lambda out: _main(argv, out))
+
+
+def _main(argv, out) -> int:
     args = build_parser().parse_args(argv)
     out_dir = os.path.abspath(args.out or default_out_dir())
     if args.collect_only:
@@ -699,14 +833,12 @@ def main(argv=None) -> int:
     try:
         job = validate(job_from_args(args))
         case_id = job["case_id"]
-        progress = lambda m: print(f"[sleepstudy] {m}", flush=True)
         if job["collect"]:
-            collect(job, out_dir, log=progress)
+            collect(job, out_dir, log=_progress)
         factory = template = None
         if not job["dry_run"]:
             factory, template = load_agents()
-        result = run(job, out_dir, agent_factory=factory, point_template=template,
-                     log=lambda m: print(f"[sleepstudy] {m}", flush=True))
+        result = run(job, out_dir, agent_factory=factory, point_template=template, log=_progress)
         markdown = (f"# Sleep Study driver analysis\n\n"
                     f"_sleepstudy-analyze {TOOL_VERSION} · schema {SCHEMA_VERSION}"
                     + (f" · case {case_id}" if case_id else "") + "_\n\n"
@@ -718,10 +850,14 @@ def main(argv=None) -> int:
         print(json.dumps({"status": "ok", "result": os.path.join(out_dir, "result.json"),
                           "report": os.path.join(out_dir, "report.html"),
                           "sessions": counts,
+                          "findings": [{"session_id": s["session_id"], "device": s.get("device"),
+                                        "code": s["code"],
+                                        "summary": (s.get("finding") or {}).get("summary") or s.get("message") or ""}
+                                       for s in result["sessions"]],
                           "driver_log_reach": {d: {"from": r["from"], "exact": r["exact"],
                                                    "bad_sessions_older": r["bad_sessions_older"]}
                                                for d, r in (result.get("driver_log_reach") or {}).items()}},
-                         ensure_ascii=False), flush=True)
+                         ensure_ascii=False), file=out, flush=True)
         if args.open:
             try:
                 os.startfile(os.path.join(out_dir, "report.html"))
@@ -737,8 +873,9 @@ def main(argv=None) -> int:
         write_outputs(out_dir, result, f"# Sleep Study driver analysis\n\nFailed: {result['code']} {result['message']}\n")
     except OSError:
         pass
-    print(json.dumps({"status": "error", "code": result["code"], "message": result["message"]},
-                     ensure_ascii=False), file=sys.stderr, flush=True)
+    print(json.dumps({"status": "error", "code": result["code"], "message": result["message"],
+                      "result": os.path.join(out_dir, "result.json")},
+                     ensure_ascii=False), file=out, flush=True)
     return code
 
 

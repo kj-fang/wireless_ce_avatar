@@ -2590,12 +2590,21 @@ def run_pipeline(
     gets the request's override instead; one the report lacks is skipped.
     """
     try:
-        yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
         if session_ids is not None:
             # Asked for by id: any bad wireless session qualifies, not only
             # the worst few the page lists.
             max_points = per_device = 100000
-        collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
+        if html_path:
+            yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
+            collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
+        else:
+            # No report: only the caller's windows, on the clock of the times
+            # it gave, without Sleep Study evidence.
+            yield {"type": "step", "content": "No Sleep Study report: analysing the caller's windows alone."}
+            collected = {"total_sessions": 0, "qualifying_count": 0, "sessions": [], "devices": [],
+                         "warnings": [], "criteria": {"drip_metric": DRIP_METRIC,
+                                                      "drip_threshold_pct": drip_threshold}}
+            points = []
         if session_ids is not None:
             wanted = {str(s) for s in session_ids}
             points = [p for p in points if str(p.session_id) in wanted]
@@ -2604,7 +2613,7 @@ def run_pipeline(
             if override:
                 apply_override(p, override)
         if caller_points:
-            payload = ssa.load_sleepstudy(html_path)
+            payload = ssa.load_sleepstudy(html_path) if html_path else {}
             by_id = {str(p.session_id): p for p in points}
             next_index = max([p.index for p in points] + [len(collected["sessions"])]) + 1
             for request in caller_points:
@@ -2621,6 +2630,7 @@ def run_pipeline(
                 by_id[str(p.session_id)] = p
                 next_index += 1
         yield {"type": "step", "content": (
+            f"Analysing **{len(points)}** window(s) the caller gave." if not html_path else
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "
             f"{criteria_text(collected['criteria'])} and a RED top blocker. "
@@ -2683,11 +2693,13 @@ def render_markdown(result: dict) -> str:
     c = result["criteria"]
     out = [
         "# Sleep Study × Driver Log Analysis",
-        f"**Report:** `{result['source']}`  ",
+        (f"**Report:** `{result['source']}`  " if result["source"] else
+         "**Report:** none (the caller's times alone, without Sleep Study evidence)  "),
         "**Driver log:** " + (", ".join(f"`{d}`" for d in result["driver_logs"]) or "none") + "  ",
-        f"**Sessions:** {result['qualifying_count']} of {result['total_sessions']} qualify "
-        f"(battery drain, {criteria_text(c)}, RED top blocker); "
-        f"{len(result['points'])} analysed.",
+        (f"**Sessions:** {result['qualifying_count']} of {result['total_sessions']} qualify "
+         f"(battery drain, {criteria_text(c)}, RED top blocker); "
+         f"{len(result['points'])} analysed." if result["source"] else
+         f"**Windows:** {len(result['points'])} analysed."),
     ]
     if result["warnings"]:
         out.append("")

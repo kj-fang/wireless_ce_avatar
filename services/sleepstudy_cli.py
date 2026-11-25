@@ -208,9 +208,10 @@ DEVICE_NAMES = {"wifi": "wifi", "wi-fi": "wifi", "wlan": "wifi", "bt": "bt", "bl
 MAX_EVIDENCE_LINES, MAX_EVIDENCE_CHARS = 30, 500
 
 
-def _session_request(s, i: int) -> dict:
+def _session_request(s, i: int, warnings: list) -> dict:
     """One entry of the job's sessions, checked: a report session (session_id),
-    or a window of the caller's (window_start + window_end, or issue_time)."""
+    or a window of the caller's (window_start + window_end, or issue_time).
+    What is dropped from its evidence is added to `warnings`."""
     field = f"sessions[{i}]"
     if not isinstance(s, dict):
         raise JobError("E_INPUT_INVALID", f"{field}: must be an object", EXIT_INPUT)
@@ -238,7 +239,16 @@ def _session_request(s, i: int) -> dict:
         evidence = [evidence]
     if not isinstance(evidence, list):
         raise JobError("E_INPUT_INVALID", f"{field}.evidence: a string or a list of strings", EXIT_INPUT)
-    evidence = [str(e).strip()[:MAX_EVIDENCE_CHARS] for e in evidence if str(e).strip()][:MAX_EVIDENCE_LINES]
+    evidence = [str(e).strip() for e in evidence if str(e).strip()]
+    if len(evidence) > MAX_EVIDENCE_LINES:
+        warnings.append(f"{field}.evidence: {len(evidence)} lines given, only the first "
+                        f"{MAX_EVIDENCE_LINES} are used")
+        evidence = evidence[:MAX_EVIDENCE_LINES]
+    cut = sum(len(e) > MAX_EVIDENCE_CHARS for e in evidence)
+    if cut:
+        warnings.append(f"{field}.evidence: {cut} line(s) longer than {MAX_EVIDENCE_CHARS} "
+                        "characters were cut to that length")
+    evidence = [e[:MAX_EVIDENCE_CHARS] for e in evidence]
     return {"session_id": sid, "issue_time": issue, "window_start": lo, "window_end": hi,
             "question": str(s.get("issue_description") or "").strip(),
             "device": DEVICE_NAMES.get(device, ""), "device_id": str(s.get("device_id") or "").strip(),
@@ -255,7 +265,8 @@ def validate(job: dict) -> dict:
     options = job.get("options") or {}
     collect = bool(options.get("collect"))
     report = str(job.get("report") or "").strip()
-    sessions = [_session_request(s, i) for i, s in enumerate(job.get("sessions") or [])]
+    warnings: list = []
+    sessions = [_session_request(s, i, warnings) for i, s in enumerate(job.get("sessions") or [])]
     # A report is needed to find sessions; times alone (an issue time or a
     # window per request) are cut on their own clock. With collect, a missing
     # report is made on the spot (powercfg /sleepstudy).
@@ -284,7 +295,7 @@ def validate(job: dict) -> dict:
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
             "dry_run": bool(options.get("dry_run")), "collect": collect,
-            "no_elevate": bool(options.get("no_elevate")), "collection": None}
+            "no_elevate": bool(options.get("no_elevate")), "collection": None, "warnings": warnings}
 
 
 COLLECTION_FILE = "collection.json"
@@ -546,6 +557,9 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
     from services import sleepstudy_analyzer as ssa
     from services import sleepstudy_pipeline as sp
 
+    job_warnings = list(job.get("warnings") or [])
+    for warning in job_warnings:
+        log(f"⚠ {warning}")
     payload = {}
     if job["report"]:
         try:
@@ -617,9 +631,10 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
                                              for g in system["groups"]]},
         "driver_log_reach": reach,
         "sessions": sessions,
-        "warnings": (final or {}).get("warnings", []),
+        "warnings": job_warnings + (final or {}).get("warnings", []),
         "excerpt_dir": os.path.join(out_dir, "excerpts"),
-        "_markdown": reach_md + (final or {}).get("markdown", ""),
+        "_markdown": ("".join(f"> ⚠️ {w}\n" for w in job_warnings) + ("\n" if job_warnings else "")
+                      + reach_md + (final or {}).get("markdown", "")),
     }
 
 

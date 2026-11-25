@@ -7,9 +7,12 @@ line in a child process (`IntelAvatar.exe sleepstudy-analyze --input job.json
 reads its result.json -- so every caller gets the same analysis and output.
 
   1. Power team's MCS Analyzer:
-     a. its etl-trace-request lists the bad Sleep Study sessions it wants
-        traced; the Wi-Fi / Bluetooth ones come here, with the device's ACPI path.
-          IntelAvatar.exe sleepstudy-bridge from-mcs <etl-trace-request.json> --report <html> [--logs <dir> | --collect]
+     a. its ETW investigation plan (the ETW input MCS documents; its
+        etl-trace-request sidecar is read the same) lists the bad Sleep Study
+        sessions it wants traced; the Wi-Fi / Bluetooth ones come here, with
+        the device's ACPI path. Without --report, the report the plan names
+        (source_sleepstudy) is used, from that path or from beside the plan.
+          IntelAvatar.exe sleepstudy-bridge from-mcs <etw-investigation-plan.json> [--report <xml|html>] [--logs <dir> | --collect]
      b. its etl-findings describe its live ETW capture: the standby Windows
         confirmed in it (Kernel-Power 506/507) becomes the window, and its
         measurements (Wi-Fi time out of D3, Netwaw ISR/DPC counts) become
@@ -113,11 +116,24 @@ def summary_text(result: dict) -> str:
     return "\n".join(lines)
 
 
-# ── 1. MCS Analyzer's etl-trace-request ───────────────────────────────────────
+# ── 1. MCS Analyzer's investigation plan ──────────────────────────────────────
+
+def report_of_plan(plan: dict, plan_path: str) -> str:
+    """The Sleep Study report an MCS investigation plan was derived from (its
+    source_sleepstudy): at the path the plan gives, else beside the plan,
+    where a copied run folder has it; "" when it is at neither."""
+    source = str(plan.get("source_sleepstudy") or "").strip()
+    if not source:
+        return ""
+    beside = os.path.join(os.path.dirname(os.path.abspath(plan_path)),
+                          os.path.basename(source.replace("\\", "/")))
+    return next((os.path.abspath(p) for p in (source, beside) if os.path.isfile(p)), "")
+
 
 def job_from_mcs_request(request: dict, report: str, logs: str = "", collect: bool = False,
                          question: str = "", dry_run: bool = False) -> dict:
-    """The sessions MCS Analyzer wants traced whose blocker is a Wi-Fi or
+    """The sessions MCS Analyzer wants traced (its investigation plan or its
+    etl-trace-request: the same target_scenarios) whose blocker is a Wi-Fi or
     Bluetooth device, as a job; the others (audio, storage...) are not ours."""
     sessions = []
     why = ", ".join(request.get("reason") or [])
@@ -379,9 +395,13 @@ def main(argv: list) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("mcp", help="serve the analysis as an MCP tool over stdio")
-    m = sub.add_parser("from-mcs", help="analyse the Wi-Fi/BT sessions of MCS Analyzer's etl-trace-request")
-    m.add_argument("request", help="MCS Analyzer's <basename>-etl-trace-request-<date>.json")
-    m.add_argument("--report", default="", help="the Sleep Study report MCS Analyzer read (.html or .xml)")
+    m = sub.add_parser("from-mcs", help="analyse the Wi-Fi/BT sessions of MCS Analyzer's ETW investigation plan")
+    m.add_argument("request", metavar="plan",
+                   help="MCS Analyzer's <basename>-etw-investigation-plan-<date>.json "
+                        "(its etl-trace-request sidecar is read the same)")
+    m.add_argument("--report", default="",
+                   help="the Sleep Study report MCS Analyzer read (.html or .xml); default: the one the plan "
+                        "names (source_sleepstudy), at that path or beside the plan")
     m.add_argument("--logs", default="", help="driver log capture folder")
     m.add_argument("--collect", action="store_true", help="collect the Intel Wi-Fi driver log from this machine")
     m.add_argument("--question", default="")
@@ -414,11 +434,18 @@ def main(argv: list) -> int:
                    "no driver interrupts/DPCs), or no confirmed standby: nothing for the driver-log "
                    "analysis. Add --device wifi to look anyway.")
     else:
-        job = job_from_mcs_request(request, a.report, a.logs, a.collect, a.question, a.dry_run)
-        nothing = "No Wi-Fi or Bluetooth session in the trace request: nothing for the driver-log analysis."
+        report = a.report or report_of_plan(request, a.request)
+        job = job_from_mcs_request(request, report, a.logs, a.collect, a.question, a.dry_run)
+        nothing = "No Wi-Fi or Bluetooth session in the plan: nothing for the driver-log analysis."
     if not job["sessions"]:
         print(nothing)
         return 0
+    if a.cmd == "from-mcs" and not a.report:
+        if job["report"]:
+            print(f"Sleep Study report named by the plan: {job['report']}")
+        elif request.get("source_sleepstudy") and not a.collect:
+            print(f"The plan's Sleep Study report is not at {request['source_sleepstudy']} nor beside "
+                  "the plan: pass it with --report.", file=sys.stderr)
     for s in job["sessions"]:
         where = s.get("session_id") or f"{s.get('window_start')} -> {s.get('window_end')}"
         print(f"  {s.get('device') or 'wifi'} {s.get('device_id') or ''} @ {where}")

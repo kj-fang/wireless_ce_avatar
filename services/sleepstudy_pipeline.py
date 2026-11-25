@@ -1016,6 +1016,14 @@ class TimePoint:
     # asked for instead of the report's, and its own question to the agent.
     window_source: str = "report"
     caller_question: str = ""
+    # How the point was chosen: "report" (a bad wireless session), "forced"
+    # (a report session the caller asked for although it is not one), or
+    # "window" (a window of the caller's, with the session it falls in if any).
+    selection: str = "report"
+    # The caller's own findings for this standby (e.g. another team's ETW
+    # analysis) and its name for the device (an ACPI path), for the agent.
+    caller_evidence: list = field(default_factory=list)
+    device_id: str = ""
     # Why each Wi-Fi driver ETL tried for this point could not be decoded.
     etl_decode_errors: list = field(default_factory=list)
     status: str = ""
@@ -1716,6 +1724,20 @@ def _issue_description(point: TimePoint, threshold: float,
     if point.window_source == "caller":
         asked += (f"\nThe driver log was cut to the window the caller chose: "
                   f"{_fmt(point.window_start)} -> {_fmt(point.window_end)}.")
+    if point.selection == "forced":
+        asked += ("\nThe caller asked for this session although it does not meet the bad-session "
+                  "criteria above; judge from the driver log whether the device behaved normally.")
+    elif point.selection == "window" and not point.blockers and point.sw_drip_pct is None:
+        asked += ("\nNo Sleep Study session in the report covers this window, so the Sleep Study "
+                  "values above are not available; rely on the caller's evidence and the log.")
+    if point.device_id:
+        asked += f"\nThe caller identifies the device as {point.device_id}."
+    if point.caller_evidence:
+        asked += ("\n\nEvidence from the caller's own analysis of this standby (for example a "
+                  "system-level ETW trace). Explain it from the driver log: say what in the log "
+                  "accounts for it, or where the log contradicts it. Do not restate it as a "
+                  "finding the log does not support.\n"
+                  + "\n".join(f"  - {line}" for line in point.caller_evidence))
     return _fill(text, values) + asked + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
 
 
@@ -2251,6 +2273,19 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
             elif agent_factory is None:
                 p.status = STATUS_DRY_RUN
             else:
+                # The excerpt alone cannot tell "the driver logged nothing" (a
+                # device asleep in D3) from "the log ended": say how far it runs.
+                span_lo = min((h.start for h in hits if h.start is not None), default=None)
+                span_hi = max((h.end for h in hits if h.end is not None), default=None)
+                if span_lo is not None and span_hi is not None:
+                    p.issue_description += (
+                        f"\n\nDriver log coverage: the log runs from {_fmt(span_lo)} to {_fmt(span_hi)} on the "
+                        f"report's clock; the excerpt holds its lines inside the window, the last at "
+                        f"{_fmt(ex['last'])}. " + (
+                            "The log continues past the window, so a stretch of the window without lines "
+                            "means the driver logged nothing then (for example while the device was in D3), "
+                            "not that the log ended." if span_hi >= p.window_end else
+                            "The log ends inside the window; nothing after its end is known."))
                 yield {"type": "step", "content": (
                     f"{head}: {ex['lines']} lines → {DEVICE_LABELS[p.device]} agent…")}
                 yield from _agent_steps(p, agent_factory, max_steps, on_agent)
@@ -2387,6 +2422,93 @@ def apply_override(p: TimePoint, override: dict) -> None:
         p.window_source = "caller"
     if override.get("question"):
         p.caller_question = str(override["question"])
+    if override.get("evidence"):
+        p.caller_evidence = [str(e) for e in override["evidence"]]
+    if override.get("device_id"):
+        p.device_id = str(override["device_id"])
+
+
+def _session_covering(sessions: list, lo: datetime, hi: datetime, report_offset) -> Optional[dict]:
+    """The Modern Standby session of the report overlapping the timezone-aware
+    window lo..hi the most, or None. Each session is compared on its own clock."""
+    best, best_overlap = None, timedelta(0)
+    for s in sessions:
+        if s.get("Type") not in ssa.MS_SESSION_TYPES:
+            continue
+        start = ssa.parse_local_timestamp(s.get("EntryTimestampLocal") or "")
+        end = ssa.parse_local_timestamp(s.get("ExitTimestampLocal") or "")
+        offset = session_utc_offset(s, report_offset)
+        if start is None or end is None or offset is None:
+            continue
+        clock = timezone(timedelta(minutes=offset))
+        overlap = (min(hi.astimezone(clock).replace(tzinfo=None), end)
+                   - max(lo.astimezone(clock).replace(tzinfo=None), start))
+        if overlap > best_overlap:
+            best, best_overlap = s, overlap
+    return best
+
+
+def caller_point(payload: dict, request: dict, index: int) -> TimePoint:
+    """
+    A time point the caller asks for that the bad-session selection does not
+    give, for request["device"] ("wifi" / "bt"; Wi-Fi by default):
+      session_id -- that report session, analysed although it is not a bad
+        wireless session ("forced");
+      window_start / window_end (timezone-aware), no session_id -- that window,
+        with the report session it falls in when there is one ("window").
+    The caller's window, question and evidence are applied by apply_override().
+    Raises ValueError for a session the report does not have.
+    """
+    device = request.get("device") or ssa.DEVICE_WIFI
+    report_offset = (payload.get("ReportInformation") or {}).get("UtcOffset")
+    sessions = payload.get("ScenarioInstances") or []
+    sid = str(request.get("session_id") or "").strip()
+    lo, hi = request.get("window_start"), request.get("window_end")
+    if sid:
+        raw = next((s for s in sessions if str(s.get("SessionId")) == sid), None)
+        if raw is None:
+            raise ValueError(f"session {sid}: the report has no session with this id")
+    elif lo is not None and hi is not None:
+        raw = _session_covering(sessions, lo, hi, report_offset)
+    else:
+        raise ValueError("a requested window needs both window_start and window_end")
+
+    if raw is not None:
+        start = ssa.parse_local_timestamp(raw.get("EntryTimestampLocal") or "")
+        end = ssa.parse_local_timestamp(raw.get("ExitTimestampLocal") or "")
+        sw, hw = ssa.compute_drip_percentages(raw)
+        p = TimePoint(
+            index=index, session_id=raw.get("SessionId"), device=device,
+            type_label=ssa.MS_SESSION_TYPES.get(raw.get("Type"), f"Type {raw.get('Type')}"),
+            start=start, end=end, duration=ssa.format_duration(raw.get("Duration") or 0),
+            sw_drip_pct=sw, hw_drip_pct=hw,
+            blockers=[{"name": h["blocker"].get("Name", ""), "device": h["device"],
+                       "active_time_pct": h["blocker"].get("ActiveTimePercent", 0)}
+                      for h in ssa.red_top_blockers(raw)],
+            selection="forced" if sid else "window")
+        p.utc_offset_minutes = session_utc_offset(raw, report_offset)
+        p.sleep_summary = _sleep_summary(p, raw)
+        p.wake_evidence = _wake_evidence(raw, device)
+        if start is not None:
+            p.window_start = start - WINDOW_PAD
+            p.window_end = min((end or start) + WINDOW_PAD, p.window_start + WINDOW_CAP)
+            p.window_truncated = (end or start) + WINDOW_PAD > p.window_end
+        return p
+
+    # No report session holds the window: the window alone, on the report's clock.
+    offset = session_utc_offset(None, report_offset)
+    if offset is None:
+        offset = int(lo.utcoffset().total_seconds() // 60)
+    clock = timezone(timedelta(minutes=offset))
+    start, end = lo.astimezone(clock).replace(tzinfo=None), hi.astimezone(clock).replace(tzinfo=None)
+    p = TimePoint(index=index, session_id=f"window-{index}", device=device, type_label="Caller window",
+                  start=start, end=end,
+                  duration=ssa.format_duration(int((end - start).total_seconds() * 1_000_000)),
+                  sw_drip_pct=None, hw_drip_pct=None, blockers=[], selection="window",
+                  window_start=start, window_end=end)
+    p.utc_offset_minutes = offset
+    p.sleep_summary = "No Sleep Study session in the report covers this window."
+    return p
 
 
 def run_pipeline(
@@ -2402,6 +2524,7 @@ def run_pipeline(
     point_template: Optional[str] = None,
     session_ids=None,
     overrides: Optional[dict] = None,
+    caller_points: Optional[list] = None,
 ) -> Iterator[dict]:
     """
     Analyse every time point and yield events: "step" and "agent_step" as in
@@ -2416,22 +2539,47 @@ def run_pipeline(
     `session_ids` analyses those sessions only, chosen from every bad
     wireless session rather than the worst `max_points`. `overrides` maps a
     session id (str) to what a caller sets for it (apply_override): a window
-    and an issue time as timezone-aware datetimes, and a question.
+    and an issue time as timezone-aware datetimes, a question, evidence and a
+    device id. An empty `session_ids` (not None) takes none of the report's
+    own picks: only `caller_points`.
+
+    `caller_points` are requests the bad-session selection does not give
+    (caller_point()): a report session to analyse anyway ({"session_id",
+    "device"}), or a window ({"window_start", "window_end", "device"}), each
+    with what apply_override() takes. A session already among the bad ones
+    gets the request's override instead; one the report lacks is skipped.
     """
     try:
         yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
-        if session_ids:
+        if session_ids is not None:
             # Asked for by id: any bad wireless session qualifies, not only
             # the worst few the page lists.
             max_points = per_device = 100000
         collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
-        if session_ids:
+        if session_ids is not None:
             wanted = {str(s) for s in session_ids}
             points = [p for p in points if str(p.session_id) in wanted]
         for p in points:
             override = (overrides or {}).get(str(p.session_id))
             if override:
                 apply_override(p, override)
+        if caller_points:
+            payload = ssa.load_sleepstudy(html_path)
+            by_id = {str(p.session_id): p for p in points}
+            next_index = max([p.index for p in points] + [len(collected["sessions"])]) + 1
+            for request in caller_points:
+                try:
+                    p = caller_point(payload, request, next_index)
+                except ValueError as exc:
+                    yield {"type": "step", "content": f"⚠️ {exc}"}
+                    continue
+                if str(p.session_id) in by_id:
+                    apply_override(by_id[str(p.session_id)], request)
+                    continue
+                apply_override(p, request)
+                points.append(p)
+                by_id[str(p.session_id)] = p
+                next_index += 1
         yield {"type": "step", "content": (
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "

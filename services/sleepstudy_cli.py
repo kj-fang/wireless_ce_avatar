@@ -32,13 +32,23 @@ Options for the first form:
     --window-start T / --window-end T
                         the exact window to cut instead (ISO 8601, offset)
     --question TEXT     the caller's focus, added to the agent's question
+    --device wifi|bt    whose driver log to read (a session or window the
+                        report does not flag as a bad wireless session)
+    --device-id ID      the caller's name for the device, e.g. its ACPI path
+    --evidence TEXT     a finding of the caller's own (e.g. an ETW trace's
+                        "Wi-Fi out of D3 169 s"), for the agent to explain
+                        from the driver log (repeatable)
+    --force             analyse the session even if it is not a bad wireless one
+    --window-start/--window-end (or --issue-time) without --session-id
+                        analyse that window: the report session it falls in,
+                        or the window alone (e.g. another tool's live capture)
     --case-id ID        echoed in the result
     --dry-run           everything up to the LLM: selection, log matching,
                         time zones, ETL decoding, cuts; no agent call
 
 A job file carries the same, for any number of sessions:
     {
-      "schema_version": "1.0",
+      "schema_version": "1.1",
       "case_id": "CASE-12345",
       "report": "D:\\case\\sleepstudy-report.html",
       "driver_logs": ["D:\\case\\WRT"],
@@ -46,11 +56,17 @@ A job file carries the same, for any number of sessions:
         {"session_id": "704",
          "issue_time": "2026-10-25T12:29:07-07:00",
          "window_start": "...", "window_end": "...",
-         "issue_description": "Why did Wi-Fi stay in D0?"}
+         "issue_description": "Why did Wi-Fi stay in D0?"},
+        {"window_start": "2026-11-10T08:40:25Z", "window_end": "2026-11-10T08:49:10Z",
+         "device": "wifi", "device_id": "\\_SB.PC00.CNVW",
+         "evidence": ["ETW: Wi-Fi out of D3 169 s (32% of standby), 12 entries"]}
       ],
       "options": {"dry_run": false, "collect": false}
     }
-    ("collect": true replaces "driver_logs" and makes "report" optional.)
+    ("collect": true replaces "driver_logs" and makes "report" optional.
+     A session is a report session by id -- with "force": true (or a
+     "device") analysed even when it is not a bad wireless session -- or a
+     window without an id. Schema 1.0 jobs read the same.)
 
 Output, in --out:
     result.json   the contract below (SCHEMA_VERSION), for programs
@@ -76,7 +92,7 @@ import traceback
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 TOOL_VERSION = "0.1.0"
 
 EXIT_OK, EXIT_ERROR, EXIT_INPUT, EXIT_REPORT, EXIT_AGENT, EXIT_COLLECT = 0, 1, 2, 3, 4, 5
@@ -143,19 +159,67 @@ def job_from_args(args) -> dict:
     if not args.report and not args.collect:
         raise JobError("E_INPUT_INVALID",
                        "give --input <job.json>, or --report with --logs, or --collect", EXIT_INPUT)
-    timing = any((args.issue_time, args.window_start, args.window_end, args.question))
-    if timing and len(args.session_id or []) != 1:
+    timing = any((args.issue_time, args.window_start, args.window_end, args.question,
+                  args.device, args.device_id, args.evidence, args.force))
+    ids = args.session_id or []
+    # Without --session-id, a window (or an issue time) is analysed on its own.
+    window_only = not ids and bool(args.issue_time or (args.window_start and args.window_end))
+    if timing and len(ids) != 1 and not window_only:
         raise JobError("E_INPUT_INVALID",
-                       "--issue-time, --window-start/--window-end and --question need exactly one "
-                       "--session-id (use a job file for several)", EXIT_INPUT)
-    sessions = [{"session_id": sid} for sid in (args.session_id or [])]
+                       "--issue-time, --window-start/--window-end, --question, --device, --device-id, "
+                       "--evidence and --force need exactly one --session-id, or a window without one "
+                       "(use a job file for several)", EXIT_INPUT)
+    sessions = [{"session_id": sid} for sid in ids] or ([{}] if window_only else [])
     if timing:
         sessions[0].update({"issue_time": args.issue_time, "window_start": args.window_start,
-                            "window_end": args.window_end, "issue_description": args.question})
+                            "window_end": args.window_end, "issue_description": args.question,
+                            "device": args.device, "device_id": args.device_id,
+                            "evidence": args.evidence or [], "force": args.force})
     return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report or "",
             "driver_logs": [args.logs] if args.logs else [], "sessions": sessions,
             "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect),
                         "no_elevate": bool(args.no_elevate)}}
+
+
+DEVICE_NAMES = {"wifi": "wifi", "wi-fi": "wifi", "wlan": "wifi", "bt": "bt", "bluetooth": "bt"}
+MAX_EVIDENCE_LINES, MAX_EVIDENCE_CHARS = 30, 500
+
+
+def _session_request(s, i: int) -> dict:
+    """One entry of the job's sessions, checked: a report session (session_id),
+    or a window of the caller's (window_start + window_end, or issue_time)."""
+    field = f"sessions[{i}]"
+    if not isinstance(s, dict):
+        raise JobError("E_INPUT_INVALID", f"{field}: must be an object", EXIT_INPUT)
+    sid = str(s.get("session_id") or "").strip()
+    issue = parse_time(s.get("issue_time"), f"{field}.issue_time")
+    lo = parse_time(s.get("window_start"), f"{field}.window_start")
+    hi = parse_time(s.get("window_end"), f"{field}.window_end")
+    if (lo is None) != (hi is None):
+        raise JobError("E_INPUT_INVALID", f"{field}: give both window_start and window_end", EXIT_INPUT)
+    if lo is not None and hi <= lo:
+        raise JobError("E_INPUT_INVALID", f"{field}: window_end is not after window_start", EXIT_INPUT)
+    if not sid:
+        if lo is None and issue is None:
+            raise JobError("E_INPUT_INVALID",
+                           f"{field}: needs a session_id, or a window (window_start/window_end or issue_time)",
+                           EXIT_INPUT)
+        if lo is None:          # a window of the caller's from its issue time alone
+            from services.sleepstudy_pipeline import ISSUE_TIME_AFTER, ISSUE_TIME_BEFORE
+            lo, hi = issue - ISSUE_TIME_BEFORE, issue + ISSUE_TIME_AFTER
+    device = str(s.get("device") or "").strip().lower()
+    if device and device not in DEVICE_NAMES:
+        raise JobError("E_INPUT_INVALID", f"{field}.device: {s.get('device')!r} is not wifi or bt", EXIT_INPUT)
+    evidence = s.get("evidence") or []
+    if isinstance(evidence, str):
+        evidence = [evidence]
+    if not isinstance(evidence, list):
+        raise JobError("E_INPUT_INVALID", f"{field}.evidence: a string or a list of strings", EXIT_INPUT)
+    evidence = [str(e).strip()[:MAX_EVIDENCE_CHARS] for e in evidence if str(e).strip()][:MAX_EVIDENCE_LINES]
+    return {"session_id": sid, "issue_time": issue, "window_start": lo, "window_end": hi,
+            "question": str(s.get("issue_description") or "").strip(),
+            "device": DEVICE_NAMES.get(device, ""), "device_id": str(s.get("device_id") or "").strip(),
+            "evidence": evidence, "force": bool(s.get("force"))}
 
 
 def validate(job: dict) -> dict:
@@ -185,17 +249,7 @@ def validate(job: dict) -> dict:
     for path in logs:
         if not os.path.exists(path):
             raise JobError("E_INPUT_INVALID", f"driver log path not found: {path!r}", EXIT_INPUT)
-    sessions = []
-    for i, s in enumerate(job.get("sessions") or []):
-        if not isinstance(s, dict) or str(s.get("session_id") or "").strip() == "":
-            raise JobError("E_INPUT_INVALID", f"sessions[{i}]: needs a session_id", EXIT_INPUT)
-        sessions.append({
-            "session_id": str(s["session_id"]).strip(),
-            "issue_time": parse_time(s.get("issue_time"), f"sessions[{i}].issue_time"),
-            "window_start": parse_time(s.get("window_start"), f"sessions[{i}].window_start"),
-            "window_end": parse_time(s.get("window_end"), f"sessions[{i}].window_end"),
-            "question": str(s.get("issue_description") or "").strip(),
-        })
+    sessions = [_session_request(s, i) for i, s in enumerate(job.get("sessions") or [])]
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
             "dry_run": bool(options.get("dry_run")), "collect": collect,
@@ -370,6 +424,9 @@ def session_entry(p: dict) -> dict:
     return {
         "session_id": str(p.get("session_id")),
         "device": p.get("device"),
+        "device_id": p.get("device_id") or "",
+        "selection": p.get("selection") or "report",
+        "caller_evidence": p.get("caller_evidence") or [],
         "status": status,
         "code": code,
         "message": p.get("message") or "",
@@ -461,14 +518,22 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
         raise JobError("E_REPORT_UNREADABLE", f"{type(exc).__name__}: {exc}", EXIT_REPORT)
     raw_by_id = {str(s.get("SessionId")): s for s in payload.get("ScenarioInstances") or []}
 
-    wanted = [s["session_id"] for s in job["sessions"]]
-    overrides = {s["session_id"]: {k: s[k] for k in ("issue_time", "window_start", "window_end", "question")}
-                 for s in job["sessions"] if any(s[k] for k in ("issue_time", "window_start", "window_end", "question"))}
+    # Report sessions by id; with `force` (or a device named) one that is not a
+    # bad wireless session is analysed anyway. Windows without an id are
+    # always analysed, attached to the report session they fall in if any.
+    keys = ("issue_time", "window_start", "window_end", "question", "evidence", "device_id")
+    wanted = [s["session_id"] for s in job["sessions"] if s["session_id"]]
+    overrides = {s["session_id"]: {k: s[k] for k in keys}
+                 for s in job["sessions"] if s["session_id"] and any(s[k] for k in keys)}
+    caller_points = [{**{k: s[k] for k in keys}, "session_id": s["session_id"], "device": s["device"]}
+                     for s in job["sessions"]
+                     if not s["session_id"] or s["force"] or s["device"]]
     points, final, failure = [], None, None
     for event in sp.run_pipeline(job["report"], job["driver_log"], agent_factory=agent_factory,
                                  out_dir=os.path.join(out_dir, "excerpts"),
-                                 point_template=point_template, session_ids=wanted or None,
-                                 overrides=overrides):
+                                 point_template=point_template,
+                                 session_ids=wanted if job["sessions"] else None,
+                                 overrides=overrides, caller_points=caller_points):
         kind = event["type"]
         if kind == "step":
             log(event["content"])
@@ -538,6 +603,12 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--window-start", help="ISO 8601 with offset")
     ap.add_argument("--window-end", help="ISO 8601 with offset")
     ap.add_argument("--question", help="the caller's focus for the agent")
+    ap.add_argument("--device", help="wifi or bt: whose driver log to read for that session or window")
+    ap.add_argument("--device-id", help="the caller's name for the device, e.g. its ACPI path")
+    ap.add_argument("--evidence", action="append",
+                    help="a finding of the caller's own analysis for the agent to explain (repeatable)")
+    ap.add_argument("--force", action="store_true",
+                    help="analyse the session even if it is not a bad wireless session")
     ap.add_argument("--case-id", help="echoed in result.json")
     ap.add_argument("--dry-run", action="store_true", help="stop before the LLM")
     ap.add_argument("--collect", action="store_true",

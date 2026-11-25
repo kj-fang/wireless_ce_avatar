@@ -556,6 +556,10 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
             sessions.append({"session_id": sid, "status": "not_eligible" if code != "E_SESSION_NOT_FOUND"
                              else "not_found", "code": code, "message": reason, "finding": None})
     system = sp.system_sessions(job["report"])
+    reach, reach_md = log_reach(job, payload)
+    for line in reach_md.splitlines():
+        if line.startswith("- "):
+            log(line[2:])
     return {
         "schema_version": SCHEMA_VERSION,
         "tool": "sleepstudy-analyze",
@@ -574,11 +578,63 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
                          "system_blockers": [{"blocker": g["blocker"], "sessions": g["sessions"],
                                               "lowest_sw_drips_pct": g["worst_sw"]}
                                              for g in system["groups"]]},
+        "driver_log_reach": reach,
         "sessions": sessions,
         "warnings": (final or {}).get("warnings", []),
         "excerpt_dir": os.path.join(out_dir, "excerpts"),
-        "_markdown": (final or {}).get("markdown", ""),
+        "_markdown": reach_md + (final or {}).get("markdown", ""),
     }
+
+
+def log_reach(job: dict, payload: dict) -> tuple[dict, str]:
+    """
+    How far back the driver log reaches, per device, with the report's bad
+    wireless sessions split into those it can hold and those older than it:
+    result.json's "driver_log_reach" and the report's section about it. The
+    Intel Wi-Fi autologger is circular, so this says which past sessions can
+    still be analysed at all.
+    """
+    from services import sleepstudy_pipeline as sp
+
+    if not job["driver_log"]:
+        return {}, ""
+    offset = sp.session_utc_offset(None, (payload.get("ReportInformation") or {}).get("UtcOffset"))
+    found = sp.driver_log_reach(job["driver_log"], offset)
+    bad = sp.time_points(job["report"], max_points=100000, per_device=100000)
+    reach, rows = {}, []
+    for device, r in found.items():
+        older, held, newer = [], [], []
+        for p in bad:
+            if p["device"] != device:
+                continue
+            try:
+                start = datetime.strptime(p["start"], "%m/%d/%Y %H:%M:%S")
+                end = datetime.strptime(p["end"] or p["start"], "%m/%d/%Y %H:%M:%S")
+            except ValueError:
+                continue
+            (older if end < r["from"] else newer if start > r["to"] else held).append(str(p["session_id"]))
+        reach[device] = {"from": _iso(sp._fmt(r["from"]), offset), "to": _iso(sp._fmt(r["to"]), offset),
+                         "exact": r["exact"], "files": r["files"], "undecoded_etl": r["undecoded_etl"],
+                         "bad_sessions_covered": held, "bad_sessions_older": older,
+                         "bad_sessions_newer": newer}
+        label = sp.DEVICE_LABELS.get(device, device)
+        since = sp._fmt(r["from"]) if r["exact"] else f"at least {sp._fmt(r['from'])}"
+        rows.append(f"- {label} driver log reaches back to {since} (until {sp._fmt(r['to'])}, "
+                    f"{r['files']} file(s)). Bad {label} sessions within its span: {', '.join(held) or 'none'}; "
+                    f"older than the log: {', '.join(older) or 'none'}"
+                    + (f"; after it ended: {', '.join(newer)}" if newer else ""))
+    zone = f" ({sp._fmt_offset(offset)})" if offset is not None else ""
+    if not rows:
+        md = (f"## Driver log coverage\n\nNo Wi-Fi or Bluetooth driver log was found under "
+              f"`{job['driver_log']}`.\n\n")
+        return reach, md
+    note = ("The Intel Wi-Fi driver autologger is circular: sessions older than this cannot be "
+            "analysed from it, so collect soon after the issue. A session within the span can still "
+            "fall in a gap between files; its own status below says whether it is logged.")
+    if any(not r["exact"] for r in found.values()):
+        note += (" \"At least\": some Wi-Fi driver ETLs are not decoded yet, so their start is "
+                 "known only after decoding; the log may reach further back.")
+    return reach, f"## Driver log coverage{zone}\n\n" + "\n".join(rows) + f"\n\n_{note}_\n\n"
 
 
 def error_result(code: str, message: str, case_id: str = "") -> dict:
@@ -658,7 +714,11 @@ def main(argv=None) -> int:
             counts[s["status"]] = counts.get(s["status"], 0) + 1
         print(json.dumps({"status": "ok", "result": os.path.join(out_dir, "result.json"),
                           "report": os.path.join(out_dir, "report.html"),
-                          "sessions": counts}, ensure_ascii=False), flush=True)
+                          "sessions": counts,
+                          "driver_log_reach": {d: {"from": r["from"], "exact": r["exact"],
+                                                   "bad_sessions_older": r["bad_sessions_older"]}
+                                               for d, r in (result.get("driver_log_reach") or {}).items()}},
+                         ensure_ascii=False), flush=True)
         if args.open:
             try:
                 os.startfile(os.path.join(out_dir, "report.html"))

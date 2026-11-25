@@ -2428,6 +2428,46 @@ def apply_override(p: TimePoint, override: dict) -> None:
         p.device_id = str(override["device_id"])
 
 
+def driver_log_reach(path: str, report_offset: Optional[int]) -> dict:
+    """
+    How far back the driver log under `path` reaches, per device, on the
+    report's clock (`report_offset` minutes east of UTC):
+        {device: {"from", "to" (datetimes), "exact", "files", "undecoded_etl"}}
+    The Intel Wi-Fi autologger is circular, so a session older than "from"
+    cannot be analysed from it. An undecoded Wi-Fi driver ETL is known only by
+    when it was last written; with one, the log reaches back at least to
+    "from" and maybe further ("exact": False).
+    """
+    index, _ = discover_driver_logs(path)
+    clock = timezone(timedelta(minutes=report_offset)) if report_offset is not None else None
+
+    def written(file_path: str) -> Optional[datetime]:
+        try:
+            ts = os.path.getmtime(file_path)
+        except OSError:
+            return None
+        if clock is None:
+            return datetime.fromtimestamp(ts)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(clock).replace(tzinfo=None)
+
+    reach = {}
+    for device in ANALYZABLE_DEVICES:
+        segments = [s for s in in_report_clock(index.get(device, []), report_offset) if not s.dateless]
+        raw = index.get(RAW_ETL_KEY, []) if device == ssa.DEVICE_WIFI else []
+        raw_times = [t for t in (written(r.path) for r in raw) if t is not None]
+        times_from = [s.start for s in segments] + raw_times
+        if not times_from:
+            continue
+        reach[device] = {
+            "from": min(times_from),
+            "to": max([s.end or s.start for s in segments] + raw_times),
+            "exact": not raw_times,
+            "files": len(segments) + len(raw),
+            "undecoded_etl": [os.path.basename(r.path) for r in raw],
+        }
+    return reach
+
+
 def _session_covering(sessions: list, lo: datetime, hi: datetime, report_offset) -> Optional[dict]:
     """The Modern Standby session of the report overlapping the timezone-aware
     window lo..hi the most, or None. Each session is compared on its own clock."""

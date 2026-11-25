@@ -99,6 +99,10 @@ def summary_text(result: dict) -> str:
              f"output in {result.get('_out_dir')}"]
     if result.get("message"):
         lines.append(result["message"])
+    for device, r in (result.get("driver_log_reach") or {}).items():
+        lines.append(f"{'Wi-Fi' if device == 'wifi' else 'Bluetooth'} driver log reaches back to "
+                     f"{'' if r.get('exact') else 'at least '}{r.get('from')}; bad sessions older than it: "
+                     f"{', '.join(r.get('bad_sessions_older') or []) or 'none'}")
     for s in result.get("sessions") or []:
         finding = s.get("finding") or {}
         lines.append(f"- Session {s.get('session_id')} [{s.get('device')}] {s.get('status')}/{s.get('code')}: "

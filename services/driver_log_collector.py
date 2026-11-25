@@ -142,6 +142,58 @@ def collect_wifi_driver_log(out_dir: str, *, source_dir: Optional[str] = None,
             "collected_at": now.astimezone().isoformat(timespec="seconds"), "warnings": warnings}
 
 
+def run_elevated(exe: str, params: list[str], cwd: Optional[str] = None,
+                 timeout_s: int = 600, verb: str = "runas") -> int:
+    """
+    Run a command with administrator rights through Windows' UAC prompt and
+    wait for it; returns its exit code. The person has to approve the prompt:
+    nothing here can, or should, get round it. Raises CollectError:
+      E_NOT_ADMIN            the prompt was declined
+      E_ELEVATION_FAILED     the command could not be started
+      E_ELEVATION_TIMEOUT    it did not finish within `timeout_s`
+    """
+    from ctypes import wintypes
+
+    class SHELLEXECUTEINFOW(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", ctypes.c_ulong),
+                    ("hwnd", wintypes.HWND), ("lpVerb", wintypes.LPCWSTR),
+                    ("lpFile", wintypes.LPCWSTR), ("lpParameters", wintypes.LPCWSTR),
+                    ("lpDirectory", wintypes.LPCWSTR), ("nShow", ctypes.c_int),
+                    ("hInstApp", wintypes.HINSTANCE), ("lpIDList", ctypes.c_void_p),
+                    ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY),
+                    ("dwHotKey", wintypes.DWORD), ("hIconOrMonitor", wintypes.HANDLE),
+                    ("hProcess", wintypes.HANDLE)]
+
+    SEE_MASK_NOCLOSEPROCESS, SW_SHOWMINNOACTIVE = 0x00000040, 7
+    ERROR_CANCELLED, WAIT_TIMEOUT = 1223, 0x00000102
+    info = SHELLEXECUTEINFOW()
+    info.cbSize = ctypes.sizeof(info)
+    info.fMask = SEE_MASK_NOCLOSEPROCESS
+    info.lpVerb = verb                     # "runas" asks for administrator rights
+    info.lpFile = exe
+    info.lpParameters = subprocess.list2cmdline(params)
+    info.lpDirectory = cwd
+    info.nShow = SW_SHOWMINNOACTIVE        # its console stays minimised
+    shell32, kernel32 = ctypes.windll.shell32, ctypes.windll.kernel32
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.GetExitCodeProcess.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    if not shell32.ShellExecuteExW(ctypes.byref(info)):
+        error = ctypes.GetLastError()
+        if error == ERROR_CANCELLED:
+            raise CollectError("E_NOT_ADMIN", "administrator rights were declined at the Windows (UAC) prompt")
+        raise CollectError("E_ELEVATION_FAILED", f"could not start the elevated collection (Windows error {error})")
+    try:
+        if kernel32.WaitForSingleObject(info.hProcess, timeout_s * 1000) == WAIT_TIMEOUT:
+            raise CollectError("E_ELEVATION_TIMEOUT",
+                               f"the elevated collection did not finish within {timeout_s} s")
+        code = wintypes.DWORD()
+        kernel32.GetExitCodeProcess(info.hProcess, ctypes.byref(code))
+        return int(code.value)
+    finally:
+        kernel32.CloseHandle(info.hProcess)
+
+
 def generate_sleepstudy(out_dir: str, run: Callable = _run) -> str:
     """powercfg /sleepstudy into `out_dir`; the report's path, or CollectError."""
     os.makedirs(out_dir, exist_ok=True)

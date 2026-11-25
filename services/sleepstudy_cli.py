@@ -11,8 +11,16 @@ History or Avatar sign-in.
 --collect takes the Intel Wi-Fi driver log from this machine instead of
 --logs (services/driver_log_collector.py): it flushes and copies the
 driver's always-on autologger (WiFiDriverIHVSession) into <out>/capture,
-then analyses it. Run it from an administrator prompt soon after the
-standby; without --report it also runs powercfg /sleepstudy.
+then analyses it; run it soon after the standby. Without --report it also
+runs powercfg /sleepstudy. Those steps need administrator rights: from a
+prompt that has them they just run; otherwise Windows asks once (UAC) and
+only they run elevated, while the decode and the analysis stay with the
+person. --no-elevate fails with E_NOT_ADMIN instead (unattended runs).
+
+The simplest use, on the machine that slept:
+    IntelAvatar.exe sleepstudy-analyze --collect --open
+(--out defaults to %USERPROFILE%\\SleepStudyDriverAnalysis\\<date_time>;
+--open shows report.html when done.)
 
     (in a checkout: python -m services.sleepstudy_cli <same arguments>)
 
@@ -46,15 +54,16 @@ A job file carries the same, for any number of sessions:
 
 Output, in --out:
     result.json   the contract below (SCHEMA_VERSION), for programs
-    report.md     the same results for people
+    report.md     the same results for people (report.html: the same, for a browser)
     excerpts/     the driver-log cut each analysed session was given
 
 Exit code says whether the job ran, not what each session found:
     0  ran; each session's outcome is in result.json (status / code)
     1  unexpected failure          2  invalid input (E_INPUT_INVALID)
     3  report unreadable           4  no LLM configured (E_AGENT_CONFIG)
-    5  --collect failed: E_NOT_ADMIN, E_DRIVER_TRACE_NOT_RUNNING,
-       E_DRIVER_LOG_COPY_FAILED, E_SLEEPSTUDY_FAILED
+    5  --collect failed: E_NOT_ADMIN (prompt declined, or --no-elevate),
+       E_DRIVER_TRACE_NOT_RUNNING, E_DRIVER_LOG_COPY_FAILED,
+       E_SLEEPSTUDY_FAILED, E_ELEVATION_FAILED, E_ELEVATION_TIMEOUT
 result.json is written in every case the output folder can be created.
 """
 from __future__ import annotations
@@ -128,6 +137,8 @@ def job_from_args(args) -> dict:
             job.setdefault("options", {})["dry_run"] = True
         if args.collect:
             job.setdefault("options", {})["collect"] = True
+        if args.no_elevate:
+            job.setdefault("options", {})["no_elevate"] = True
         return job
     if not args.report and not args.collect:
         raise JobError("E_INPUT_INVALID",
@@ -143,7 +154,8 @@ def job_from_args(args) -> dict:
                             "window_end": args.window_end, "issue_description": args.question})
     return {"schema_version": SCHEMA_VERSION, "case_id": args.case_id or "", "report": args.report or "",
             "driver_logs": [args.logs] if args.logs else [], "sessions": sessions,
-            "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect)}}
+            "options": {"dry_run": bool(args.dry_run), "collect": bool(args.collect),
+                        "no_elevate": bool(args.no_elevate)}}
 
 
 def validate(job: dict) -> dict:
@@ -186,23 +198,105 @@ def validate(job: dict) -> dict:
         })
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
-            "dry_run": bool(options.get("dry_run")), "collect": collect, "collection": None}
+            "dry_run": bool(options.get("dry_run")), "collect": collect,
+            "no_elevate": bool(options.get("no_elevate")), "collection": None}
 
 
-def collect(job: dict, out_dir: str, log=print) -> dict:
-    """--collect: the report (made with powercfg when not given) and this
-    machine's Intel Wi-Fi driver log, put into the job. JobError (exit 5)."""
+COLLECTION_FILE = "collection.json"
+
+
+def _collect_here(out_dir: str, make_report: bool) -> dict:
+    """The privileged part of --collect, in this process: powercfg
+    /sleepstudy when asked, then flush and copy the driver autologger.
+    Raises driver_log_collector.CollectError."""
+    from services import driver_log_collector as dlc
+
+    report = dlc.generate_sleepstudy(out_dir) if make_report else ""
+    info = dlc.collect_wifi_driver_log(out_dir)
+    info["report"] = report
+    return info
+
+
+def _self_command(extra: list[str]) -> tuple[str, list[str], Optional[str]]:
+    """(executable, arguments, working folder) that run this CLI again: the
+    packaged IntelAvatar.exe, or python -m from the checkout."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, ["sleepstudy-analyze", *extra], None
+    repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    return sys.executable, ["-m", "services.sleepstudy_cli", *extra], repo
+
+
+def _collect_elevated(out_dir: str, make_report: bool, run_elevated=None) -> dict:
+    """Run only the privileged part (--collect-only) with administrator
+    rights, through Windows' UAC prompt, and read what it collected. The
+    decode and the analysis stay in this process, as the person: an
+    elevated process often cannot reach their network share (the PDBs)."""
+    from services import driver_log_collector as dlc
+
+    os.makedirs(out_dir, exist_ok=True)
+    marker = os.path.join(out_dir, COLLECTION_FILE)
+    if os.path.exists(marker):
+        os.remove(marker)
+    exe, params, cwd = _self_command(["--collect-only", "--out", out_dir]
+                                     + (["--make-report"] if make_report else []))
+    (run_elevated or dlc.run_elevated)(exe, params, cwd)
+    try:
+        with open(marker, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        raise dlc.CollectError("E_ELEVATION_FAILED",
+                               "the elevated collection ended without writing its result")
+    if data.get("error"):
+        raise dlc.CollectError(data["error"].get("code", "E_ELEVATION_FAILED"),
+                               data["error"].get("message", ""))
+    return data
+
+
+def collect_only(out_dir: str, make_report: bool) -> int:
+    """--collect-only (run elevated by _collect_elevated): the privileged
+    part alone, its outcome written to collection.json; exit 0 or 5."""
     from services import driver_log_collector as dlc
 
     try:
-        if not job["report"]:
-            log("No report given: running powercfg /sleepstudy…")
-            job["report"] = dlc.generate_sleepstudy(out_dir)
-        log(f"Collecting the Wi-Fi driver log ({dlc.DRIVER_SESSION} autologger)…")
-        info = dlc.collect_wifi_driver_log(out_dir)
+        data, code = _collect_here(out_dir, make_report), EXIT_OK
+    except dlc.CollectError as exc:
+        data, code = {"error": {"code": exc.code, "message": exc.message}}, EXIT_COLLECT
+    except Exception as exc:          # noqa: BLE001 -- reported to the caller
+        data, code = {"error": {"code": "E_ELEVATION_FAILED", "message": f"{type(exc).__name__}: {exc}"}}, EXIT_ERROR
+    os.makedirs(out_dir, exist_ok=True)
+    tmp = os.path.join(out_dir, COLLECTION_FILE + ".partial")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(data, fh, ensure_ascii=False, indent=2)
+    os.replace(tmp, os.path.join(out_dir, COLLECTION_FILE))
+    return code
+
+
+def collect(job: dict, out_dir: str, log=print, run_elevated=None) -> dict:
+    """--collect: the report (made with powercfg when not given) and this
+    machine's Intel Wi-Fi driver log, put into the job. From a prompt that is
+    not an administrator's, only that part runs elevated, after Windows asks
+    (UAC); --no-elevate refuses instead. JobError (exit 5)."""
+    from services import driver_log_collector as dlc
+
+    make_report = not job["report"]
+    try:
+        if dlc.is_admin():
+            if make_report:
+                log("No report given: running powercfg /sleepstudy…")
+            log(f"Collecting the Wi-Fi driver log ({dlc.DRIVER_SESSION} autologger)…")
+            info = _collect_here(out_dir, make_report)
+        elif job.get("no_elevate"):
+            raise dlc.CollectError("E_NOT_ADMIN",
+                                   "collecting the Wi-Fi driver log needs administrator rights: run from an "
+                                   "administrator prompt, or without --no-elevate to be asked")
+        else:
+            log("Collecting the driver log needs administrator rights: approve the Windows prompt (UAC)…")
+            info = _collect_elevated(out_dir, make_report, run_elevated)
     except dlc.CollectError as exc:
         raise JobError(exc.code, exc.message, EXIT_COLLECT)
-    for warning in info["warnings"]:
+    if make_report:
+        job["report"] = info["report"]
+    for warning in info.get("warnings") or []:
         log(f"⚠ {warning}")
     log(f"Collected {len(info['files'])} file(s) into {info['capture_dir']}")
     job["driver_log"] = info["capture_dir"]
@@ -320,6 +414,22 @@ def ineligible_reason(raw: Optional[dict], drip_threshold: float) -> tuple[str, 
     return "E_SESSION_NOT_ELIGIBLE", "no Wi-Fi or Bluetooth RED top blocker; a platform (system) session"
 
 
+def _report_html(markdown: str) -> str:
+    """report.md as a page a browser opens (markdown rendered when the
+    package is there, else the text as is)."""
+    import html as _html
+    try:
+        import markdown as _md
+        body = _md.markdown(markdown, extensions=["tables", "fenced_code"])
+    except Exception:                 # noqa: BLE001 -- the plain text still reads
+        body = f"<pre>{_html.escape(markdown)}</pre>"
+    return ("<!doctype html><meta charset='utf-8'><title>Sleep Study driver analysis</title>"
+            "<style>body{font-family:Segoe UI,Arial,sans-serif;max-width:1000px;margin:24px auto;"
+            "padding:0 16px;line-height:1.5;color:#1f2937}table{border-collapse:collapse}"
+            "td,th{border:1px solid #d1d5db;padding:4px 8px}pre,code{background:#f3f4f6}"
+            "pre{padding:8px;overflow-x:auto;white-space:pre-wrap}</style>" + body)
+
+
 def write_outputs(out_dir: str, result: dict, markdown: str) -> None:
     os.makedirs(out_dir, exist_ok=True)
     tmp = os.path.join(out_dir, "result.json.partial")
@@ -328,6 +438,14 @@ def write_outputs(out_dir: str, result: dict, markdown: str) -> None:
     os.replace(tmp, os.path.join(out_dir, "result.json"))
     with open(os.path.join(out_dir, "report.md"), "w", encoding="utf-8") as fh:
         fh.write(markdown)
+    with open(os.path.join(out_dir, "report.html"), "w", encoding="utf-8") as fh:
+        fh.write(_report_html(markdown))
+
+
+def default_out_dir() -> str:
+    """Where results go without --out: a new dated folder under the user's profile."""
+    return os.path.join(os.path.expanduser("~"), "SleepStudyDriverAnalysis",
+                        datetime.now().strftime("%Y%m%d_%H%M%S"))
 
 
 # ── Run ────────────────────────────────────────────────────────────────────────
@@ -413,7 +531,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--input", help="job file (JSON); replaces --report/--logs/--session-id")
     ap.add_argument("--report", help="Sleep Study HTML report")
     ap.add_argument("--logs", help="capture folder or driver log (WiFiLog, WifiDriver*.etl, *.hci.txt)")
-    ap.add_argument("--out", required=True, help="output folder (result.json, report.md, excerpts/)")
+    ap.add_argument("--out", help="output folder (result.json, report.md/.html, excerpts/); "
+                                  "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>")
     ap.add_argument("--session-id", action="append", help="session to analyse (repeatable)")
     ap.add_argument("--issue-time", help="ISO 8601 with offset")
     ap.add_argument("--window-start", help="ISO 8601 with offset")
@@ -422,8 +541,15 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--case-id", help="echoed in result.json")
     ap.add_argument("--dry-run", action="store_true", help="stop before the LLM")
     ap.add_argument("--collect", action="store_true",
-                    help="take the Intel Wi-Fi driver log from this machine (administrator prompt); "
-                         "replaces --logs, and makes --report optional")
+                    help="take the Intel Wi-Fi driver log from this machine; replaces --logs and makes "
+                         "--report optional. Not an administrator? Windows asks (UAC) for that step only")
+    ap.add_argument("--no-elevate", action="store_true",
+                    help="with --collect: fail with E_NOT_ADMIN instead of showing the Windows prompt "
+                         "(unattended runs)")
+    ap.add_argument("--open", action="store_true", help="open report.html when done")
+    # Internal: the elevated half of --collect (see _collect_elevated).
+    ap.add_argument("--collect-only", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--make-report", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--version", action="version",
                     version=f"sleepstudy-analyze {TOOL_VERSION} (schema {SCHEMA_VERSION})")
     return ap
@@ -436,7 +562,9 @@ def main(argv=None) -> int:
         except (AttributeError, ValueError):
             pass
     args = build_parser().parse_args(argv)
-    out_dir = os.path.abspath(args.out)
+    out_dir = os.path.abspath(args.out or default_out_dir())
+    if args.collect_only:
+        return collect_only(out_dir, args.make_report)
     case_id = args.case_id or ""
     try:
         job = validate(job_from_args(args))
@@ -458,7 +586,13 @@ def main(argv=None) -> int:
         for s in result["sessions"]:
             counts[s["status"]] = counts.get(s["status"], 0) + 1
         print(json.dumps({"status": "ok", "result": os.path.join(out_dir, "result.json"),
+                          "report": os.path.join(out_dir, "report.html"),
                           "sessions": counts}, ensure_ascii=False), flush=True)
+        if args.open:
+            try:
+                os.startfile(os.path.join(out_dir, "report.html"))
+            except (AttributeError, OSError):
+                pass
         return EXIT_OK
     except JobError as exc:
         result, code = error_result(exc.code, exc.message, case_id), exc.exit_code

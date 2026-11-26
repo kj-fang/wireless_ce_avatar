@@ -156,11 +156,9 @@ def parse_identity(data: dict) -> dict:
     }
 
 
-# Author types that may drive request classification. Customer-visible
-# history still has its own narrower allowlist in case_reader.py.
-REQUEST_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE",
-                        "Agent", "FAE")
-_AI_COMMENT_MARKER = "[AI-Avatar"
+# Comment author types written by the customer side (Snowflake / REST share
+# the picklist): an update is a comment by one of these author types.
+CUSTOMER_AUTHOR_TYPES = ("Partner", "Customer", "Partner - Agent", "Partner - DFAE")
 
 
 def build_open_cases_soql(owner_name: str, limit: int = 200) -> str:
@@ -185,10 +183,9 @@ def build_customer_updates_soql(case_ids: list[str], since_iso: str,
                     since_iso or ""):
         raise ValueError(f"since_iso is not ISO-8601: {since_iso!r}")
     ids = ", ".join(f"'{_soql_quote(i)}'" for i in case_ids)
-    authors = ", ".join(f"'{_soql_quote(a)}'" for a in REQUEST_AUTHOR_TYPES)
+    authors = ", ".join(f"'{_soql_quote(a)}'" for a in CUSTOMER_AUTHOR_TYPES)
     return (
-        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c, "
-        "Core_IPS_Rich_Comment__c "
+        "SELECT Core_IPS_Case__c, CreatedDate, Core_IPS_Comment_Author_Type__c "
         "FROM Core_IPS_Case_Comments__c "
         f"WHERE Core_IPS_Case__c IN ({ids}) AND CreatedDate > {since_iso} "
         f"AND Core_IPS_Comment_Author_Type__c IN ({authors}) "
@@ -441,9 +438,6 @@ class IpsClient:
                 resp.raise_for_status()
                 d = resp.json()
                 for rec in d.get("records", []):
-                    body = str(rec.get("Core_IPS_Rich_Comment__c") or "")
-                    if _AI_COMMENT_MARKER in body:
-                        continue
                     cid = rec.get("Core_IPS_Case__c") or ""
                     ts = rec.get("CreatedDate") or ""
                     if cid and ts > latest.get(cid, ""):

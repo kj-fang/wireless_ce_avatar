@@ -249,7 +249,6 @@ def _format_comments(rows: list[dict]) -> str:
 
 
 _CUSTOMER_AUTHOR_PREFIXES = ("partner", "customer")
-_REQUEST_AUTHOR_PREFIXES = _CUSTOMER_AUTHOR_PREFIXES + ("agent", "fae")
 
 
 def _timestamp_key(raw: Any) -> str:
@@ -270,7 +269,7 @@ def request_classification_source(description: str, comments: Any,
     """Exact auto-scan comment when synced; otherwise latest customer update."""
     rows = _normalize_comments(comments)
     customer_rows = [row for row in rows
-                     if row["author"].strip().lower().startswith(_REQUEST_AUTHOR_PREFIXES)]
+                     if row["author"].strip().lower().startswith(_CUSTOMER_AUTHOR_PREFIXES)]
     trigger_key = _timestamp_key(trigger_update)
     matched = next((row for row in reversed(customer_rows)
                     if trigger_key and _timestamp_key(row["ts"]) == trigger_key), None)

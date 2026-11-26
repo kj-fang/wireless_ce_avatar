@@ -485,6 +485,8 @@ def compose_plain(analysis: CaseAnalysis) -> str:
 
     if analysis.mode == "question":
         parts += [
+            "[Answer generated from Echo]",
+            "",
             "Hello,",
             "",
             _ips_question_text(analysis.question_answer) if analysis.question_answer.strip()

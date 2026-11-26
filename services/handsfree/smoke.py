@@ -128,12 +128,12 @@ def smoke_soql() -> None:
         check("S1.j public refused when no public comment type is configured at all",
               "public_extra_fields" in str(e), str(e))
     update_query = build_customer_updates_soql(["500A"], "2026-10-05T00:00:00Z")
-    check("S1.k customer-updates SOQL has no LIMIT unless asked (caller pages); Agent/FAE included",
+    check("S1.k customer-updates SOQL has no LIMIT unless asked (caller pages); customer authors only",
           "LIMIT" not in update_query
           and build_customer_updates_soql(["500A"], "2026-10-05T00:00:00Z", limit=7)
           .endswith("LIMIT 7")
-          and "'Agent'" in update_query and "'FAE'" in update_query
-          and "Core_IPS_Rich_Comment__c" in update_query,
+          and "'Agent'" not in update_query and "'FAE'" not in update_query
+          and "'Partner - Agent'" in update_query,
           update_query)
 
     class _UpdateResp:
@@ -153,8 +153,8 @@ def smoke_soql() -> None:
     update_ips = IpsClient.__new__(IpsClient)
     update_ips._request = lambda *args, **kwargs: _UpdateResp()
     updates = update_ips.find_customer_updates(["500A"], "2026-11-25T00:00:00Z")
-    check("S1.l Agent/FAE updates qualify, but Beacon AI comments do not retrigger auto-scan",
-          updates == {"500A": "2026-11-25T10:00:00Z"}, str(updates))
+    check("S1.l SOQL no longer requests Agent/FAE updates",
+          updates == {"500A": "2026-11-25T11:00:00Z"}, str(updates))
 
 
 def smoke_request_classifier() -> None:
@@ -243,9 +243,9 @@ def smoke_request_classifier() -> None:
     test_comments = [["1", "Customer", "Original customer question"],
                      ["2", "Agent", "Intel test comment"]]
     customer_source, _ = classify("question", comments=test_comments)
-    check("S2P.g latest Agent/FAE comment is a valid classification source",
-          customer_source["request_source"]["author"] == "Agent"
-          and customer_source["request_source"]["text"] == "Intel test comment",
+    check("S2P.g Intel Agent/FAE comments are not classification sources",
+          customer_source["request_source"]["author"] == "Customer"
+          and customer_source["request_source"]["text"] == "Original customer question",
           str(customer_source.get("request_source")))
 
 
@@ -1920,9 +1920,9 @@ def smoke_auto_scan(tmp: Path) -> None:
           "Owner.Name = 'O\\'Neil'" in q and "IsClosed = false" in q
           and "ORDER BY LastModifiedDate DESC" in q, q)
     q2 = build_customer_updates_soql(["500A", "500B"], "2026-10-05T00:00:00Z")
-    check("S16.b customer-updates SOQL: bounded by case ids, time and request authors",
+    check("S16.b customer-updates SOQL: bounded by case ids, time and customer authors",
           "IN ('500A', '500B')" in q2 and "CreatedDate > 2026-10-05T00:00:00Z" in q2
-          and "'Partner'" in q2 and "'Agent'" in q2 and "'FAE'" in q2, q2)
+          and "'Partner'" in q2 and "'Agent'" not in q2 and "'FAE'" not in q2, q2)
     try:
         build_customer_updates_soql(["500A"], "yesterday")
         check("S16.c bad since rejected", False)

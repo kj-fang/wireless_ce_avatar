@@ -2791,8 +2791,8 @@ def run_pipeline(
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "
             f"{criteria_text(collected['criteria'])} and a RED top blocker. "
-            f"Analysing the worst **{len(points)}** (max {max_points}, "
-            f"{per_device} per device)."
+            + (f"Analysing **{len(points)}** session(s) the caller asked for." if session_ids is not None else
+               f"Analysing the worst **{len(points)}** (max {max_points}, {per_device} per device).")
         )}
         if isinstance(driver_logs, dict):
             chosen = {int(k): str(v or "").strip() for k, v in driver_logs.items()}

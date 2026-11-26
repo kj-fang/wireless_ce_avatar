@@ -99,6 +99,7 @@ result.json is written in every case the output folder can be created.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import sys
@@ -342,6 +343,19 @@ def validate(job: dict) -> dict:
     # window per request) are cut on their own clock. With collect, a missing
     # report is made on the spot (powercfg /sleepstudy).
     times_only = bool(sessions) and not any(s["session_id"] for s in sessions)
+    raw_logs = job.get("driver_logs") or []
+    raw_logs = [raw_logs] if isinstance(raw_logs, str) else raw_logs
+    if not report and not collect and len(raw_logs) == 1:
+        # No report, one capture: a zip or folder that also holds the Sleep
+        # Study report (a customer's whole upload) is read as both.
+        from services import sleepstudy_input
+        candidate = str(raw_logs[0]).strip()
+        if os.path.isdir(candidate) or (os.path.isfile(candidate) and candidate.lower().endswith(".zip")):
+            try:
+                report = sleepstudy_input.resolve(candidate)["report"]
+                job = {**job, "driver_logs": [candidate]}
+            except sleepstudy_input.InputError:
+                pass
     if not report and not collect and not times_only:
         raise JobError("E_INPUT_INVALID",
                        "give a Sleep Study report (--report: .html, .xml, a .zip or folder holding one) "
@@ -376,9 +390,17 @@ def validate(job: dict) -> dict:
         raise JobError("E_INPUT_INVALID",
                        "driver_logs: this version takes one capture folder (or log file) per job",
                        EXIT_INPUT)
-    for path in logs:
+    for i, path in enumerate(logs):
         if not os.path.exists(path):
             raise JobError("E_INPUT_INVALID", f"driver log path not found: {path!r}", EXIT_INPUT)
+        # A zipped capture (e.g. a WRT zip, or the second upload of an MCP
+        # front end) is extracted beside it and read as a folder.
+        if os.path.isfile(path) and path.lower().endswith(".zip"):
+            from services import sleepstudy_input
+            try:
+                logs[i] = sleepstudy_input.extract_zip(path)
+            except sleepstudy_input.InputError as exc:
+                raise JobError(exc.code, exc.message, EXIT_INPUT)
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
             "dry_run": bool(options.get("dry_run")), "collect": collect,
@@ -573,11 +595,20 @@ def session_entry(p: dict) -> dict:
                    "stop_reason": p.get("stop_reason") or ""},
         "issue_times": [_iso(t, offset) for t in p.get("issue_times") or []],
         "sleep_study": {
+            "type": p.get("type_label") or "",
+            "duration": p.get("duration") or "",
             "sw_drips_pct": p.get("sw_drip_pct"), "hw_drips_pct": p.get("hw_drip_pct"),
             "verdict": p.get("html_verdict") or "",
             "short_device_wakes": p.get("short_device_wakes"),
             "red_top_blockers": [{"name": b.get("name"), "active_pct": b.get("active_time_pct")}
                                  for b in p.get("blockers") or []],
+            # The report's own detail for the session, structured: enter / exit
+            # reason, DRIPS wake sources, the device's blocker entries with their
+            # metadata (power transitions, packet counts, wake latencies) and
+            # the apps that drew network power; and the same as text, as the
+            # agent read it.
+            "details": p.get("wake_evidence") or {},
+            "summary": p.get("sleep_summary") or "",
         },
         "driver_log": {
             "path": p.get("driver_log_path") or "",
@@ -634,6 +665,7 @@ def write_outputs(out_dir: str, result: dict, markdown: str) -> None:
         fh.write(markdown)
     with open(os.path.join(out_dir, "report.html"), "w", encoding="utf-8") as fh:
         fh.write(_report_html(markdown))
+    _save_noise(out_dir)
 
 
 def default_out_dir() -> str:
@@ -826,6 +858,13 @@ class _Parser(argparse.ArgumentParser):
         self.print_usage(sys.stderr)
         raise JobError("E_INPUT_INVALID", message, EXIT_INPUT)
 
+    def _print_message(self, message, file=None):
+        # --help / --version: to the console, not into the buffer that keeps
+        # module output off it (stdout is redirected while the CLI runs).
+        if message:
+            sys.stderr.write(message)
+            sys.stderr.flush()
+
 
 def _out_arg(argv) -> str:
     """The output folder of a command line that could not be parsed: its
@@ -871,6 +910,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="with --collect: fail with E_NOT_ADMIN instead of showing the Windows prompt "
                          "(unattended runs)")
     ap.add_argument("--open", action="store_true", help="open report.html when done")
+    ap.add_argument("--verbose", action="store_true",
+                    help="also show on stderr what the loaded modules print (skills, shared folders, LLM "
+                         "steps); without it that goes to cli.log in the output folder")
     # Internal: the elevated half of --collect (see _collect_elevated).
     ap.add_argument("--collect-only", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--make-report", action="store_true", help=argparse.SUPPRESS)
@@ -903,7 +945,7 @@ def collect_main(argv=None) -> int:
     JSON: status, capture_dir, files, report, driver_log_reach. Exit 0, or 5
     (E_NOT_ADMIN, E_DRIVER_TRACE_NOT_RUNNING, ...), or 2 for bad arguments.
     """
-    return _result_stdout(lambda out: _collect_main(argv, out))
+    return _result_stdout(lambda out: _collect_main(argv, out), _verbose(argv))
 
 
 def _collect_main(argv, out) -> int:
@@ -919,6 +961,8 @@ def _collect_main(argv, out) -> int:
     ap.add_argument("--no-elevate", action="store_true",
                     help="fail with E_NOT_ADMIN instead of showing the Windows (UAC) prompt")
     ap.add_argument("--open", action="store_true", help="open the output folder when done")
+    ap.add_argument("--verbose", action="store_true",
+                    help="also show on stderr what the loaded modules print")
     out_dir = ""
     job = {"report": "", "driver_log": "", "collection": None}
     try:
@@ -961,20 +1005,59 @@ def _collect_main(argv, out) -> int:
     return EXIT_OK
 
 
-def _result_stdout(work):
-    """Run `work(out)` with everything printed going to stderr (progress, and
-    whatever the modules it loads print), so stdout carries only the JSON
-    line `work` writes to `out`: a caller can read stdout as the result."""
+# What the modules a run loads print (skills loaded, shared folders, LLM
+# token use...): kept out of the console unless --verbose, and saved as
+# cli.log in the output folder.
+_NOISE: Optional[io.StringIO] = None
+
+
+def _result_stdout(work, verbose: bool = False):
+    """Run `work(out)` with stdout redirected, so the real stdout carries only
+    the JSON line `work` writes to `out`: a caller can read stdout as the
+    result. What anything else prints goes to stderr with --verbose, else to
+    a buffer saved as cli.log; the CLI's own progress (_progress) always goes
+    to stderr."""
+    global _NOISE
     _utf8_streams()
-    out, sys.stdout = sys.stdout, sys.stderr
+    _NOISE = None if verbose else io.StringIO()
+    out, sys.stdout = sys.stdout, (sys.stderr if verbose else _NOISE)
     try:
         return work(out)
     finally:
         sys.stdout = out
 
 
+def _save_noise(out_dir: str) -> None:
+    if _NOISE is not None and _NOISE.getvalue():
+        try:
+            with open(os.path.join(out_dir, "cli.log"), "w", encoding="utf-8") as fh:
+                fh.write(_NOISE.getvalue())
+        except OSError:
+            pass
+
+
+def _verbose(argv) -> bool:
+    return "--verbose" in (sys.argv[1:] if argv is None else argv)
+
+
+def _print_summary(result: dict, out_dir: str) -> None:
+    """The run in a few lines on stderr, for a person at the console: one line
+    per session (code, cause, finding), then where the report is."""
+    sessions = result.get("sessions") or []
+    if not sessions:
+        _progress("Done: no session needed a driver-log look.")
+    for s in sessions:
+        finding = s.get("finding") or {}
+        text = " ".join(str(finding.get("summary") or s.get("message") or "").split())
+        cause = finding.get("cause_category")
+        _progress(f"Session {s.get('session_id')} [{s.get('device') or '-'}] {s.get('code')}"
+                  + (f" · {cause}" if cause else "")
+                  + (f": {text[:220]}{'…' if len(text) > 220 else ''}" if text else ""))
+    _progress(f"Report: {os.path.join(out_dir, 'report.html')}")
+
+
 def main(argv=None) -> int:
-    return _result_stdout(lambda out: _main(argv, out))
+    return _result_stdout(lambda out: _main(argv, out), _verbose(argv))
 
 
 def _publish_failure(out, out_dir: str, result: dict, code: int) -> int:
@@ -1013,6 +1096,7 @@ def _main(argv, out) -> int:
                     + (f" · case {case_id}" if case_id else "") + "_\n\n"
                     + result.pop("_markdown", ""))
         write_outputs(out_dir, result, markdown)
+        _print_summary(result, out_dir)
         counts = {}
         for s in result["sessions"]:
             counts[s["status"]] = counts.get(s["status"], 0) + 1

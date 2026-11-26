@@ -25,11 +25,19 @@ The simplest use, on the machine that slept:
     (in a checkout: python -m services.sleepstudy_cli <same arguments>)
 
 --report takes the HTML report or the XML one (powercfg /sleepstudy /xml, as
-MCS Analyzer generates it); both are read into the same data.
+MCS Analyzer generates it); both are read into the same data. It also takes
+a .zip (extracted beside it) or a folder holding exactly one report. Without
+--logs, the driver log beside the report is used; when there is none, the
+report is analysed alone and result.json says missing_driver_log. No report
+in it: exit 3, E_NO_SLEEPSTUDY_REPORT; several: E_MULTIPLE_SLEEPSTUDY_REPORTS.
 
 Options for the first form:
     --session-id ID     analyse this session (repeatable); default: the worst
-                        bad wireless sessions, as the NW page lists them
+                        bad wireless sessions, as the NW page lists them.
+                        Without an issue time, a session is read from its
+                        start: whole when its driver log stays under 200,000
+                        lines and 12 h, else up to that point (result.json
+                        window.covered_until / stop_reason say where)
     --issue-time T      ISO 8601 with an offset; the driver log is cut from
                         5 min before to 10 min after it, inside the session.
                         Repeatable: times whose cuts overlap or lie under
@@ -334,17 +342,33 @@ def validate(job: dict) -> dict:
     # window per request) are cut on their own clock. With collect, a missing
     # report is made on the spot (powercfg /sleepstudy).
     times_only = bool(sessions) and not any(s["session_id"] for s in sessions)
-    if report and not os.path.isfile(report):
-        raise JobError("E_INPUT_INVALID", f"report not found: {report!r}", EXIT_INPUT)
     if not report and not collect and not times_only:
         raise JobError("E_INPUT_INVALID",
-                       "give a Sleep Study report (--report, .html or .xml) to pick or name sessions; "
-                       "without one, give the issue time or window (--issue-time / --window-start "
-                       "--window-end)", EXIT_INPUT)
+                       "give a Sleep Study report (--report: .html, .xml, a .zip or folder holding one) "
+                       "to pick or name sessions; without one, give the issue time or window "
+                       "(--issue-time / --window-start --window-end)", EXIT_INPUT)
     logs = job.get("driver_logs") or []
     if isinstance(logs, str):
         logs = [logs]
     logs = [str(p).strip() for p in logs if str(p).strip()]
+    # The report as the NW page takes it: a zip is extracted, a folder looked
+    # into; with no driver log given, the one beside the report is used.
+    missing_driver_log = False
+    if report:
+        from services import sleepstudy_input
+        try:
+            found = sleepstudy_input.resolve(report)
+        except sleepstudy_input.InputError as exc:
+            message = exc.message + ("".join(f"\n  {c}" for c in exc.candidates) if exc.candidates else "")
+            raise JobError(exc.code, message, EXIT_REPORT)
+        report = found["report"]
+        if not logs and not collect:
+            if found["missing_driver_log"]:
+                missing_driver_log = True
+                warnings.append(f"No driver log beside the report (in {found['search_root']}): the report "
+                                "is analysed alone. Give one with --logs, or --collect it.")
+            else:
+                logs = [found["search_root"]]
     if collect and logs:
         raise JobError("E_INPUT_INVALID",
                        "collect takes the driver log from this machine; drop driver_logs / --logs", EXIT_INPUT)
@@ -358,7 +382,8 @@ def validate(job: dict) -> dict:
     return {"case_id": str(job.get("case_id") or ""), "report": report,
             "driver_log": logs[0] if logs else "", "sessions": sessions,
             "dry_run": bool(options.get("dry_run")), "collect": collect,
-            "no_elevate": bool(options.get("no_elevate")), "collection": None, "warnings": warnings}
+            "no_elevate": bool(options.get("no_elevate")), "collection": None, "warnings": warnings,
+            "missing_driver_log": missing_driver_log}
 
 
 COLLECTION_FILE = "collection.json"
@@ -541,7 +566,11 @@ def session_entry(p: dict) -> dict:
         "session": {"start": _iso(p.get("start"), offset), "end": _iso(p.get("end"), offset)},
         "window": {"start": _iso(p.get("window_start"), offset), "end": _iso(p.get("window_end"), offset),
                    "source": p.get("window_source") or "report",
-                   "capped": bool(p.get("window_truncated"))},
+                   "capped": bool(p.get("stop_reason")),
+                   # How far the analysis read, and why it stopped short of
+                   # the window's end ("line_budget", "time_cap"; "" = all).
+                   "covered_until": _iso(p.get("covered_until") or p.get("window_end"), offset),
+                   "stop_reason": p.get("stop_reason") or ""},
         "issue_times": [_iso(t, offset) for t in p.get("issue_times") or []],
         "sleep_study": {
             "sw_drips_pct": p.get("sw_drip_pct"), "hw_drips_pct": p.get("hw_drip_pct"),
@@ -698,6 +727,7 @@ def run(job: dict, out_dir: str, *, agent_factory=None, point_template=None, log
         "dry_run": job["dry_run"],
         "report": job["report"],
         "driver_log": job["driver_log"],
+        "missing_driver_log": bool(job.get("missing_driver_log")),
         "collection": job.get("collection"),
         "bad_sessions": {"total": system["bad_total"], "wireless": system["wireless"],
                          "system": system["system"],
@@ -814,7 +844,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="sleepstudy-analyze",
         description="Sleep Study -> Wi-Fi / Bluetooth driver log analysis (JSON in, JSON out).")
     ap.add_argument("--input", help="job file (JSON); replaces --report/--logs/--session-id")
-    ap.add_argument("--report", help="Sleep Study report: .html, or .xml (powercfg /sleepstudy /xml, MCS Analyzer)")
+    ap.add_argument("--report", help="Sleep Study report: .html, .xml (powercfg /sleepstudy /xml, MCS Analyzer), or a .zip / folder holding one")
     ap.add_argument("--logs", help="capture folder or driver log (WiFiLog, WifiDriver*.etl, *.hci.txt)")
     ap.add_argument("--out", help="output folder (result.json, report.md/.html, excerpts/); "
                                   "default %%USERPROFILE%%\\SleepStudyDriverAnalysis\\<date_time>_<id>")
@@ -989,6 +1019,7 @@ def _main(argv, out) -> int:
         print(json.dumps({"status": "ok", "result": os.path.join(out_dir, "result.json"),
                           "report": os.path.join(out_dir, "report.html"),
                           "sessions": counts,
+                          "missing_driver_log": result.get("missing_driver_log", False),
                           "findings": [{"session_id": s["session_id"], "device": s.get("device"),
                                         "code": s["code"],
                                         "summary": (s.get("finding") or {}).get("summary") or s.get("message") or ""}

@@ -12,7 +12,7 @@
         <!-- Loads on Enter, on leaving the box and on picking a file, like the
              other chatbots' log box: there is no separate Load button. -->
         <input id="sleepstudy-path-input" type="text"
-               placeholder="Full path to sleepstudy file…"
+               placeholder="Sleep Study .html / .xml / .zip, or a folder…"
                onkeydown="if(event.key==='Enter'){event.preventDefault();setSleepstudy(true);}"
                onchange="setSleepstudy()">
         <button class="btn-browse" onclick="browseSleepstudy()" title="Browse for file">📁</button>

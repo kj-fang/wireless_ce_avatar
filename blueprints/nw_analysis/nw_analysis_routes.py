@@ -43,6 +43,7 @@ from services.chatbot.engine.speclet_defaults import conversation_speclet, defau
 from services.chatbot.prompt_editor import PromptEditorContext, build_prompt_editor_handlers
 from services.sleepstudy_analyzer import analyze_sleepstudy_stream
 from services import sleepstudy_pipeline
+from services import sleepstudy_input
 from services import gather_service
 from services import check_ips_service
 from services import history_service
@@ -287,10 +288,20 @@ def index():
 # report is a new conversation, so it gets its own History entry.
 # ------------------------------------------------------------------
 def set_log():
+    """
+    Request JSON: { "log_path": "<.html | .xml | .zip | folder>" }
+    The input is resolved to its Sleep Study report (a zip is extracted beside
+    it). No report, or several: HTTP 400 with "code" (E_NO_SLEEPSTUDY_REPORT,
+    E_MULTIPLE_SLEEPSTUDY_REPORTS + "candidates"). No driver log beside it is
+    not an error: "missing_driver_log" is true and the report can be analysed
+    alone. "report_path" is the report every later call takes as log_path.
+    """
     data = request.get_json(silent=True) or {}
-    log_path = data.get("log_path", "").strip()
-    if not log_path:
-        return jsonify({"success": False, "error": "log_path is required"}), 400
+    try:
+        found = sleepstudy_input.resolve(data.get("log_path", ""))
+    except sleepstudy_input.InputError as exc:
+        return jsonify(exc.to_dict()), 400
+    log_path = found["report"]
 
     try:
         agent = _get_or_create_agent()
@@ -308,6 +319,12 @@ def set_log():
         return jsonify({
             "success": True,
             "message": f"Sleepstudy file set: {log_path}",
+            "report_path": log_path,
+            "report_kind": found["kind"],
+            "search_root": found["search_root"],
+            "extracted_to": found["extracted_to"],
+            "driver_logs_found": found["driver_logs"],
+            "missing_driver_log": found["missing_driver_log"],
             "skills": agent.get_skill_descriptions(),
             **check_ips_service.prompt_state(log_path),
         })
@@ -594,16 +611,30 @@ def analyze_sleepstudy():
 # the driver log of each time point before /analyze_sleepstudy_point runs it.
 # ------------------------------------------------------------------
 def sleepstudy_plan():
-    """Request JSON: { "log_path": "<sleepstudy-report.html>" }"""
+    """
+    Request JSON: { "log_path": "<.html | .xml | .zip | folder>",
+                    "driver_log": "<file or folder>" (optional) }
+    Driver logs are looked for in `driver_log` when given, else beside the
+    report (in the zip / folder it came in). Errors as /set_log.
+    """
     data = request.get_json(silent=True) or {}
-    sleep_path = (data.get("log_path") or "").strip()
-    if not sleep_path or not os.path.exists(sleep_path):
-        return jsonify({"success": False, "error": f"File not found: {sleep_path}"}), 400
+    try:
+        found = sleepstudy_input.resolve(data.get("log_path") or "")
+    except sleepstudy_input.InputError as exc:
+        return jsonify(exc.to_dict()), 400
+    sleep_path = found["report"]
+    driver_log = (data.get("driver_log") or "").strip().strip('"')
+    if driver_log and not os.path.exists(driver_log):
+        return jsonify({"success": False, "code": "E_DRIVER_LOG_NOT_FOUND",
+                        "error": f"Driver log not found: {driver_log}"}), 400
     blocked = check_ips_service.blocking_state(sleep_path)
     if blocked:
         return jsonify(blocked), 428
     try:
-        return jsonify({"success": True, **sleepstudy_pipeline.plan(sleep_path)})
+        plan = sleepstudy_pipeline.plan(sleep_path, search_root=driver_log or found["search_root"])
+        missing = not driver_log and found["missing_driver_log"]
+        return jsonify({"success": True, **plan, "report_path": sleep_path,
+                        "missing_driver_log": missing})
     except Exception as exc:
         traceback.print_exc()
         return jsonify({"success": False, "error": f"{type(exc).__name__}: {exc}"}), 500
@@ -1520,7 +1551,7 @@ _SHARED_HANDLERS = build_shared_handlers(SharedRouteContext(
     # report, WRT WiFiLogs and decoded Wi-Fi logs (.log / .txt), decoded BT
     # logs (.hci.txt) and Wi-Fi driver ETLs with their rolling parts (.etl.N).
     browse_filetypes=(
-        ("Sleep Study report / driver log", "*.html *.htm *.log *.txt *.etl *.etl.*"),
+        ("Sleep Study report / zip / driver log", "*.html *.htm *.xml *.zip *.log *.txt *.etl *.etl.*"),
         ("All files", "*.*"),
     ),
     load_skills_from_yaml=load_skills_from_yaml,

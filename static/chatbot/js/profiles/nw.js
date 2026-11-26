@@ -132,31 +132,104 @@
             const data = await res.json();
             if (!data.success) {
                 nwLoadedPath = '';
+                if (data.code === 'E_MULTIPLE_SLEEPSTUDY_REPORTS') {
+                    showStatus(statusEl, '⚠ ' + data.error, 'warn');
+                    clearSleepstudyView();
+                    renderReportChoice(data.candidates || []);
+                    return;
+                }
                 showStatus(statusEl, '✘ ' + data.error, 'err');
                 return;
             }
 
             // A brief confirmation, as on the other chatbots; the path stays
-            // in the box.
-            showStatus(statusEl, '✔ Sleep Study loaded', 'ok', 3000);
+            // in the box. A zip or folder resolves to the report inside it,
+            // which every later call takes.
+            const report = data.report_path || path;
+            showStatus(statusEl, data.extracted_to
+                ? `✔ Sleep Study loaded from the zip: ${report.split(/[\\/]/).pop()}`
+                : '✔ Sleep Study loaded', 'ok', 3000);
             if (data.skills) renderSkills(data.skills);
             clearSleepstudyView();
             if (typeof loadHistoryList === 'function') loadHistoryList();
             if (window.IpsPrompt) { await window.IpsPrompt.handleSetLog(data); }
-            await planSleepstudy(path);
+            if (data.missing_driver_log) {
+                renderDriverLogPrompt(report, data.search_root || '');
+                return;
+            }
+            await planSleepstudy(report);
         } catch (e) {
             nwLoadedPath = '';
             showStatus(statusEl, '✘ Network error: ' + e.message, 'err');
         }
     }
 
-    async function planSleepstudy(path) {
+    // A zip or folder holding several Sleep Study reports: the person picks
+    // the one to load, which then loads as if typed in the box.
+    function renderReportChoice(candidates) {
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.innerHTML = `
+            <div class="avatar-icon">🛌</div>
+            <div class="msg-body"><div class="msg-bubble">
+                <p>⚠ This holds ${candidates.length} Sleep Study reports. Which one should be analysed?</p>
+                ${candidates.map((c, i) => `<button class="btn-set-log ss-pick-report" data-i="${i}"
+                    style="width:100%;margin-top:6px;text-align:left;white-space:normal;word-break:break-all;">
+                    <b>${escapeHtml(c.split(/[\\/]/).pop())}</b><br><small>${escapeHtml(c)}</small></button>`).join('')}
+            </div></div>`;
+        document.getElementById('chat-window').appendChild(row);
+        row.querySelectorAll('.ss-pick-report').forEach(btn => btn.addEventListener('click', () => {
+            document.getElementById('sleepstudy-path-input').value = candidates[Number(btn.dataset.i)];
+            setSleepstudy(true);
+        }));
+        scrollBottom();
+    }
+
+    // No driver log beside the report (or in its zip): the person either
+    // points at one, or goes on with the report alone.
+    function renderDriverLogPrompt(report, searched) {
+        const row = document.createElement('div');
+        row.className = 'msg-row assistant';
+        row.innerHTML = `
+            <div class="avatar-icon">🛌</div>
+            <div class="msg-body"><div class="msg-bubble">
+                <p>⚠ <b>目前缺少相關 driver log</b> (no driver log found).
+                   No Wi-Fi or Bluetooth driver log (WiFiLog*.LOG, WifiDriver*.etl, *.hci.txt) is next to the
+                   report${searched ? ' in <code>' + escapeHtml(searched) + '</code>' : ''}.</p>
+                <button class="btn-set-log ss-pick-driver" style="width:100%;margin-top:6px;">📁 選擇 driver log… (choose a driver log)</button>
+                <button class="btn-set-log ss-report-only" style="width:100%;margin-top:6px;background:#64748b;">只分析報告 (analyse the report only)</button>
+                <div class="ss-driver-prompt-status" style="font-size:0.8rem;margin-top:6px;"></div>
+            </div></div>`;
+        document.getElementById('chat-window').appendChild(row);
+        const status = row.querySelector('.ss-driver-prompt-status');
+        const done = () => row.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        row.querySelector('.ss-pick-driver').addEventListener('click', async () => {
+            try {
+                const res = await fetch(`${CHATBOT_API}/browse`);
+                const picked = (await res.json()).path;
+                if (!picked) { status.textContent = 'No file chosen.'; return; }
+                done();
+                status.textContent = 'Driver log: ' + picked;
+                await planSleepstudy(report, picked);
+            } catch (e) {
+                status.textContent = '✘ Browse failed: ' + e.message;
+            }
+        });
+        row.querySelector('.ss-report-only').addEventListener('click', async () => {
+            done();
+            status.textContent = 'Analysing the report only.';
+            await planSleepstudy(report);
+        });
+        scrollBottom();
+    }
+
+    async function planSleepstudy(path, driverLog) {
         appendTyping();
         try {
             const res = await fetch(`${CHATBOT_API}/sleepstudy_plan`, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({log_path: path})
+                body: JSON.stringify(driverLog ? {log_path: path, driver_log: driverLog} : {log_path: path})
             });
             const plan = await res.json();
             removeTyping();

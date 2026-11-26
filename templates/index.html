@@ -1546,7 +1546,7 @@
             <div id="form-box">
         <form id="mainForm" method="post" onsubmit="handleSubmit(event)">
             <div style="display: flex; gap: 0; margin-top: 20px; margin-bottom: 35px; position: relative;">
-                <input type="text" class="form-control" id="case_number" name="case_number" placeholder="IPS case number (e.g., 00997200)" value="" required style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
+                <input type="text" class="form-control" id="case_number" name="case_number" placeholder="IPS case number (e.g., 00997200)" value="" required inputmode="numeric" maxlength="8" pattern="\d{1,8}" autocomplete="off" style="border-radius: 25px; padding: 12px 150px 12px 20px; flex: 1; font-family:'Inter', sans-serif;">
                 <div class="action-icons">
                     <button id="case-submit-btn" type="button" class="icon-action-btn search" aria-label="Submit" title="Submit" onclick="handleSubmit(event, 'submit')" disabled>
                         Submit
@@ -2076,6 +2076,9 @@
                 return;
             }
 
+            // Keep only digits, max 8 characters
+            const sanitizeCaseNumber = (text) => text.replace(/\D/g, '').slice(0, 8);
+
             const updateCaseSubmitButtonColor = () => {
                 if (!caseSubmitBtn) {
                     return;
@@ -2111,13 +2114,8 @@
             input.addEventListener("paste", (e) => {
                 e.preventDefault();
                 const pastedText = (e.clipboardData || window.clipboardData).getData('text');
-                const trimmed = pastedText.trim();
-                
-                if (/^\d{1,8}$/.test(trimmed)) {
-                    input.value = trimmed.padStart(8, '0');
-                } else {
-                    input.value = trimmed;
-                }
+                const digits = sanitizeCaseNumber(pastedText);
+                input.value = digits ? digits.padStart(8, '0') : '';
                 updateCaseSubmitButtonColor();
             });
 
@@ -2141,7 +2139,13 @@
                 }
             });
 
-            input.addEventListener('input', updateCaseSubmitButtonColor);
+            input.addEventListener('input', () => {
+                const cleaned = sanitizeCaseNumber(input.value);
+                if (cleaned !== input.value) {
+                    input.value = cleaned;
+                }
+                updateCaseSubmitButtonColor();
+            });
             updateCaseSubmitButtonColor();
         });
         // Tab Switching

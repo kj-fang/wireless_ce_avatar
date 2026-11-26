@@ -7,12 +7,16 @@ line in a child process (`IntelAvatar.exe sleepstudy-analyze --input job.json
 reads its result.json -- so every caller gets the same analysis and output.
 
   1. Power team's MCS Analyzer:
-     a. its ETW investigation plan (the ETW input MCS documents; its
-        etl-trace-request sidecar is read the same) lists the bad Sleep Study
-        sessions it wants traced; the Wi-Fi / Bluetooth ones come here, with
-        the device's ACPI path. Without --report, the report the plan names
-        (source_sleepstudy) is used, from that path or from beside the plan.
-          IntelAvatar.exe sleepstudy-bridge from-mcs <etw-investigation-plan.json> [--report <xml|html>] [--logs <dir> | --collect]
+     a. its run folder (outputs/<run_id>/) or its ETW investigation plan (the
+        ETW input MCS documents; its etl-trace-request sidecar is read the
+        same) lists the bad Sleep Study sessions it wants traced; the Wi-Fi /
+        Bluetooth ones come here, with the device's ACPI path. Without
+        --report, the report the plan names (source_sleepstudy) is used, from
+        that path or from the run folder. An event-log suspects file in the
+        run folder (*event-log-suspects*.json, or --suspects) gives the issue
+        times: each event inside such a session is cut around, the rest of
+        the session is not read; a session without one is read from its start.
+          IntelAvatar.exe sleepstudy-bridge from-mcs <run folder | plan.json> [--suspects F] [--report <xml|html>] [--logs <dir> | --collect]
      b. its etl-findings describe its live ETW capture: the standby Windows
         confirmed in it (Kernel-Power 506/507) becomes the window, and its
         measurements (Wi-Fi time out of D3, Netwaw ISR/DPC counts) become
@@ -133,12 +137,112 @@ def report_of_plan(plan: dict, plan_path: str) -> str:
     return next((os.path.abspath(p) for p in (source, beside) if os.path.isfile(p)), "")
 
 
+PLAN_PATTERNS = ("*-etw-investigation-plan-*.json", "*-etl-trace-request-*.json")
+SUSPECTS_PATTERN = "*event-log-suspects*.json"
+
+
+def _newest(folder: str, pattern: str) -> str:
+    import glob
+    found = glob.glob(os.path.join(folder, pattern))
+    return max(found, key=os.path.getmtime) if found else ""
+
+
+def find_in_run_folder(folder: str) -> dict:
+    """What an MCS Analyzer run folder (outputs/<run_id>/) holds for us: its
+    ETW investigation plan (else its etl-trace-request), the Sleep Study
+    report, and an event-log suspects file when one was written. "" for
+    what is not there."""
+    plan = next((p for p in (_newest(folder, pat) for pat in PLAN_PATTERNS) if p), "")
+    report = ""
+    if plan:
+        try:
+            with open(plan, encoding="utf-8-sig") as fh:
+                report = report_of_plan(json.load(fh), plan)
+        except (OSError, ValueError):
+            pass
+    if not report:
+        from services import sleepstudy_input
+        reports = [os.path.join(folder, n) for n in sorted(os.listdir(folder))
+                   if sleepstudy_input.report_kind(os.path.join(folder, n))]
+        report = reports[0] if len(reports) == 1 else ""
+    return {"plan": plan, "report": report, "suspects": _newest(folder, SUSPECTS_PATTERN)}
+
+
+_TIME_KEYS = ("time", "timestamp", "time_created", "TimeCreated", "event_time")
+_LEADING_TIME = re.compile(r"^\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2}))\s*(.*)$")
+
+
+def _aware(text) -> Optional[datetime]:
+    try:
+        value = datetime.fromisoformat(str(text).strip().replace("Z", "+00:00").replace(" ", "T", 1))
+    except ValueError:
+        return None
+    return value if value.tzinfo is not None else None
+
+
+def read_suspects(path: str) -> tuple[list[dict], list[str]]:
+    """
+    The events of an event-log suspects file, each {"time" (timezone-aware),
+    "text", "device" ("wifi" / "bt" / "")}, and warnings. The file is a JSON
+    list of events (or {"events": [...]} / {"suspects": [...]}), each an
+    object with a time ("time", "timestamp" or "TimeCreated", ISO 8601 with
+    an offset) and any of provider, event_id, level, message, device; or
+    lines that start with such a time. An event without a time zone is
+    skipped: guessing its zone could put it in the wrong session.
+    """
+    with open(path, encoding="utf-8-sig") as fh:
+        raw = fh.read()
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        data = [line for line in raw.splitlines() if line.strip()]
+    if isinstance(data, dict):
+        data = data.get("events") or data.get("suspects") or []
+    events, skipped = [], 0
+    for item in data if isinstance(data, list) else []:
+        if isinstance(item, dict):
+            when = _aware(next((item[k] for k in _TIME_KEYS if item.get(k)), ""))
+            source = item.get("provider") or item.get("source") or item.get("log") or ""
+            eid = item.get("event_id") or item.get("id") or ""
+            msg = item.get("message") or item.get("description") or item.get("summary") or ""
+            text = " ".join(str(x) for x in (source, f"event {eid}" if eid != "" else "", msg) if str(x).strip())
+            device = DRIVER_FAMILIES.get(str(item.get("device") or "").lower(), "")
+        else:
+            m = _LEADING_TIME.match(str(item))
+            when, text, device = (_aware(m.group(1)), m.group(2), "") if m else (None, str(item), "")
+        if when is None:
+            skipped += 1
+            continue
+        events.append({"time": when, "text": f"Event log {when.isoformat()}: {text}".strip(), "device": device})
+    warnings = [f"{os.path.basename(path)}: {skipped} event(s) without a time and time zone were skipped"] if skipped else []
+    return sorted(events, key=lambda e: e["time"]), warnings
+
+
+def suspects_by_session(events: list, payload: dict) -> dict:
+    """The events inside each report session, by session id (on UTC, from
+    the sessions' EntryTimestamp / ExitTimestamp)."""
+    by_session: dict = {}
+    for s in payload.get("ScenarioInstances") or []:
+        lo, hi = _aware(s.get("EntryTimestamp") or ""), _aware(s.get("ExitTimestamp") or "")
+        if lo is None or hi is None:
+            continue
+        inside = [e for e in events if lo <= e["time"] <= hi]
+        if inside:
+            by_session[str(s.get("SessionId"))] = inside
+    return by_session
+
+
 def job_from_mcs_request(request: dict, report: str, logs: str = "", collect: bool = False,
-                         question: str = "", dry_run: bool = False) -> dict:
+                         question: str = "", dry_run: bool = False,
+                         suspects: Optional[dict] = None) -> dict:
     """The sessions MCS Analyzer wants traced (its investigation plan or its
     etl-trace-request: the same target_scenarios) whose blocker is a Wi-Fi or
-    Bluetooth device, as a job; the others (audio, storage...) are not ours."""
+    Bluetooth device, as a job; the others (audio, storage...) are not ours.
+    `suspects` (suspects_by_session()) turns the event-log events inside a
+    session into its issue times, each event an evidence line; a session
+    without one is read from its start."""
     sessions = []
+    suspects = suspects or {}
     why = ", ".join(request.get("reason") or [])
     for target in request.get("target_scenarios") or []:
         sid = str(target.get("session_id") or "").strip()
@@ -154,9 +258,14 @@ def job_from_mcs_request(request: dict, report: str, logs: str = "", collect: bo
                 evidence.append(f"MCS Analyzer reasons: {why}")
             if target.get("drain_mwh") is not None:
                 evidence.append(f"Battery drained {target['drain_mwh']} mWh in this session (MCS Analyzer)")
-            sessions += session_request(sid, question=question, device=device,
-                                        device_id=(mine[0].get("acpi_path") if mine else "") or "",
-                                        evidence=evidence)
+            device_id = (mine[0].get("acpi_path") if mine else "") or ""
+            events = [e for e in suspects.get(sid, []) if e["device"] in ("", device)]
+            if not events:
+                sessions += session_request(sid, question=question, device=device,
+                                            device_id=device_id, evidence=evidence)
+            for e in events:     # close times are merged into one window by the command line
+                sessions += session_request(sid, e["time"].isoformat(), question, device=device,
+                                            device_id=device_id, evidence=evidence + [e["text"]])
     return make_job(report=report, logs=logs, sessions=sessions, collect=collect, dry_run=dry_run,
                     case_id="mcs-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
 
@@ -301,7 +410,7 @@ TOOL = {
     "inputSchema": {
         "type": "object",
         "properties": {
-            "report": {"type": "string", "description": "Sleep Study report .html (powercfg /sleepstudy). Optional with collect."},
+            "report": {"type": "string", "description": "Sleep Study report: .html, .xml, or a .zip / folder holding one. Optional with collect."},
             "logs": {"type": "string", "description": "Capture folder with the driver log (WifiDriver*.etl, WRT WiFiLog, BT .hci.txt)."},
             "session_id": {"type": "string", "description": "Analyse this session only."},
             "issue_time": {"type": "string", "description": "When the issue happened, ISO 8601 with offset (2026-11-25T16:00:00+08:00). Needs session_id."},
@@ -396,6 +505,29 @@ def _utf8_streams() -> None:
             pass
 
 
+def _suspects_for(path: str, report: str, request: dict) -> Optional[dict]:
+    """suspects_by_session() for a suspects file and its report, with what is
+    used for the plan's Wi-Fi/BT sessions printed; None (after printing why)
+    when either cannot be read."""
+    from services import sleepstudy_analyzer as ssa
+    try:
+        events, warnings = read_suspects(path)
+        payload = ssa.load_sleepstudy(report)
+    except (OSError, ValueError) as exc:
+        print(f"cannot read the event-log suspects {path}: {exc}", file=sys.stderr)
+        return None
+    for w in warnings:
+        print(f"⚠ {w}", file=sys.stderr)
+    by_session = suspects_by_session(events, payload)
+    wireless = {str(t.get("session_id") or "").strip() for t in request.get("target_scenarios") or []
+                if any(DRIVER_FAMILIES.get(str(f).lower()) for f in t.get("device_families") or [])}
+    used = sum(len(v) for sid, v in by_session.items() if sid in wireless)
+    print(f"Event-log suspects: {len(events)} event(s) in {os.path.basename(path)}; {used} fall inside "
+          f"the plan's Wi-Fi/BT sessions and are used as their issue times"
+          + (f"; {len(events) - used} elsewhere, not used" if len(events) > used else ""))
+    return by_session
+
+
 def main(argv: list) -> int:
     import argparse
     _utf8_streams()
@@ -403,13 +535,17 @@ def main(argv: list) -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
     sub.add_parser("mcp", help="serve the analysis as an MCP tool over stdio")
-    m = sub.add_parser("from-mcs", help="analyse the Wi-Fi/BT sessions of MCS Analyzer's ETW investigation plan")
-    m.add_argument("request", metavar="plan",
-                   help="MCS Analyzer's <basename>-etw-investigation-plan-<date>.json "
-                        "(its etl-trace-request sidecar is read the same)")
+    m = sub.add_parser("from-mcs", help="analyse the Wi-Fi/BT sessions of an MCS Analyzer run")
+    m.add_argument("request", metavar="run_folder_or_plan",
+                   help="MCS Analyzer's run folder (outputs/<run_id>/), or its "
+                        "<basename>-etw-investigation-plan-<date>.json (an etl-trace-request is read the same)")
     m.add_argument("--report", default="",
                    help="the Sleep Study report MCS Analyzer read (.html or .xml); default: the one the plan "
-                        "names (source_sleepstudy), at that path or beside the plan")
+                        "names (source_sleepstudy), at that path or in the run folder")
+    m.add_argument("--suspects", default="",
+                   help="event-log suspects (JSON list of events with an ISO 8601 time, or lines starting "
+                        "with one); each event inside a Wi-Fi/BT session becomes an issue time of it. "
+                        "Default: *event-log-suspects*.json in the run folder")
     m.add_argument("--logs", default="", help="driver log capture folder")
     m.add_argument("--collect", action="store_true", help="collect the Intel Wi-Fi driver log from this machine")
     m.add_argument("--question", default="")
@@ -430,11 +566,19 @@ def main(argv: list) -> int:
     if a.cmd == "mcp":
         serve_stdio()
         return 0
+    found = {"plan": a.request, "report": "", "suspects": ""}
+    if a.cmd == "from-mcs":
+        folder = a.request if os.path.isdir(a.request) else os.path.dirname(os.path.abspath(a.request))
+        found = {**find_in_run_folder(folder), **({"plan": a.request} if not os.path.isdir(a.request) else {})}
+        if not found["plan"]:
+            print(f"no MCS investigation plan (*-etw-investigation-plan-*.json) in {a.request}", file=sys.stderr)
+            return 2
+        print(f"MCS plan: {found['plan']}")
     try:
-        with open(a.request, encoding="utf-8-sig") as fh:
+        with open(found["plan"], encoding="utf-8-sig") as fh:
             request = json.load(fh)
     except (OSError, ValueError) as exc:
-        print(f"cannot read {a.request}: {exc}", file=sys.stderr)
+        print(f"cannot read {found['plan']}: {exc}", file=sys.stderr)
         return 2
     if a.cmd == "from-mcs-etw":
         job = job_from_mcs_etw(request, a.report, a.logs, a.collect, a.question, a.device, a.dry_run)
@@ -442,8 +586,20 @@ def main(argv: list) -> int:
                    "no driver interrupts/DPCs), or no confirmed standby: nothing for the driver-log "
                    "analysis. Add --device wifi to look anyway.")
     else:
-        report = a.report or report_of_plan(request, a.request)
-        job = job_from_mcs_request(request, report, a.logs, a.collect, a.question, a.dry_run)
+        report = a.report or report_of_plan(request, found["plan"]) or found["report"]
+        suspects = None
+        suspects_file = a.suspects or found["suspects"]
+        if a.suspects and not os.path.isfile(a.suspects):
+            print(f"suspects file not found: {a.suspects}", file=sys.stderr)
+            return 2
+        if suspects_file and report:
+            suspects = _suspects_for(suspects_file, report, request)
+            if suspects is None:
+                return 2
+        elif suspects_file:
+            print(f"Event-log suspects {suspects_file} not used: no Sleep Study report to place them "
+                  "in sessions (pass --report).", file=sys.stderr)
+        job = job_from_mcs_request(request, report, a.logs, a.collect, a.question, a.dry_run, suspects)
         nothing = "No Wi-Fi or Bluetooth session in the plan: nothing for the driver-log analysis."
     if not job["sessions"]:
         print(nothing)
@@ -455,7 +611,8 @@ def main(argv: list) -> int:
             print(f"The plan's Sleep Study report is not at {request['source_sleepstudy']} nor beside "
                   "the plan: pass it with --report.", file=sys.stderr)
     for s in job["sessions"]:
-        where = s.get("session_id") or f"{s.get('window_start')} -> {s.get('window_end')}"
+        where = (s.get("session_id") or f"{s.get('window_start')} -> {s.get('window_end')}") + (
+            f" (issue time {s['issue_time']})" if s.get("issue_time") else "")
         print(f"  {s.get('device') or 'wifi'} {s.get('device_id') or ''} @ {where}")
         for line in s.get("evidence") or []:
             print(f"      · {line}")

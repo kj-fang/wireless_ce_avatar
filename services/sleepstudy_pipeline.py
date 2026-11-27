@@ -8,7 +8,9 @@ WHICH device kept it awake. A driver log says WHY. This module joins the two:
      (software DRIPS below a threshold, a RED top blocker), at most
      MAX_TIME_POINTS of them and at most PER_DEVICE_LIMIT per device family.
   2. Turn each session into a time window: the session's own start..end,
-     padded, and capped so a long session cannot pull in hours of log.
+     padded, at most SESSION_TIME_CAP long; its excerpt stops at
+     SESSION_LINE_BUDGET lines, so a busy log is read from the session's
+     start only as far as the budget goes (covered_until says where).
   3. Suggest, per time point, the driver log under the report's folder that
      covers its window; the user confirms or changes it (plan()). A window
      its log does not cover is reported as such and never reaches the LLM --
@@ -37,7 +39,7 @@ import shutil
 import tempfile
 import threading
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterator, Optional
 
@@ -56,8 +58,20 @@ PER_DEVICE_LIMIT  = 5         # and at most this many per device family
 # Entering and leaving standby are where a driver most often misbehaves, so
 # the window reaches a little past both edges of the session.
 WINDOW_PAD = timedelta(minutes=2)
-# A multi-hour session would hand the agent hours of log. Past this length
-# the window keeps the session's opening, where the entry flow is.
+# A session is read from its start for as long as its log stays within a line
+# budget: the whole session when the driver logged little (an autologger in
+# standby logs almost nothing while the device is in D3), only its opening,
+# where the entry flow is, when it logged a lot (a verbose WRT log runs to
+# tens of thousands of lines an hour). The time cap only guards a log so
+# sparse that the window would otherwise run for days; it covers a night.
+# The agent never reads the excerpt whole (its skill filters hand it at most
+# MAX_ASSEMBLED_LOG_LINES_PER_TOOL_CALL lines a call), so the budget bounds
+# the cutting and searching, not the LLM context: 200,000 lines hold about
+# 8 h of a WRT log in standby (about 23,000 lines an hour, measured).
+SESSION_LINE_BUDGET = 200_000
+SESSION_TIME_CAP = timedelta(hours=12)
+# A window built from the caller's issue times (ISSUE_TIME_BEFORE / AFTER,
+# merged when they are close) stops growing at this length.
 WINDOW_CAP = timedelta(minutes=60)
 
 # Device families an agent in this tool can read a driver log for.
@@ -411,6 +425,9 @@ _DECODED_ETL_LOG = re.compile(r"\.etl(?:\.\d+)?\.log$", re.IGNORECASE)
 # Indexed under this key instead of a device: an ETL has no time span until
 # it is decoded, so it is a candidate to decode, not a log to cut.
 RAW_ETL_KEY = "wifi_etl_raw"
+# The ETLs a run could not decode, {path: (segment, why)}: not tried again,
+# and the reason is given to every later point they might have held.
+FAILED_ETL_KEY = "wifi_etl_failed"
 
 
 def _is_wifi_driver_etl(name: str) -> bool:
@@ -831,7 +848,7 @@ def check_driver_log(path: str, device: str, window_start: str, window_end: str,
         except ValueError:
             return None
     # The session's own start/end, as the plan and the run use them: a window
-    # capped at WINDOW_CAP no longer ends WINDOW_PAD after the session.
+    # capped at SESSION_TIME_CAP no longer ends WINDOW_PAD after the session.
     start, end = parsed(session_start), parsed(session_end)
     index, warnings = discover_driver_logs(path)
     segments = _anchored(index.get(device, []), lo.date())
@@ -950,15 +967,19 @@ def _iter_bt_dated(seg: LogSegment) -> Iterator[tuple[Optional[datetime], str]]:
             yield datetime.strptime(m.group(1), _WIFI_ETL_FMT), line[m.end():]
 
 
-def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_path: str) -> dict:
+def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_path: str,
+                  max_lines: Optional[int] = None) -> dict:
     """
     Copy every line logged in [lo, hi] into `out_path`, written in the decoded
     Wi-Fi ETL shape (MM/DD/YYYY-HH:MM:SS.mmm message) so the agent reads it as
-    a dated log and never has to guess which day a clock belongs to.
+    a dated log and never has to guess which day a clock belongs to. With
+    `max_lines`, the copy stops at that many lines: "truncated" is then True
+    and "last" is the time of the last line kept, how far the excerpt reaches.
     """
     kept = 0
     first = last = None
     sources = []
+    truncated = False
     readers = {"wrt_wifilog": _iter_wifilog, "bt_hci": _iter_bt_hci, "bt_hci_dated": _iter_bt_dated}
     with open(out_path, "w", encoding="utf-8", newline="\n") as out:
         for seg in sorted(_anchored(segments, lo.date()), key=lambda s: s.start):
@@ -979,6 +1000,9 @@ def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_pa
                 in_window = dt >= lo
                 if not in_window:
                     continue
+                if max_lines is not None and kept >= max_lines:
+                    truncated = True
+                    break
                 out.write(f"{dt.strftime('%m/%d/%Y-%H:%M:%S')}.{dt.microsecond // 1000:03d} {msg}\n")
                 kept += 1
                 seg_kept += 1
@@ -986,7 +1010,9 @@ def write_excerpt(segments: list[LogSegment], lo: datetime, hi: datetime, out_pa
                 last = dt
             if seg_kept:
                 sources.append(seg.path)
-    return {"lines": kept, "first": first, "last": last, "sources": sources}
+            if truncated:
+                break
+    return {"lines": kept, "first": first, "last": last, "sources": sources, "truncated": truncated}
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1008,10 +1034,31 @@ class TimePoint:
     window_start: Optional[datetime] = None
     window_end: Optional[datetime] = None
     window_truncated: bool = False
+    # How far the analysis reads, and why it stops before the window's end:
+    # "time_cap" (the session outlasts SESSION_TIME_CAP), "line_budget" (its
+    # log outruns SESSION_LINE_BUDGET), or "" when it reads the whole window.
+    covered_until: Optional[datetime] = None
+    stop_reason: str = ""
     # The session's local time minus UTC, from the report: start/end and the
     # window are on this clock, and a log on another is shifted onto it.
     utc_offset_minutes: Optional[int] = None
     log_clock_note: str = ""
+    # Set by a caller of run_pipeline() (the command line): the window it
+    # asked for instead of the report's, and its own question to the agent.
+    window_source: str = "report"
+    caller_question: str = ""
+    # How the point was chosen: "report" (a bad wireless session), "forced"
+    # (a report session the caller asked for although it is not one), or
+    # "window" (a window of the caller's, with the session it falls in if any).
+    selection: str = "report"
+    # The caller's own findings for this standby (e.g. another team's ETW
+    # analysis) and its name for the device (an ACPI path), for the agent.
+    caller_evidence: list = field(default_factory=list)
+    device_id: str = ""
+    # The issue times the caller reported inside this point's window.
+    issue_times: list = field(default_factory=list)
+    # Why each Wi-Fi driver ETL tried for this point could not be decoded.
+    etl_decode_errors: list = field(default_factory=list)
     status: str = ""
     coverage: str = ""
     message: str = ""
@@ -1032,22 +1079,31 @@ class TimePoint:
     agent_usage: dict = field(default_factory=dict)
 
     @property
+    def read_end(self) -> Optional[datetime]:
+        """The end of what the analysis reads: the window's, or earlier where
+        the line budget stopped the excerpt."""
+        if self.window_end is None or self.covered_until is None:
+            return self.window_end
+        return min(self.window_end, self.covered_until)
+
+    @property
     def issue_time(self) -> Optional[datetime]:
-        if self.window_start is None or self.window_end is None:
+        if self.window_start is None or self.read_end is None:
             return self.start
-        return self.window_start + (self.window_end - self.window_start) / 2
+        return self.window_start + (self.read_end - self.window_start) / 2
 
     @property
     def half_window_minutes(self) -> int:
-        if self.window_start is None or self.window_end is None:
+        if self.window_start is None or self.read_end is None:
             return 5
-        return max(1, math.ceil((self.window_end - self.window_start).total_seconds() / 120))
+        return max(1, math.ceil((self.read_end - self.window_start).total_seconds() / 120))
 
     def to_dict(self) -> dict:
         d = asdict(self)
-        for key in ("start", "end", "window_start", "window_end"):
+        for key in ("start", "end", "window_start", "window_end", "covered_until"):
             d[key] = _fmt(d[key])
         d["issue_time"] = _fmt(self.issue_time)
+        d["issue_times"] = [_fmt(t) for t in self.issue_times]
         # The clock every time of this point is shown in: the customer
         # machine's, as the report records it.
         d["utc_offset_label"] = (_fmt_offset(self.utc_offset_minutes)
@@ -1111,15 +1167,25 @@ def select_time_points(summaries: list, max_points: int = MAX_TIME_POINTS,
             hw_drip_pct=s["hw_drip_pct"],
             blockers=s["blockers"],
         )
-        if start is not None:
-            lo = start - WINDOW_PAD
-            hi = (end or start) + WINDOW_PAD
-            if hi - lo > WINDOW_CAP:
-                hi = lo + WINDOW_CAP
-                p.window_truncated = True
-            p.window_start, p.window_end = lo, hi
+        set_session_window(p)
         points.append(p)
     return points
+
+
+def set_session_window(p: TimePoint) -> None:
+    """A session's window: its start..end padded by WINDOW_PAD, at most
+    SESSION_TIME_CAP from the start. Its excerpt is held to
+    SESSION_LINE_BUDGET lines when it is cut (_analyze_point)."""
+    if p.start is None:
+        return
+    lo = p.start - WINDOW_PAD
+    hi = (p.end or p.start) + WINDOW_PAD
+    p.window_truncated = hi - lo > SESSION_TIME_CAP
+    if p.window_truncated:
+        hi = lo + SESSION_TIME_CAP
+    p.window_start, p.window_end = lo, hi
+    p.covered_until = hi
+    p.stop_reason = "time_cap" if p.window_truncated else ""
 
 
 def _sleep_summary(point: TimePoint, raw_session: Optional[dict]) -> str:
@@ -1702,7 +1768,44 @@ def _issue_description(point: TimePoint, threshold: float,
         **_rule_values(),
     }
     text = template or default_speclet("nw", "sleepstudy_point")
-    return _fill(text, values) + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
+    asked = ""
+    if point.caller_question:
+        # A caller's own focus (the command line's issue_description). It
+        # steers the analysis; the evidence above and the contract still hold.
+        asked = f"\n\nThe caller also asks about this session: {point.caller_question.strip()}"
+    if point.window_source == "caller":
+        asked += (f"\nThe driver log was cut to the window the caller chose: "
+                  f"{_fmt(point.window_start)} -> {_fmt(point.window_end)}.")
+    if point.issue_times:
+        asked += ("\nThe caller reported the issue at: "
+                  + ", ".join(_fmt(t) for t in point.issue_times) + ".")
+    if point.selection == "forced":
+        asked += ("\nThe caller asked for this session although it does not meet the bad-session "
+                  "criteria above; judge from the driver log whether the device behaved normally.")
+    elif point.selection == "window" and not point.blockers and point.sw_drip_pct is None:
+        asked += ("\nNo Sleep Study session in the report covers this window, so the Sleep Study "
+                  "values above are not available; rely on the caller's evidence and the log.")
+    if point.device_id:
+        asked += f"\nThe caller identifies the device as {point.device_id}."
+    if point.caller_evidence:
+        asked += ("\n\nEvidence from the caller's own analysis of this standby (for example a "
+                  "system-level ETW trace). Explain it from the driver log: say what in the log "
+                  "accounts for it, or where the log contradicts it. Do not restate it as a "
+                  "finding the log does not support.\n"
+                  + "\n".join(f"  - {line}" for line in point.caller_evidence))
+    return _fill(text, values) + asked + "\n\n" + _fill(POINT_ANSWER_CONTRACT, values)
+
+
+def coverage_text(p: dict) -> str:
+    """'23:05:12 of a session to 03:14:06 (line budget: 200,000 lines)' for a
+    point the analysis did not read to the end; "" when it read it all."""
+    reason = p.get("stop_reason")
+    if not reason:
+        return ""
+    why = (f"line budget: {SESSION_LINE_BUDGET:,} lines" if reason == "line_budget"
+           else f"{SESSION_TIME_CAP.total_seconds() / 3600:.0f} h cap")
+    until = p.get("covered_until") or p.get("window_end") or ""
+    return f"{until} of a session to {(p.get('end') or '')[11:] or '?'} ({why})"
 
 
 def render_point_finding(p: dict) -> str:
@@ -1776,6 +1879,7 @@ def render_point_finding(p: dict) -> str:
         '',
         f'**Window:** {esc(p.get("window_start"))} → {esc(p.get("window_end"))}'
         + (f' ({esc(p.get("utc_offset_label"))}, customer clock)' if p.get("utc_offset_label") else "") + '  ',
+        *([f'**Analysed to:** {esc(coverage_text(p))}  '] if p.get("stop_reason") else []),
         f'**Driver log:** `{esc(driver_files)}`  ',
         *([f'**Time zone:** {esc(p.get("log_clock_note"))}  '] if p.get("log_clock_note") else []),
         f'**DRIPS:** SW {esc(drip_label)} · HW {esc(_pct(p.get("hw_drip_pct")))} · 80% target',
@@ -1868,7 +1972,8 @@ def _run_agent(point: TimePoint, agent, max_steps: int, on_step: Callable[[dict]
     message = (
         f"{point.issue_description}\n\nSleep Study evidence:\n```\n"
         f"{point.sleep_summary[:4000]}\n```\n"
-        f"Issue time: around {_fmt(point.issue_time)}"
+        "Issue time: " + (", ".join(_fmt(t) for t in point.issue_times) + " (reported by the caller)"
+                          if point.issue_times else f"around {_fmt(point.issue_time)}")
     )
     result = agent.chat(message, max_steps=max_steps, step_callback=_step)
     point.agent_result_type, point.agent_report = _report_text(result)
@@ -1997,6 +2102,8 @@ def _criteria(collected: dict, max_points: int, per_device: int) -> dict:
         "per_device_limit": per_device,
         "window_pad_minutes": WINDOW_PAD.total_seconds() / 60,
         "window_cap_minutes": WINDOW_CAP.total_seconds() / 60,
+        "session_line_budget": SESSION_LINE_BUDGET,
+        "session_time_cap_hours": SESSION_TIME_CAP.total_seconds() / 3600,
     }
 
 
@@ -2153,15 +2260,23 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
         segments = index.get(p.device, [])
         p.coverage, hits, p.log_clock_note = _align(
             segments, p.window_start, p.window_end, p.utc_offset_minutes, log_clock)
-        s_lo, s_hi = session_span(p.window_start, p.window_end, p.start, p.end)
+        # What a log has to reach: the session itself, or all of a window a
+        # caller chose (it has no padding to discount).
+        span = ((p.window_start, p.window_end) if p.window_source == "caller"
+                else (p.start, p.end))
+        s_lo, s_hi = session_span(p.window_start, p.window_end, *span)
         reaches = lambda hs: covers_session(hs, s_lo, s_hi)
         # No decoded log reaches the session (none at all, or one covering
         # only the margin around it): decode the Wi-Fi driver ETLs that may,
         # likeliest first, until one does.
         decode_errors = []
         raw_etls = index.get(RAW_ETL_KEY, []) if p.device == ssa.DEVICE_WIFI else []
-        candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, p.start, p.end)
+        candidates = (etl_candidates(raw_etls, p.window_start, p.window_end, *span)
                       if raw_etls else [])
+        failed = index.get(FAILED_ETL_KEY, {}) if p.device == ssa.DEVICE_WIFI else {}
+        if not reaches(hits) and failed:
+            decode_errors += [failed[s.path][1] for s in etl_candidates(
+                [seg for seg, _ in failed.values()], p.window_start, p.window_end, *span)]
         if not reaches(hits) and candidates:
             for etl in candidates[:MAX_ETL_DECODES]:
                 name = os.path.basename(etl.path)
@@ -2171,11 +2286,14 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                 index[RAW_ETL_KEY] = [s for s in index.get(RAW_ETL_KEY, []) if s.path != etl.path]
                 if not log_path:
                     decode_errors.append(error)
+                    index.setdefault(FAILED_ETL_KEY, {})[etl.path] = (etl, error)
                     yield {"type": "step", "content": f"⚠️ {error}"}
                     continue
                 seg = _decoded_log_segment(log_path, alone=False)
                 if seg is None:
-                    decode_errors.append(f"{name}: the decoded log has no timestamp this tool can read.")
+                    error = f"{name}: the decoded log has no timestamp this tool can read."
+                    decode_errors.append(error)
+                    index.setdefault(FAILED_ETL_KEY, {})[etl.path] = (etl, error)
                     continue
                 index.setdefault(ssa.DEVICE_WIFI, []).append(seg)
                 segments = index[ssa.DEVICE_WIFI]
@@ -2187,6 +2305,7 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
                     + ("; it holds this session." if reaches(hits) else "; not this session."))}
                 if reaches(hits):
                     break
+        p.etl_decode_errors = list(decode_errors)
         if p.coverage != "none" and not reaches(hits):
             # Cutting the margin alone would hand the agent the minutes before
             # (or after) standby as if they were the session.
@@ -2218,9 +2337,17 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
             yield {"type": "step", "content": (
                 f"{head}: cutting the driver log — "
                 + ", ".join(f"`{h.describe()['file']}`" for h in hits) + "…")}
-            ex = write_excerpt(hits, p.window_start, p.window_end, p.excerpt_path)
+            # A session's own window is read only as far as the line budget
+            # goes; a window the caller chose is read whole.
+            budget = SESSION_LINE_BUDGET if p.window_source != "caller" else None
+            ex = write_excerpt(hits, p.window_start, p.window_end, p.excerpt_path, max_lines=budget)
             p.excerpt_lines = ex["lines"]
             p.driver_log_sources = ex["sources"]
+            if ex["truncated"]:
+                p.covered_until, p.stop_reason = ex["last"], "line_budget"
+                yield {"type": "step", "content": (
+                    f"{head}: the driver log outruns {SESSION_LINE_BUDGET:,} lines; analysing "
+                    f"{_fmt(p.window_start)} → {_fmt(ex['last'])[11:]} of the session.")}
             if p.coverage == "partial":
                 p.message = (f"The driver log covers only part of this window: "
                              f"{_fmt(ex['first'])} → {_fmt(ex['last'])[11:]} of "
@@ -2232,6 +2359,42 @@ def _analyze_point(p: TimePoint, indexed: dict, log_warnings: list, out_dir: str
             elif agent_factory is None:
                 p.status = STATUS_DRY_RUN
             else:
+                # The excerpt alone cannot tell "the driver logged nothing" (a
+                # device asleep in D3) from "the log ended": say how far it runs.
+                span_lo = min((h.start for h in hits if h.start is not None), default=None)
+                span_hi = max((h.end for h in hits if h.end is not None), default=None)
+                # Over a minute between two files, inside the window: the
+                # capture may be missing there, which silence cannot tell.
+                gaps, reached = [], None
+                for h in sorted((h for h in hits if h.start is not None and h.end is not None),
+                                key=lambda h: h.start):
+                    if (reached is not None and h.start - reached > timedelta(minutes=1)
+                            and reached < p.window_end and h.start > p.window_start):
+                        gaps.append((reached, h.start))
+                    reached = h.end if reached is None else max(reached, h.end)
+                if span_lo is not None and span_hi is not None:
+                    p.issue_description += (
+                        f"\n\nDriver log coverage: the log runs from {_fmt(span_lo)} to {_fmt(span_hi)} on the "
+                        f"report's clock; the excerpt holds its lines inside the window, the last at "
+                        f"{_fmt(ex['last'])}. " + (
+                            "The log continues past the window, so a stretch of the window without lines "
+                            "means the driver logged nothing then (for example while the device was in D3), "
+                            "not that the log ended." if span_hi >= p.window_end else
+                            "The log ends inside the window; nothing after its end is known.")
+                        + (" Exception: between its files the log has nothing from "
+                           + "; ".join(f"{_fmt(a)} to {_fmt(b)}" for a, b in gaps)
+                           + ". Whether the driver was quiet or the capture is missing there is not known: "
+                             "do not read that stretch as the device being asleep." if gaps else ""))
+                if p.stop_reason == "line_budget":
+                    p.issue_description += (
+                        f"\n\nThe excerpt stops at {_fmt(p.covered_until)}: the session runs to "
+                        f"{_fmt(p.end)}, but the excerpt is held to {SESSION_LINE_BUDGET:,} lines. Nothing "
+                        "after that time was read; do not conclude what happened later in the session.")
+                elif p.stop_reason == "time_cap":
+                    p.issue_description += (
+                        f"\n\nThe window stops at {_fmt(p.window_end)}: the session runs to {_fmt(p.end)}, "
+                        f"longer than the {SESSION_TIME_CAP.total_seconds() / 3600:.0f} h this analysis "
+                        "reads. Nothing after that time was read.")
                 yield {"type": "step", "content": (
                     f"{head}: {ex['lines']} lines → {DEVICE_LABELS[p.device]} agent…")}
                 yield from _agent_steps(p, agent_factory, max_steps, on_agent)
@@ -2325,6 +2488,199 @@ def run_point(
         yield {"type": "error", "content": f"{type(exc).__name__}: {exc}"}
 
 
+# A caller that gives only an issue time gets this much driver log around it.
+ISSUE_TIME_BEFORE = timedelta(minutes=5)
+ISSUE_TIME_AFTER = timedelta(minutes=10)
+# Issue times whose cuts are closer than this are analysed as one window.
+ISSUE_TIME_MERGE_GAP = timedelta(minutes=5)
+
+
+def apply_override(p: TimePoint, override: dict) -> None:
+    """
+    Set on a time point what a caller (the command line) asked for:
+      window_start / window_end / issue_time -- timezone-aware datetimes,
+        converted to the session's own clock (the customer machine's, which
+        the report and every log comparison use). Naive times are refused:
+        guessing their zone is how a log lines up with the wrong session.
+      only an issue time -- the window is ISSUE_TIME_BEFORE to
+        ISSUE_TIME_AFTER around it, kept inside the session
+      issue_times -- several issue times the caller merged into the window
+        it gives; the window is kept inside the session the same way
+      question -- added to the point's question to the agent
+    Raises ValueError for a time without a zone, a window that ends first or
+    an issue time outside its session.
+    """
+    def local(value):
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            raise ValueError("times must carry a time zone (an ISO 8601 offset such as +08:00 or Z)")
+        if p.utc_offset_minutes is None:
+            raise ValueError(f"session {p.session_id}: the report gives no UTC offset to convert to")
+        clock = timezone(timedelta(minutes=p.utc_offset_minutes))
+        return value.astimezone(clock).replace(tzinfo=None)
+
+    lo, hi = local(override.get("window_start")), local(override.get("window_end"))
+    at = local(override.get("issue_time"))
+    times = sorted(local(t) for t in override.get("issue_times") or [])
+    if (lo is None) != (hi is None):
+        raise ValueError(f"session {p.session_id}: give both window_start and window_end")
+    # A window that comes from issue times (one, or several merged) belongs
+    # to the session asked for. A window without a session id is the
+    # caller's own, taken as given.
+    from_times = bool(times) or (at is not None and lo is None)
+    if not times and at is not None:
+        times = [at]
+    if from_times and p.selection != "window":
+        for t in times:
+            if (p.start is not None and t < p.start) or (p.end is not None and t > p.end):
+                raise ValueError(f"session {p.session_id}: the issue time {_fmt(t)} is outside the session "
+                                 f"({_fmt(p.start)} → {_fmt(p.end)})")
+        if lo is None:
+            lo, hi = times[0] - ISSUE_TIME_BEFORE, times[-1] + ISSUE_TIME_AFTER
+        # Inside the session itself, not its report window: that one is held
+        # to SESSION_LINE_BUDGET lines, which may end short of a late time.
+        if p.start is not None:
+            lo = max(lo, p.start)
+        if p.end is not None:
+            hi = min(hi, p.end)
+    if lo is not None:
+        if hi <= lo:
+            raise ValueError(f"session {p.session_id}: the window ends before it starts")
+        p.window_start, p.window_end = lo, hi
+        p.window_truncated = False
+        p.covered_until, p.stop_reason = hi, ""
+        p.window_source = "caller"
+    if times:
+        p.issue_times = times
+    if override.get("question"):
+        p.caller_question = str(override["question"])
+    if override.get("evidence"):
+        p.caller_evidence = [str(e) for e in override["evidence"]]
+    if override.get("device_id"):
+        p.device_id = str(override["device_id"])
+
+
+def driver_log_reach(path: str, report_offset: Optional[int]) -> dict:
+    """
+    How far back the driver log under `path` reaches, per device, on the
+    report's clock (`report_offset` minutes east of UTC):
+        {device: {"from", "to" (datetimes), "exact", "files", "undecoded_etl"}}
+    The Intel Wi-Fi autologger is circular, so a session older than "from"
+    cannot be analysed from it. An undecoded Wi-Fi driver ETL is known only by
+    when it was last written; with one, the log reaches back at least to
+    "from" and maybe further ("exact": False).
+    """
+    index, _ = discover_driver_logs(path)
+    clock = timezone(timedelta(minutes=report_offset)) if report_offset is not None else None
+
+    def written(file_path: str) -> Optional[datetime]:
+        try:
+            ts = os.path.getmtime(file_path)
+        except OSError:
+            return None
+        if clock is None:
+            return datetime.fromtimestamp(ts)
+        return datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(clock).replace(tzinfo=None)
+
+    reach = {}
+    for device in ANALYZABLE_DEVICES:
+        segments = [s for s in in_report_clock(index.get(device, []), report_offset) if not s.dateless]
+        raw = index.get(RAW_ETL_KEY, []) if device == ssa.DEVICE_WIFI else []
+        raw_times = [t for t in (written(r.path) for r in raw) if t is not None]
+        times_from = [s.start for s in segments] + raw_times
+        if not times_from:
+            continue
+        reach[device] = {
+            "from": min(times_from),
+            "to": max([s.end or s.start for s in segments] + raw_times),
+            "exact": not raw_times,
+            "files": len(segments) + len(raw),
+            "undecoded_etl": [os.path.basename(r.path) for r in raw],
+        }
+    return reach
+
+
+def _session_covering(sessions: list, lo: datetime, hi: datetime, report_offset) -> Optional[dict]:
+    """The Modern Standby session of the report overlapping the timezone-aware
+    window lo..hi the most, or None. Each session is compared on its own clock."""
+    best, best_overlap = None, timedelta(0)
+    for s in sessions:
+        if s.get("Type") not in ssa.MS_SESSION_TYPES:
+            continue
+        start = ssa.parse_local_timestamp(s.get("EntryTimestampLocal") or "")
+        end = ssa.parse_local_timestamp(s.get("ExitTimestampLocal") or "")
+        offset = session_utc_offset(s, report_offset)
+        if start is None or end is None or offset is None:
+            continue
+        clock = timezone(timedelta(minutes=offset))
+        overlap = (min(hi.astimezone(clock).replace(tzinfo=None), end)
+                   - max(lo.astimezone(clock).replace(tzinfo=None), start))
+        if overlap > best_overlap:
+            best, best_overlap = s, overlap
+    return best
+
+
+def caller_point(payload: dict, request: dict, index: int) -> TimePoint:
+    """
+    A time point the caller asks for that the bad-session selection does not
+    give, for request["device"] ("wifi" / "bt"; Wi-Fi by default):
+      session_id -- that report session, analysed although it is not a bad
+        wireless session ("forced");
+      window_start / window_end (timezone-aware), no session_id -- that window,
+        with the report session it falls in when there is one ("window").
+    The caller's window, question and evidence are applied by apply_override().
+    Raises ValueError for a session the report does not have.
+    """
+    device = request.get("device") or ssa.DEVICE_WIFI
+    report_offset = (payload.get("ReportInformation") or {}).get("UtcOffset")
+    sessions = payload.get("ScenarioInstances") or []
+    sid = str(request.get("session_id") or "").strip()
+    lo, hi = request.get("window_start"), request.get("window_end")
+    if sid:
+        raw = next((s for s in sessions if str(s.get("SessionId")) == sid), None)
+        if raw is None:
+            raise ValueError(f"session {sid}: the report has no session with this id")
+    elif lo is not None and hi is not None:
+        raw = _session_covering(sessions, lo, hi, report_offset)
+    else:
+        raise ValueError("a requested window needs both window_start and window_end")
+
+    if raw is not None:
+        start = ssa.parse_local_timestamp(raw.get("EntryTimestampLocal") or "")
+        end = ssa.parse_local_timestamp(raw.get("ExitTimestampLocal") or "")
+        sw, hw = ssa.compute_drip_percentages(raw)
+        p = TimePoint(
+            index=index, session_id=raw.get("SessionId"), device=device,
+            type_label=ssa.MS_SESSION_TYPES.get(raw.get("Type"), f"Type {raw.get('Type')}"),
+            start=start, end=end, duration=ssa.format_duration(raw.get("Duration") or 0),
+            sw_drip_pct=sw, hw_drip_pct=hw,
+            blockers=[{"name": h["blocker"].get("Name", ""), "device": h["device"],
+                       "active_time_pct": h["blocker"].get("ActiveTimePercent", 0)}
+                      for h in ssa.red_top_blockers(raw)],
+            selection="forced" if sid else "window")
+        p.utc_offset_minutes = session_utc_offset(raw, report_offset)
+        p.sleep_summary = _sleep_summary(p, raw)
+        p.wake_evidence = _wake_evidence(raw, device)
+        set_session_window(p)
+        return p
+
+    # No report session holds the window: the window alone, on the report's clock.
+    offset = session_utc_offset(None, report_offset)
+    if offset is None:
+        offset = int(lo.utcoffset().total_seconds() // 60)
+    clock = timezone(timedelta(minutes=offset))
+    start, end = lo.astimezone(clock).replace(tzinfo=None), hi.astimezone(clock).replace(tzinfo=None)
+    p = TimePoint(index=index, session_id=f"window-{index}", device=device, type_label="Caller window",
+                  start=start, end=end,
+                  duration=ssa.format_duration(int((end - start).total_seconds() * 1_000_000)),
+                  sw_drip_pct=None, hw_drip_pct=None, blockers=[], selection="window",
+                  window_start=start, window_end=end, covered_until=end)
+    p.utc_offset_minutes = offset
+    p.sleep_summary = "No Sleep Study session in the report covers this window."
+    return p
+
+
 def run_pipeline(
     html_path: str,
     driver_logs,
@@ -2336,6 +2692,9 @@ def run_pipeline(
     per_device: int = PER_DEVICE_LIMIT,
     max_steps: int = 6,
     point_template: Optional[str] = None,
+    session_ids=None,
+    overrides: Optional[dict] = None,
+    caller_points: Optional[list] = None,
 ) -> Iterator[dict]:
     """
     Analyse every time point and yield events: "step" and "agent_step" as in
@@ -2346,16 +2705,94 @@ def run_pipeline(
     `driver_logs` is one path used for every point, or {point index: path}.
     A point with no path is reported as such and never reaches the LLM.
     `agent_factory=None` is a dry run: every step up to the agent runs.
+
+    `session_ids` analyses those sessions only, chosen from every bad
+    wireless session rather than the worst `max_points`. An item is a
+    session id, or (session id, device) to take that device's point alone.
+    `overrides` maps
+    (session id, device) -- device "" for every device of the session -- to
+    what a caller sets for it (apply_override): a window and an issue time
+    as timezone-aware datetimes, a question, evidence and a device id. An
+    empty `session_ids` (not None) takes none of the report's own picks:
+    only `caller_points`.
+
+    `caller_points` are requests the bad-session selection does not give
+    (caller_point()): a report session to analyse anyway ({"session_id",
+    "device"}), or a window ({"window_start", "window_end", "device"}), each
+    with what apply_override() takes. A session asked for by id whose point
+    for that device is already among the bad ones gets the request's
+    override instead; a window is always a point of its own; a session the
+    report lacks is skipped. A request marked "another" is a further window
+    of a session already asked for: that session again, as a point of its own.
     """
     try:
-        yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
-        collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
+        if session_ids is not None:
+            # Asked for by id: any bad wireless session qualifies, not only
+            # the worst few the page lists.
+            max_points = per_device = 100000
+        if html_path:
+            yield {"type": "step", "content": f"Loading Sleep Study report: `{html_path}`"}
+            collected, points, _system = _select(html_path, drip_threshold, max_points, per_device)
+        else:
+            # No report: only the caller's windows, on the clock of the times
+            # it gave, without Sleep Study evidence.
+            yield {"type": "step", "content": "No Sleep Study report: analysing the caller's windows alone."}
+            collected = {"total_sessions": 0, "qualifying_count": 0, "sessions": [], "devices": [],
+                         "warnings": [], "criteria": {"drip_metric": DRIP_METRIC,
+                                                      "drip_threshold_pct": drip_threshold}}
+            points = []
+        if session_ids is not None:
+            wanted: dict = {}                 # session id -> the devices asked for ("": any)
+            for item in session_ids:
+                sid, device = item if isinstance(item, tuple) else (item, "")
+                wanted.setdefault(str(sid), set()).add(device or "")
+            points = [p for p in points if str(p.session_id) in wanted
+                      and wanted[str(p.session_id)] & {"", p.device}]
+        # The report's points as selected, for a further window of the same session.
+        selected = {(str(p.session_id), p.device): copy.deepcopy(p) for p in points}
+        for p in points:
+            override = ((overrides or {}).get((str(p.session_id), p.device))
+                        or (overrides or {}).get((str(p.session_id), "")))
+            if override:
+                apply_override(p, override)
+        if caller_points:
+            payload = ssa.load_sleepstudy(html_path) if html_path else {}
+            targets = {(str(p.session_id), p.device): p for p in points}
+            next_index = max([p.index for p in points] + [len(collected["sessions"])]) + 1
+            for request in caller_points:
+                sid = str(request.get("session_id") or "")
+                if request.get("another"):
+                    again = [copy.deepcopy(q) for (s, d), q in selected.items()
+                             if s == sid and request.get("device") in (None, "", d)]
+                    for p in again:
+                        p.index = next_index
+                        apply_override(p, request)
+                        points.append(p)
+                        next_index += 1
+                    # Not among the report's points: only a forced session is built anew.
+                    if again or not (request.get("device") or request.get("force")):
+                        continue
+                try:
+                    p = caller_point(payload, request, next_index)
+                except ValueError as exc:
+                    yield {"type": "step", "content": f"⚠️ {exc}"}
+                    continue
+                same = (targets.get((str(p.session_id), p.device))
+                        if sid and not request.get("another") else None)
+                if same is not None:
+                    apply_override(same, request)
+                    continue
+                apply_override(p, request)
+                points.append(p)
+                targets.setdefault((str(p.session_id), p.device), p)
+                next_index += 1
         yield {"type": "step", "content": (
+            f"Analysing **{len(points)}** window(s) the caller gave." if not html_path else
             f"**{collected['total_sessions']}** sessions in the report; "
             f"**{collected['qualifying_count']}** are battery drains with "
             f"{criteria_text(collected['criteria'])} and a RED top blocker. "
-            f"Analysing the worst **{len(points)}** (max {max_points}, "
-            f"{per_device} per device)."
+            + (f"Analysing **{len(points)}** session(s) the caller asked for." if session_ids is not None else
+               f"Analysing the worst **{len(points)}** (max {max_points}, {per_device} per device).")
         )}
         if isinstance(driver_logs, dict):
             chosen = {int(k): str(v or "").strip() for k, v in driver_logs.items()}
@@ -2393,8 +2830,10 @@ def run_pipeline(
 def render_point_markdown(p: dict) -> str:
     """One time point: its window, outcome, Sleep Study evidence and analysis."""
     out = [f"## #{p['index']} Session {p['session_id']} — {p['device_label']}",
-           f"_Issue time {p['issue_time']} · window {p['window_start']} → {p['window_end']}"
-           + (" (capped)" if p["window_truncated"] else "") + f" · **{p['status']}**_"]
+           f"_Issue time {', '.join(p.get('issue_times') or []) or p['issue_time']} · "
+           f"window {p['window_start']} → {p['window_end']} · **{p['status']}**_"]
+    if p.get("stop_reason"):
+        out.append(f"\n**Analysed to {coverage_text(p)}.** Nothing later in the session was read.")
     if p["driver_log_files"]:
         out.append("")
         out += [f"- Driver log `{f['file']}`: {f['start']} → {f['end']} "
@@ -2413,11 +2852,13 @@ def render_markdown(result: dict) -> str:
     c = result["criteria"]
     out = [
         "# Sleep Study × Driver Log Analysis",
-        f"**Report:** `{result['source']}`  ",
+        (f"**Report:** `{result['source']}`  " if result["source"] else
+         "**Report:** none (the caller's times alone, without Sleep Study evidence)  "),
         "**Driver log:** " + (", ".join(f"`{d}`" for d in result["driver_logs"]) or "none") + "  ",
-        f"**Sessions:** {result['qualifying_count']} of {result['total_sessions']} qualify "
-        f"(battery drain, {criteria_text(c)}, RED top blocker); "
-        f"{len(result['points'])} analysed.",
+        (f"**Sessions:** {result['qualifying_count']} of {result['total_sessions']} qualify "
+         f"(battery drain, {criteria_text(c)}, RED top blocker); "
+         f"{len(result['points'])} analysed." if result["source"] else
+         f"**Windows:** {len(result['points'])} analysed."),
     ]
     if result["warnings"]:
         out.append("")

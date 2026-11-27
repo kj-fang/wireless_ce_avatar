@@ -166,8 +166,12 @@ SLEEPSTUDY_SYSTEM_PROMPT = (
 def load_sleepstudy(html_path: str) -> dict:
     """
     Extract the embedded JSON payload from a Windows Sleep Study HTML report.
-    Returns the parsed LocalSprData dictionary.
+    Returns the parsed LocalSprData dictionary. An XML report
+    (powercfg /sleepstudy /xml) is read into the same shape.
     """
+    from services import sleepstudy_xml
+    if sleepstudy_xml.is_sleepstudy_xml(html_path):
+        return sleepstudy_xml.load_sleepstudy_xml(html_path)
     with open(html_path, "r", encoding="utf-8", errors="replace") as fh:
         raw = fh.read()
 
@@ -556,7 +560,7 @@ def build_session_summary(session: dict, wifi_content: dict) -> str:
     drained_mwh = (entry_cap - exit_cap) if (entry_cap and exit_cap) else "?"
 
     top_blockers_info = []
-    for tb in session.get("TopBlockers", []):
+    for tb in session.get("TopBlockers") or []:     # None in a session read from XML
         level = tb.get("ActivityLevel", 0)
         label = activity_label(level)
         pct   = tb.get("ActiveTimePercent", 0)

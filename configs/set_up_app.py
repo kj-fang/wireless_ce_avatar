@@ -242,7 +242,14 @@ def configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir: str) -
     )
     return None
 
-def set_up(socketio):
+def set_up(socketio, prewarm: bool = True):
+    """
+    Configure the app: folders, keys, the LLM and every chatbot agent.
+
+    `prewarm=False` is for the command-line tools (services/sleepstudy_cli):
+    they need the LLM and the agents, not the ChromeDriver set-up or the
+    Snowflake / Salesforce sessions warmed for the web pages' first request.
+    """
     # download dir
     avatarfiles_dir, driver_dir, prompt_dir = helpers.init_download_dir()
     app_config.set_avatarfiles_dir(avatarfiles_dir)
@@ -298,13 +305,14 @@ def set_up(socketio):
     # This is the single initialization point — do not re-create it elsewhere
     # (a second DriverManager would re-run ChromeDriver setup on the same dir
     # and could overwrite this reference while the prewarm thread uses it).
-    from services.driver_manage_service import DriverManager
-    if app_config.driver_manager is None:
-        app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
+    if prewarm:
+        from services.driver_manage_service import DriverManager
+        if app_config.driver_manager is None:
+            app_config.set_driver_manager(DriverManager(app_config.avatarfiles_dir))
 
-    # Pre-warm Snowflake + Salesforce VF session in background so first user request is fast
-    if key_path is not None:
-        Thread(target=_prewarm_connections, args=(key.snowflake_passwd,), daemon=True).start()
+        # Pre-warm Snowflake + Salesforce VF session in background so first user request is fast
+        if key_path is not None:
+            Thread(target=_prewarm_connections, args=(key.snowflake_passwd,), daemon=True).start()
 
     # Mirror the shared Speclets (per-profile agent prompt + report format) in
     # the background. Deliberately not awaited: the share probe alone can take

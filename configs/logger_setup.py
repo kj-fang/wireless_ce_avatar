@@ -60,46 +60,50 @@ class _TeeStream:
     def __init__(self, original_stream, file_logger):
         self._stream = original_stream
         self._logger = file_logger
-        self._buf = ""
-        self._lock = threading.Lock()
+        # Thread-local, NOT shared: print() issues a call's message and its
+        # trailing "\n" as two separate write() calls, so a shared buffer lets
+        # two threads' writes interleave (thread A's message + thread B's full
+        # message + thread A's "\n") into one garbled logged line. Each thread
+        # gets its own partial-line buffer instead.
+        self._buf = threading.local()
 
     def write(self, text):
         # Always forward to terminal unchanged.
         self._stream.write(text)
 
-        with self._lock:
-            self._buf += text
+        buf = getattr(self._buf, "value", "") + text
 
-            # Guard against unbounded buffer growth from progress-bar writes
-            # that never emit a newline (e.g. print(..., end='', flush=True)).
-            # If the buffer is large and has no newline, discard it.
-            if len(self._buf) > 4096 and "\n" not in self._buf:
-                self._buf = ""
-                return
+        # Guard against unbounded buffer growth from progress-bar writes
+        # that never emit a newline (e.g. print(..., end='', flush=True)).
+        # If the buffer is large and has no newline, discard it.
+        if len(buf) > 4096 and "\n" not in buf:
+            self._buf.value = ""
+            return
 
-            while "\n" in self._buf:
-                line, self._buf = self._buf.split("\n", 1)
-                # Strip a trailing CR so CRLF line endings ("\r\n") are treated
-                # as normal lines rather than being silently discarded.
-                if line.endswith("\r"):
-                    line = line[:-1]
-                # Skip progress-bar lines: those that use a *leading* \r to
-                # overwrite the current terminal line.
-                if "\r" in line:
-                    continue
-                clean = _ANSI_RE.sub('', line.rstrip())
-                if not clean:
-                    continue
-                if any(clean.startswith(p) for p in ("❌", "🚨", "[ERROR]")):
-                    self._logger.error(clean)
-                elif any(clean.startswith(p) for p in ("⚠️", "[WARNING]")):
-                    self._logger.warning(clean)
-                elif _ERROR_KW_RE.search(clean):
-                    self._logger.error(clean)
-                elif _WARN_KW_RE.search(clean):
-                    self._logger.warning(clean)
-                else:
-                    self._logger.info(clean)
+        while "\n" in buf:
+            line, buf = buf.split("\n", 1)
+            # Strip a trailing CR so CRLF line endings ("\r\n") are treated
+            # as normal lines rather than being silently discarded.
+            if line.endswith("\r"):
+                line = line[:-1]
+            # Skip progress-bar lines: those that use a *leading* \r to
+            # overwrite the current terminal line.
+            if "\r" in line:
+                continue
+            clean = _ANSI_RE.sub('', line.rstrip())
+            if not clean:
+                continue
+            if any(clean.startswith(p) for p in ("❌", "🚨", "[ERROR]")):
+                self._logger.error(clean)
+            elif any(clean.startswith(p) for p in ("⚠️", "[WARNING]")):
+                self._logger.warning(clean)
+            elif _ERROR_KW_RE.search(clean):
+                self._logger.error(clean)
+            elif _WARN_KW_RE.search(clean):
+                self._logger.warning(clean)
+            else:
+                self._logger.info(clean)
+        self._buf.value = buf
 
     def flush(self):
         self._stream.flush()

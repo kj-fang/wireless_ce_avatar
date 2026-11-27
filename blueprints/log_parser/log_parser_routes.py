@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 from utils import helpers, attachment_decompose
 from utils import check_ips_utils
 from configs.global_configs import app_config
-from configs.path_configs import LOG_PARSER_DIR, LOAD_PATH_prim, LOAD_PATH_bkup
+from configs.path_configs import get_log_parser_dir, get_bsod_load_path
 from models.models import CaseContext
 from utils.log_parser_preprocess import extract_all_keywords_from_filter_file
 
@@ -336,6 +336,22 @@ def _render_safe_markdown_html(text: str) -> str:
         strip=True,
     )
 
+
+def _log_parser_dir_or_503():
+    """Resolve the log-parser shared dir, or a ready-to-return 503 response.
+
+    get_log_parser_dir() is None when both the primary and backup shares are
+    unreachable; without this guard the caller's os.path.join(None, ...)
+    raises TypeError instead of a JSON error.
+    """
+    log_parser_dir = get_log_parser_dir()
+    if not log_parser_dir:
+        return None, (jsonify({
+            'success': False,
+            'message': 'Log parser shared folder is unavailable. Please try again later.'
+        }), 503)
+    return log_parser_dir, None
+
 #------------Section for Local dmp file upload bar -------------#
 def _copy_file_with_console_progress(src_path: str, dst_path: str, chunk_size: int = 4 * 1024 * 1024, cancel_event=None) -> None:
     total_size = os.path.getsize(src_path)
@@ -606,7 +622,7 @@ def _process_local_analysis(source_path: str, source_dir: str, file_path: str,
 
         # For local BSOD uploads, copy the dump to shared storage first,
         # then submit analysis using that shared folder path.
-        load_path_bsod = helpers.get_load_path(LOAD_PATH_prim, LOAD_PATH_bkup)
+        load_path_bsod = get_bsod_load_path()
         if not load_path_bsod:
             raise ValueError('BSOD shared folder is unavailable. Please try again later.')
 
@@ -1187,8 +1203,11 @@ def get_filter_details():
     filter_file = data.get('filter_file', '')
     if not filter_file:
         return jsonify({'success': False, 'message': 'No filter file specified'})
-    
-    filter_path = os.path.join(LOG_PARSER_DIR, "filter", filter_file)
+
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_path = os.path.join(log_parser_dir, "filter", filter_file)
     if not os.path.exists(filter_path):
         return jsonify({'success': False, 'message': f'Filter file not found: {filter_file}'})
     
@@ -1202,7 +1221,10 @@ def get_filter_details():
 @log_parser_bp.route("/get_all_filter_details", methods=["POST"])
 def get_all_filter_details():
     """Return ALL .tat files with ALL their keywords and enabled status."""
-    filter_dir = os.path.join(LOG_PARSER_DIR, "filter")
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_dir = os.path.join(log_parser_dir, "filter")
     if not os.path.exists(filter_dir):
         return jsonify({'success': False, 'message': 'Filter directory not found'})
     
@@ -1247,7 +1269,10 @@ def estimate_tokens():
     if not log_path or not os.path.exists(log_path):
         return jsonify({'success': False, 'message': 'Log file not found in session'}), 400
 
-    filter_path = os.path.join(LOG_PARSER_DIR, "filter", os.path.basename(selected_filter))
+    log_parser_dir, error_response = _log_parser_dir_or_503()
+    if error_response:
+        return error_response
+    filter_path = os.path.join(log_parser_dir, "filter", os.path.basename(selected_filter))
     if not os.path.exists(filter_path):
         return jsonify({'success': False, 'message': f'Filter file not found: {selected_filter}'}), 400
 
@@ -1789,7 +1814,7 @@ def handle_submit_analysis(data, socketio=None):
     custom_keywords = data.get('custom_keywords', None)
     
     try:
-        filter_path = os.path.join(LOG_PARSER_DIR, "filter", selected_filter)
+        filter_path = os.path.join(get_log_parser_dir(), "filter", selected_filter)
         print(f"📂 Filter path: {filter_path}")
         if custom_keywords is not None:
             print(f"🔧 Using {len(custom_keywords)} user-selected keywords")

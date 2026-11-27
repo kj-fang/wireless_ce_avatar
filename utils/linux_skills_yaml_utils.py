@@ -24,19 +24,19 @@ from pathlib import Path
 from typing import Optional, Tuple
 
 from configs.path_configs import (
-    SKILLS_CONFIG_DIR_prim,
-    SKILLS_CONFIG_DIR_bkup,
     LINUX_SKILLS_YAML_FILENAME,
     LINUX_SKILLS_YAML_DATED_RE,
     LINUX_SKILLS_YAML_DATED_TEMPLATE,
 )
-from utils import helpers
 from utils.skills_yaml_utils import (
     # Re-use the same on-disk roots so cloud/ and user/ are shared with
     # the WiFi (and BT) skill files. Only the filename prefix distinguishes
     # domain.
     local_cloud_baseline_dir,
     local_user_overrides_dir,
+    # Same SKILLS_CONFIG_DIR_prim/bkup share as WiFi/BT — reuse its cached
+    # resolver instead of probing the same share a third time.
+    resolve_cloud_skills_dir,
 )
 
 
@@ -122,14 +122,8 @@ def today_dated_filename(d: Optional[date] = None) -> str:
 # --- Directory layout ----------------------------------------------------
 # Cloud and user dirs are SHARED with the WiFi / BT sides — only filename
 # prefix differs. Imported from utils.skills_yaml_utils above.
-
-def resolve_cloud_skills_dir() -> Optional[str]:
-    """Return the reachable share-folder skills_config dir, or None."""
-    try:
-        path = helpers.get_load_path(SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup)
-        return path or None
-    except Exception:
-        return None
+# resolve_cloud_skills_dir() is also imported from there (cached, shared
+# across WiFi/BT/Linux so the share is only probed once).
 
 
 # --- Lookup helpers ------------------------------------------------------
@@ -144,13 +138,13 @@ def find_latest_user_yaml() -> Tuple[Optional[Path], Optional[date]]:
     return find_latest_dated_yaml(local_user_overrides_dir())
 
 
-def find_latest_share_yaml() -> Tuple[Optional[Path], Optional[date]]:
+def find_latest_share_yaml(force: bool = False) -> Tuple[Optional[Path], Optional[date]]:
     """
     Latest Linux YAML on the SHARE FOLDER. Falls back to the legacy un-dated
     `linux_skills.yaml` when no dated file exists yet. Returns (None, None)
     when the share is unreachable or contains no Linux YAML at all.
     """
-    cloud_dir = resolve_cloud_skills_dir()
+    cloud_dir = resolve_cloud_skills_dir(force=force)
     if not cloud_dir:
         return (None, None)
     path, dt = find_latest_dated_yaml(cloud_dir)
@@ -211,14 +205,17 @@ def current_active_yaml() -> Tuple[Optional[Path], Optional[date], str]:
 
 # --- Cloud baseline refresh ---------------------------------------------
 
-def refresh_local_cloud_baseline() -> Tuple[Optional[Path], Optional[date]]:
+def refresh_local_cloud_baseline(force: bool = False) -> Tuple[Optional[Path], Optional[date]]:
     """
     Pull the latest Linux YAML from the share folder into the local `cloud/`
     dir, replacing any older mirror files with the linux_ prefix. Best-effort:
     returns (None, None) when off-VPN. The WiFi / BT skills files in the same
     directory are not touched.
+
+    `force=True` bypasses the cached share-reachability answer — pass it for
+    an explicit user-triggered refresh, not the boot-time warm-up call.
     """
-    share_path, share_date = find_latest_share_yaml()
+    share_path, share_date = find_latest_share_yaml(force=force)
     if share_path is None:
         return (None, None)
 

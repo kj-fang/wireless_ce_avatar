@@ -50,12 +50,16 @@ def get_sys_prompt_content(file_path):
         return ""
 
 def get_available_filters(log_parser_dir):
+    if not log_parser_dir:
+        return []
     filter_dir = os.path.join(log_parser_dir, "filter")
     if os.path.exists(filter_dir):
         return [f for f in os.listdir(filter_dir) if f.endswith('.tat')]
     return []
 
 def get_available_prompts(log_parser_dir):
+    if not log_parser_dir:
+        return [], []
     prompt_dir = os.path.join(log_parser_dir, "prompt")
     custom_prompt_dir = os.path.join(log_parser_dir, "custom_prompt")
     

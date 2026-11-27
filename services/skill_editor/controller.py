@@ -124,7 +124,7 @@ def refresh_cloud_baseline_route(context: SkillEditorContext):
     try:
         if context.ensure_editable:
             context.ensure_editable()
-        path, dt = context.refresh_cloud_baseline()
+        path, dt = context.refresh_cloud_baseline(force=True)
         if path is None:
             return jsonify({
                 "success": False,
@@ -322,7 +322,7 @@ def upload_modified_yaml(context: SkillEditorContext):
                 "error":   "No customised skill YAML was found to upload.",
             }), 404
 
-        cloud_dir_str = context.resolve_cloud_skills_dir()
+        cloud_dir_str = context.resolve_cloud_skills_dir(force=True)
         if not cloud_dir_str:
             return jsonify({
                 "success": False,

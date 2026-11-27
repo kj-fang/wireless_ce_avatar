@@ -88,7 +88,7 @@ def _push_now(namespace: str) -> None:
 
 def _build_llm(model: str | None) -> LLM_helper:
     """Mirror configs.set_up_app so Reflector / Curator share the main app's LLM."""
-    key_path = helpers.get_load_path(path_configs.KEY_PATH_prim, path_configs.KEY_PATH_bkup)
+    key_path = path_configs.get_key_path()
     if key_path is None:
         raise RuntimeError("Could not resolve key share — VPN reachable?")
     key = helpers.load_module(key_path, "key_moudle")
@@ -97,7 +97,7 @@ def _build_llm(model: str | None) -> LLM_helper:
         gpt_token=key.gnaigpt_token,
         gpt_url=key.gnaigpt_url,
         model=model or key.gnaigpt_model,
-        classifitation_path=path_configs.CLASSIFY_PATH,
+        classifitation_path=path_configs.get_classify_path(),
     )
     return llm
 

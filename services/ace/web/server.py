@@ -237,10 +237,10 @@ def _resolve_key_module(force: bool = False) -> object:
     with _KEY_CACHE_LOCK:
         if not force and _KEY_CACHE is not None:
             return _KEY_CACHE[1]
-        key_path = helpers.get_load_path(
-            path_configs.KEY_PATH_prim,
-            path_configs.KEY_PATH_bkup,
-        )
+        # Reaching here means _KEY_CACHE has no success to fall back on, so
+        # always re-probe — a stale cached None from a failed boot warm-up
+        # must not outlive the VPN reconnecting.
+        key_path = path_configs.get_key_path(force=True)
         if key_path is None:
             raise RuntimeError("Could not resolve key share — VPN reachable?")
         mod = helpers.load_module(key_path, "key_module")
@@ -255,7 +255,7 @@ def _build_llm(model: Optional[str] = None) -> LLM_helper:
         gpt_token=key.gnaigpt_token,
         gpt_url=key.gnaigpt_url,
         model=model or key.gnaigpt_model,
-        classifitation_path=path_configs.CLASSIFY_PATH,
+        classifitation_path=path_configs.get_classify_path(),
     )
     return llm
 

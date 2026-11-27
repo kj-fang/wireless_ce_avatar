@@ -2,7 +2,7 @@ import os
 import threading
 
 from configs.global_configs import app_config
-from configs.path_configs import LOG_PARSER_DIR
+from configs.path_configs import get_log_parser_dir
 from services.etl_parser.bt_parser import bt_decode_via_cli, open_with_text_analysis_tool
 
 
@@ -33,7 +33,10 @@ class BTAnalysisService():
         if 'yellow bang' in issue:
             filter_name = 'BT_YB_LOST' if str(wifi_or_bt).lower() == 'bt' else 'yellow_bang'
 
-        candidate = os.path.join(LOG_PARSER_DIR, 'filter', f"{filter_name}.tat")
+        log_parser_dir = get_log_parser_dir()
+        if not log_parser_dir:
+            return None
+        candidate = os.path.join(log_parser_dir, 'filter', f"{filter_name}.tat")
         return candidate if os.path.exists(candidate) else None
 
     def analyze(self, file_path: str, mode: str, issue_type: str = None, wifi_or_bt: str = None) -> str:

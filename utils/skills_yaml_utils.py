@@ -126,10 +126,19 @@ def today_dated_filename(d: Optional[date] = None) -> str:
 
 # --- Directory layout ----------------------------------------------------
 
-def resolve_cloud_skills_dir() -> Optional[str]:
-    """Return the reachable cloud (share folder) skills_config dir, or None."""
+def resolve_cloud_skills_dir(force: bool = False) -> Optional[str]:
+    """Return the reachable cloud (share folder) skills_config dir, or None.
+
+    Cached: WiFi/BT/Linux all point at the SAME share pair, so whichever
+    domain resolves it first (probing is sequential in boot order) warms the
+    answer for the other two instead of each re-probing the same share.
+    `force=True` re-probes instead of trusting a stale cached None — for an
+    explicit user retry (e.g. after reconnecting to VPN), not passive lookups.
+    """
     try:
-        path = helpers.get_load_path(SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup)
+        path = helpers.get_load_path_cached(
+            "skills_config_dir", SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup,
+            label="skills_config_dir", force=force)
         return path or None
     except Exception:
         return None
@@ -188,13 +197,13 @@ def find_latest_user_yaml() -> Tuple[Optional[Path], Optional[date]]:
     return find_latest_dated_yaml(local_user_overrides_dir())
 
 
-def find_latest_share_yaml() -> Tuple[Optional[Path], Optional[date]]:
+def find_latest_share_yaml(force: bool = False) -> Tuple[Optional[Path], Optional[date]]:
     """
     Latest YAML on the SHARE FOLDER. Falls back to the legacy un-dated
     `skills.yaml` when no dated file exists yet. Returns (None, None)
     when the share is unreachable or contains no YAML at all.
     """
-    cloud_dir = resolve_cloud_skills_dir()
+    cloud_dir = resolve_cloud_skills_dir(force=force)
     if not cloud_dir:
         return (None, None)
     path, dt = find_latest_dated_yaml(cloud_dir)
@@ -256,13 +265,16 @@ def current_active_yaml() -> Tuple[Optional[Path], Optional[date], str]:
 
 # --- Cloud baseline refresh ---------------------------------------------
 
-def refresh_local_cloud_baseline() -> Tuple[Optional[Path], Optional[date]]:
+def refresh_local_cloud_baseline(force: bool = False) -> Tuple[Optional[Path], Optional[date]]:
     """
     Pull the latest YAML from the share folder into the local `cloud/` dir,
     replacing any older mirror files. Best-effort: returns (None, None)
     when off-VPN. The local `user/` dir is left untouched.
+
+    `force=True` bypasses the cached share-reachability answer — pass it for
+    an explicit user-triggered refresh, not the boot-time warm-up call.
     """
-    share_path, share_date = find_latest_share_yaml()
+    share_path, share_date = find_latest_share_yaml(force=force)
     if share_path is None:
         return (None, None)
 

@@ -4,7 +4,7 @@ import shutil
 from typing import Optional
 
 from configs.path_configs import (
-    KEY_PATH_prim, KEY_PATH_bkup, CLASSIFY_PATH,
+    get_key_path, get_classify_path,
     LOG_PARSER_DATA_DIR_prim, LOG_PARSER_DATA_DIR_bkup,
     LOCAL_LOG_PARSER_DATA_DIR,
     SKILLS_CONFIG_DIR_prim, SKILLS_CONFIG_DIR_bkup, SKILLS_YAML_FILENAME,
@@ -224,7 +224,7 @@ def configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir: str) -
         print(f"🔑 [LLM] personal gnaigpt token for user '{login}' "
               f"(then falls back to {len(deduped)} shared/common tokens on 429)")
         llm_helper.set_up(
-            personal_token, key_module.gnaigpt_url, key_module.gnaigpt_model, CLASSIFY_PATH,
+            personal_token, key_module.gnaigpt_url, key_module.gnaigpt_model, get_classify_path(),
             token_pool=combined_pool,
             personal_token=personal_token,
             on_personal_token_expired=_make_personal_token_expired_hook(login),
@@ -236,7 +236,7 @@ def configure_llm_personal_token(llm_helper, key_module, avatarfiles_dir: str) -
     # with everyone else — without randomizing the starting pick, everyone
     # would always open on the same first-listed entry until it dies.
     llm_helper.set_up(
-        fallback_pool[0][1], key_module.gnaigpt_url, key_module.gnaigpt_model, CLASSIFY_PATH,
+        fallback_pool[0][1], key_module.gnaigpt_url, key_module.gnaigpt_model, get_classify_path(),
         token_pool=fallback_pool,
         random_start=True,
     )
@@ -252,6 +252,32 @@ def set_up(socketio):
     # project root
     app_config.set_project_root(str(Path(__file__).parent.parent.absolute()))
 
+    # KEY_PATH / CLASSIFY_PATH / SKILLS_CONFIG_DIR don't depend on each other,
+    # so probe all three concurrently instead of one after another — total
+    # wait is then bounded by the slowest share instead of their sum. Results
+    # are collected later, at the point each is actually needed; by then the
+    # thread has often already finished, so blocking on it there is free.
+    _boot_warm: dict = {}
+
+    def _warm_key_path():
+        _boot_warm["key_path"] = get_key_path()
+
+    def _warm_skills_refresh():
+        try:
+            _boot_warm["skills_refresh"] = refresh_local_cloud_baseline()
+        except Exception as e:
+            print(f"⚠️  Cloud baseline refresh failed: {e}")
+            _boot_warm["skills_refresh"] = (None, None)
+
+    key_thread = Thread(target=_warm_key_path, name="boot-warm-key", daemon=True)
+    key_thread.start()
+    skills_thread = Thread(target=_warm_skills_refresh, name="boot-warm-skills-config", daemon=True)
+    skills_thread.start()
+    # classify_path has no result to collect here: it is cached under its own
+    # key (get_load_path_cached), so the later get_classify_path() call inside
+    # configure_llm_personal_token() just reuses whatever this warms.
+    Thread(target=get_classify_path, name="boot-warm-classify", daemon=True).start()
+
     # Pre-warm the feedback sidecar's share probe now that
     # avatarfiles_dir is set — running this earlier (e.g. at module
     # import) would race the config and pin the local fallback to a
@@ -261,7 +287,8 @@ def set_up(socketio):
 
 
     # key
-    key_path = helpers.get_load_path(KEY_PATH_prim, KEY_PATH_bkup)
+    key_thread.join()
+    key_path = _boot_warm.get("key_path")
     if key_path != None:
         key = helpers.load_module(key_path, "key_moudle")
         app_config.set_key(key)
@@ -318,16 +345,14 @@ def set_up(socketio):
     skills_loaded = False
     share_reachable = False   # reused below so NW does not probe the share again
     set_active_source("cloud")
-    try:
-        refreshed_path, refreshed_date = refresh_local_cloud_baseline()
-        share_reachable = refreshed_path is not None
-        if refreshed_path is not None:
-            print(f"📥 Refreshed local cloud baseline → {refreshed_path} "
-                  f"(date={refreshed_date})")
-        else:
-            print("ℹ️  Cloud baseline refresh skipped — share folder unreachable.")
-    except Exception as e:
-        print(f"⚠️  Cloud baseline refresh failed: {e}")
+    skills_thread.join()
+    refreshed_path, refreshed_date = _boot_warm.get("skills_refresh", (None, None))
+    share_reachable = refreshed_path is not None
+    if refreshed_path is not None:
+        print(f"📥 Refreshed local cloud baseline → {refreshed_path} "
+              f"(date={refreshed_date})")
+    else:
+        print("ℹ️  Cloud baseline refresh skipped — share folder unreachable.")
 
     chosen_yaml, chosen_date, chosen_source = current_active_yaml()
     if chosen_yaml is not None and chosen_yaml.exists():

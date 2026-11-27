@@ -1595,6 +1595,9 @@
             </div>
             <img src="../static/pacman.gif" alt="Loading..." style="width: 200px; height: 200px; position: absolute; bottom: 10px; left: 50%; transform: translateX(-50%);">
         </div>
+        <button id="case-stop-btn" type="button" class="upload-cancel-btn" onclick="stopCaseSearch()">
+            Stop Search
+        </button>
         <div id="quick-knowledge-box" role="region" aria-roledescription="carousel"
             aria-label="Did you know tips">
             <button type="button" class="quick-knowledge-nav" id="quick-knowledge-previous"
@@ -1743,6 +1746,7 @@
         let uploadPreparingTimeoutId = null;
         let uploadAbortController = null;
         let uploadCurrentId = null;
+        let caseAbortController = null;
 
         function updateQuickKnowledgeDisplay() {
             const knowledgeText = document.getElementById('quick-knowledge-text');
@@ -1861,6 +1865,31 @@
             document.getElementById('case-loading-box').style.display = 'block';
             setChatbotShortcutsVisibility(false);
             startLogs('case-log-messages', CASE_MESSAGES);
+        }
+
+        function stopCaseSearch() {
+            if (!confirm('Are you sure you want to stop searching this case?\nYou will be returned to the search bar.')) {
+                return;
+            }
+            clearInterval(LogInterval);
+            if (caseAbortController) {
+                try {
+                    caseAbortController.abort();
+                } catch (e) {
+                    console.warn('Abort failed:', e);
+                }
+                caseAbortController = null;
+            }
+            // Cancels a pending form-submit navigation (plain 'submit' path).
+            window.stop();
+            setHomeProcessing(false);
+            hideAllLoadingBoxes();
+            document.getElementById('tabs-container').style.display = 'block';
+            document.getElementById('form-box').style.display = 'block';
+            const input = document.getElementById('case_number');
+            if (input) {
+                input.focus();
+            }
         }
 
         function showLocalUploadLoading() {
@@ -2008,6 +2037,7 @@
             // Show loading animation and log messages
             showCaseLoading();
 
+            caseAbortController = new AbortController();
             try {
                 // Step 1: Submit case number and wait for the server to complete session setup.
                 const response = await fetch('/', {
@@ -2015,7 +2045,8 @@
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                    body: `case_number=${encodeURIComponent(caseNumber)}`,
+                    signal: caseAbortController.signal
                 });
 
                 // Step 2: If successful, redirect to the analysis page.
@@ -2027,6 +2058,9 @@
                 }
 
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    return;
+                }
                 setHomeProcessing(false);
                 alert('❌ Error occurred: ' + error);
                 // Restore the original view if needed.
@@ -2040,13 +2074,15 @@
         async function runLatestETLWithLLM(caseNumber) {
             showCaseLoading();
 
+            caseAbortController = new AbortController();
             try {
                 const response = await fetch('/start_latest_etl_llm', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/x-www-form-urlencoded',
                     },
-                    body: `case_number=${encodeURIComponent(caseNumber)}`
+                    body: `case_number=${encodeURIComponent(caseNumber)}`,
+                    signal: caseAbortController.signal
                 });
 
                 const data = await response.json();
@@ -2056,6 +2092,9 @@
 
                 window.location.href = data.redirect_url;
             } catch (error) {
+                if (error.name === 'AbortError') {
+                    return;
+                }
                 setHomeProcessing(false);
                 alert('❌ Error occurred: ' + error.message);
                 document.getElementById('tabs-container').style.display = 'block';

@@ -38,6 +38,10 @@ class GlobalConfig:
         self.prompt_dir: Optional[str] = None
         self.project_root: Optional[str] = None
         self.silent_mode: bool = False
+        # True when started with --allow-multi-instance (QA/testing only): other
+        # code uses this to skip UI interactions that assume a single human at
+        # one browser (e.g. the SendTo flow's "what's the case number?" prompt).
+        self.multi_instance_mode: bool = False
         # Handsfree (Beacon) role of this machine: 'client' (a reviewer's PC:
         # review queue, Run now, Approve) or 'server' (also runs the scheduled
         # analysis rounds). Set once at start (app.py --handsfree-role /

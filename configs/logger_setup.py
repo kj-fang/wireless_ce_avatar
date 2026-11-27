@@ -111,16 +111,20 @@ class _TeeStream:
         return getattr(self._stream, name)
 
 
-def setup_file_logging() -> str:
+def setup_file_logging(port=None) -> str:
     """Configure the rotating log file and install the stdout tee.
 
     Returns the path to the log file so callers can display it on startup.
     Call this once, as early as possible in app.py.
+
+    port: only passed under --allow-multi-instance, so each concurrent
+    instance writes to its own file instead of racing on a shared one.
     """
     if isinstance(sys.stdout, _TeeStream):
         return ""
 
-    log_path = os.path.join(get_logs_dir(), "avatar.log")
+    log_filename = f"avatar_{port}.log" if port else "avatar.log"
+    log_path = os.path.join(get_logs_dir(), log_filename)
 
     _fmt = _AnsiStrippingFormatter(
         "%(asctime)s [%(levelname)s] %(message)s",

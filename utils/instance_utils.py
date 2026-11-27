@@ -86,11 +86,14 @@ def register_instance(port):
         print(f"⚠️  Registration failed: {e}")
 
 
-def _app_start_lock_path() -> str:
-    return os.path.join(get_user_data_dir(), 'app_start.lock')
+def _app_start_lock_path(port=None) -> str:
+    # port is only passed under --allow-multi-instance, so concurrent instances
+    # on different ports each get their own lock instead of one shared lock.
+    filename = f'app_start_{port}.lock' if port else 'app_start.lock'
+    return os.path.join(get_user_data_dir(), filename)
 
 
-def acquire_app_start_lock() -> bool:
+def acquire_app_start_lock(port=None) -> bool:
     """Atomically acquire the app startup lock.
 
     Returns True on success (this process is the one true starter).
@@ -98,7 +101,7 @@ def acquire_app_start_lock() -> bool:
     The lock must be released by calling release_app_start_lock() after
     register_instance() completes.
     """
-    lock_path = _app_start_lock_path()
+    lock_path = _app_start_lock_path(port)
     try:
         fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         os.write(fd, str(os.getpid()).encode())
@@ -128,10 +131,10 @@ def acquire_app_start_lock() -> bool:
         return True
 
 
-def release_app_start_lock():
+def release_app_start_lock(port=None):
     """Release the app startup lock after register_instance() completes."""
     try:
-        os.remove(_app_start_lock_path())
+        os.remove(_app_start_lock_path(port))
     except Exception:
         pass
 

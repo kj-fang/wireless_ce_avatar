@@ -1119,6 +1119,13 @@ def open_local_analysis():
     withheld = _no_silent_case_because(source_path, derived)
     if withheld:
         print(f'[ips] not taking the case from the folder name: {withheld} | {source_path}')
+        if app_config.multi_instance_mode:
+            # QA/testing instances have nobody at the browser to answer the
+            # modal; record "no case number" so the SendTo flow proceeds unblocked.
+            try:
+                check_ips_service.attach("", check_ips_service.SKIPPED, source_path)
+            except ValueError:
+                pass
     else:
         try:
             check_ips_service.attach(derived, check_ips_service.DERIVED_FROM_PATH, source_path)

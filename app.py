@@ -17,9 +17,26 @@ if hasattr(sys.stderr, 'reconfigure'):
 # subsequent print() calls are captured in the log file.
 # Skip for --tray-mode: the tray process has no console (DETACHED_PROCESS),
 # sys.stdout may be None, and the tray manager logs to its own tray.log.
+def _pre_scan_cli_value(flag, argv):
+    """Read a --flag value out of argv before argparse runs (logging setup
+    happens before argument parsing)."""
+    if flag in argv:
+        idx = argv.index(flag)
+        if idx + 1 < len(argv):
+            return argv[idx + 1]
+    for arg in argv:
+        if arg.startswith(flag + '='):
+            return arg.split('=', 1)[1]
+    return None
+
+# Multi-instance test runs get their own log file (named by port) instead of
+# the shared avatar.log, so concurrent instances don't interleave/rotate-race.
+_multi_instance_cli = '--allow-multi-instance' in sys.argv
+_cli_port_for_log = _pre_scan_cli_value('--port', sys.argv) if _multi_instance_cli else None
+
 if '--tray-mode' not in sys.argv:
     from configs.logger_setup import setup_file_logging as _setup_file_logging
-    _log_path = _setup_file_logging()
+    _log_path = _setup_file_logging(port=_cli_port_for_log)
     if _log_path:
         print(f"📝 Log file: {_log_path}")
 
@@ -176,7 +193,11 @@ def _navigate_existing_browser(instance_url, startup_path):
         print(f"⚠️ Failed to reuse existing browser: {error}")
         return False
 
-def create_app():
+def create_app(port=None):
+    """port is only passed under --allow-multi-instance: it namespaces the
+    session cookie name and storage directory so concurrent instances don't
+    collide on Flask's default session cookie (browsers don't scope cookies
+    by port on 127.0.0.1)."""
     app = Flask(__name__)
     # Preserve dict insertion order in jsonify responses. The legacy
     # `JSON_SORT_KEYS` config flag was removed in Flask 2.2+ in favour of
@@ -189,6 +210,8 @@ def create_app():
         # Older Flask (<2.2) — the config flag above is the only knob.
         pass
     app.secret_key = 'autoparselog2025'
+    if port:
+        app.config['SESSION_COOKIE_NAME'] = f'session_{port}'
 
     # Store sessions server-side (filesystem) so large IPS context never
     # overflows the browser's 4 KB cookie limit and causes a crash.
@@ -196,6 +219,8 @@ def create_app():
     import time as _time
     import glob as _glob
     _session_dir = os.path.join(os.path.expanduser('~'), '.intelavatar_sessions')
+    if port:
+        _session_dir = os.path.join(_session_dir, str(port))
     os.makedirs(_session_dir, exist_ok=True)
 
     # Purge session files older than 24 h at startup to avoid unbounded growth.
@@ -279,8 +304,22 @@ if __name__ == "__main__":
                              "'server' also runs the scheduled analysis rounds from the Beacon page. "
                              "Falls back to the INTELAVATAR_HANDSFREE_ROLE environment variable, then to the "
                              "role baked into a packaged build (handsfree_role.txt next to the bundled files).")
+    parser.add_argument('--allow-multi-instance', action='store_true',
+                        help='Testing/QA only: allow several IntelAvatar instances to run at once. '
+                             'Always pass --port explicitly alongside this flag so each instance gets '
+                             'its own log file, session storage, and startup lock. Skips the tray manager '
+                             'and the shared Startup/SendTo shortcuts for this instance.')
     parser.add_argument('input_paths', nargs='*', help='Optional local analysis file paths passed from Windows SendTo.')
     args = parser.parse_args()
+    from configs.global_configs import app_config
+    if args.allow_multi_instance:
+        # A packaged build normally picks a random sendto_token per run, which makes
+        # scripting CLI SendTo calls against a specific instance a pain. Make it
+        # predictable from --port instead, unless the caller supplies their own.
+        if args.sendto_token:
+            app_config.sendto_token = args.sendto_token
+        elif args.port:
+            app_config.sendto_token = f'multiqa-{args.port}'
     from services.handsfree.scheduler import bundled_role
     handsfree_role = (args.handsfree_role or os.environ.get('INTELAVATAR_HANDSFREE_ROLE', '')
                       or bundled_role() or 'client').strip().lower()
@@ -290,8 +329,8 @@ if __name__ == "__main__":
     home_path = '/handsfree/' if (args.handsfree or handsfree_role == 'server') else '/'
     startup_path = _build_startup_path(args.input_paths, sendto_token=args.sendto_token,
                                        default=home_path)
-    from configs.global_configs import app_config
     app_config.silent_mode = args.silent_mode
+    app_config.multi_instance_mode = args.allow_multi_instance
     app_config.handsfree_role = handsfree_role     # before create_app(): the Handsfree blueprint reads it
     
     # Check whether to run in tray mode
@@ -302,48 +341,62 @@ if __name__ == "__main__":
         sys.exit(0)
 
     # Single-instance enforcement (must happen BEFORE shortcut/tray setup so that
-    # short-lived SendTo instances don't overwrite the .lnk with a new token)
-    existing = check_already_running()
-    if existing:
-        if handsfree_role == 'server':
-            # The instance that is running must BE a server: opening a client's
-            # page and exiting would leave the requests and rounds unserved.
-            from services.handsfree.scheduler import role_mismatch, running_role
-            problem = role_mismatch('server', running_role(existing.get('url') or ''),
-                                    existing.get('url') or '')
-            if problem:
-                print(f"❌ {problem}", file=sys.stderr)
-                if getattr(sys, 'frozen', False):
-                    # A packaged build has no console to read that on.
-                    try:
-                        import ctypes
-                        ctypes.windll.user32.MessageBoxW(0, problem, "Beacon Server", 0x30)
-                    except Exception:
-                        pass
-                sys.exit(1)
-        print(f"✅ Avatar is already running at {existing.get('url')} — reusing its browser.")
-        _reuse_existing_avatar(existing['url'], existing['pid'], startup_path)
-        sys.exit(0)
+    # short-lived SendTo instances don't overwrite the .lnk with a new token).
+    # --allow-multi-instance (QA/testing only) skips this: multiple instances are
+    # told apart by --port, and the per-port "already running" check further below
+    # still routes SendTo to the right one.
+    if not args.allow_multi_instance:
+        existing = check_already_running()
+        if existing:
+            if handsfree_role == 'server':
+                # The instance that is running must BE a server: opening a client's
+                # page and exiting would leave the requests and rounds unserved.
+                from services.handsfree.scheduler import role_mismatch, running_role
+                problem = role_mismatch('server', running_role(existing.get('url') or ''),
+                                        existing.get('url') or '')
+                if problem:
+                    print(f"❌ {problem}", file=sys.stderr)
+                    if getattr(sys, 'frozen', False):
+                        # A packaged build has no console to read that on.
+                        try:
+                            import ctypes
+                            ctypes.windll.user32.MessageBoxW(0, problem, "Beacon Server", 0x30)
+                        except Exception:
+                            pass
+                    sys.exit(1)
+            print(f"✅ Avatar is already running at {existing.get('url')} — reusing its browser.")
+            _reuse_existing_avatar(existing['url'], existing['pid'], startup_path)
+            sys.exit(0)
+
     # Acquire a startup lock so only one process proceeds past this point.
     # Any other instance that starts while we are in the window between
     # check_already_running() and register_instance() will hit the lock and exit.
-    if not acquire_app_start_lock():
+    # Under --allow-multi-instance the lock is keyed by port so concurrent
+    # instances started on different ports don't false-positive each other.
+    _lock_port = args.port if args.allow_multi_instance else None
+    if not acquire_app_start_lock(_lock_port):
         print("\u2139\ufe0f Another IntelAvatar instance is starting up \u2014 exiting this instance.")
         existing = check_already_running()
         if existing:
             _reuse_existing_avatar(existing['url'], existing['pid'], startup_path)
-        sys.exit(0)    
-    # Create / refresh the Windows Startup shortcut so the app auto-starts on login
-    ensure_startup_shortcut()
+        sys.exit(0)
 
-    # Create / refresh the Windows SendTo shortcut for right-click Send To support
-    ensure_sendto_shortcut(sendto_token=app_config.sendto_token)
-    # [DO NOT remove] - Only log the first few chars as a sanity check
-    print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
+    if not args.allow_multi_instance:
+        # Create / refresh the Windows Startup shortcut so the app auto-starts on login
+        ensure_startup_shortcut()
 
-    # Tray manager is ON by default (exe and `python app.py`); pass --no-tray to disable.
-    if not args.no_tray:
-        ensure_tray_manager()
+        # Create / refresh the Windows SendTo shortcut for right-click Send To support
+        ensure_sendto_shortcut(sendto_token=app_config.sendto_token)
+        # [DO NOT remove] - Only log the first few chars as a sanity check
+        print(f"🔑 SendTo token: {app_config.sendto_token[:8]}...")
+
+        # Tray manager is ON by default (exe and `python app.py`); pass --no-tray to disable.
+        if not args.no_tray:
+            ensure_tray_manager()
+    else:
+        # Full token is printed (not just a prefix): under multi-instance mode it's
+        # derived from --port or explicitly supplied, not a secret worth hiding.
+        print(f"🔑 SendTo token (multi-instance): {app_config.sendto_token}")
 
     # Port decision policy:
     # 1) no one uses preferred port -> use it
@@ -381,7 +434,7 @@ if __name__ == "__main__":
     
     # Register this instance so single-instance enforcement works regardless of tray usage
     register_instance(port)
-    release_app_start_lock()  # Lock no longer needed — json is written
+    release_app_start_lock(_lock_port)  # Lock no longer needed — json is written
 
     print(f"🚀 IntelAvatar v{__version__} starting...")
     print(f"📅 Build: {BUILD_DATE}")
@@ -389,7 +442,7 @@ if __name__ == "__main__":
     print(f"🌐 Running on port: {port}")
     print()
     
-    app, socketio = create_app()
+    app, socketio = create_app(port=port if args.allow_multi_instance else None)
     set_up(socketio)  # set_up() already initializes driver_manager; don't re-create it here (was causing double ChromeDriver setup / dir-lock races)
 
     # =========================================================================
